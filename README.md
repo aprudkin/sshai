@@ -1,33 +1,50 @@
 # sshai
 
-Удалённое выполнение команд на Windows- и Linux-серверах для ИИ-агента (Claude Code, Codex),
-спроектированное вокруг одного ограничения: **контекст агента дороже, чем такт CPU**.
+Remote command execution on Windows and Linux servers for AI agents (Claude Code, Codex CLI),
+designed around one constraint: **agent context is more expensive than CPU cycles**.
 
-Сырой `ssh host 'powershell -c "…"'` возвращает агенту всё — баннеры, CLIXML-обёртки, пустые
-строки, стотысячный `Get-EventLog`. Каждый такой байт агент оплачивает токеном и хранит до конца
-сессии. `sshai` берёт на себя транспорт и кодировки и отдаёт наверх ограниченный по бюджету
-вывод, а полный результат оставляет на диске — по ссылке, а не в контексте.
+Raw `ssh host 'powershell -c "…"'` returns everything to the agent — banners, CLIXML wrappers,
+blank lines, a hundred-thousand-line `Get-EventLog`. The agent pays a token for every byte and
+keeps it until the end of the session. `sshai` owns transport and encodings, returns
+budget-bounded output upward, and leaves the full result on disk — by reference, not in context.
 
-## Статус
+The agent gets a compact *passport* instead of raw output:
 
-Каркас. Исполняемого кода ещё нет. Что делать дальше и по какому признаку версия 1 считается
-готовой — `docs/superpowers/specs/2026-08-06-sshai-charter.md`.
+```
+$ sshai run pg-prod-01 -- journalctl -u postgres --since -1h
+a17 host=pg-prod-01 exit=0 lines=8412 bytes=612K time=1.8s
+file=~/.sshai/art/a17
+tail3:
+  ...
+```
 
-## Откуда взялся
+and then queries the artifact locally (`sshai q a17 -- grep -iE 'fatal'`, or its own grep — the
+artifact is a plain local file). Repeat runs can return just the diff (`--delta`); a local run-log
+survives context compaction.
 
-Обобщение `/ps-ssh` (`~/.claude/scripts/ps_ssh.py`) — один Windows-хост, один выстрел. Там уже
-оплачены UTF-8 BOM, доставка через scp, вызов pwsh 7, определение DefaultShell, фильтр CLIXML,
-обрезка head/tail и статусная строка как источник истины. Это переносится, а не переоткрывается.
+## Status
 
-Чего в `/ps-ssh` нет и ради чего заводится отдельный проект: цели на Linux/bash, несколько хостов
-за один вызов, два прыжка через jump-host и явный бюджет токенов на агрегированный вывод.
+Design approved, implementation pending. Architecture, CLI surface, and v1 scope:
+`docs/superpowers/specs/2026-08-06-sshai-design.md`. Purpose and definition of done:
+`docs/superpowers/specs/2026-08-06-sshai-charter.md`.
 
-## Язык реализации
+## Origin
 
-**Ещё не выбран** — решение зафиксировано как открытое, см. чартер. Пока выбора нет, в репозитории
-нет ни команды запуска, ни команды тестов: писать их сейчас значило бы описать несуществующий
-тулчейн.
+A generalization of `/ps-ssh` (`~/.claude/scripts/ps_ssh.py`) — one Windows host, one shot. It
+already paid for UTF-8 BOM, scp body delivery, pwsh 7 invocation, DefaultShell detection, CLIXML
+filtering, head/tail truncation, and a status line as the source of truth. That experience is
+ported, not rediscovered.
+
+What `/ps-ssh` lacks and what this project exists for: Linux/bash targets, multiple hosts per
+call, persistent session state (cwd/env) between calls, artifact-by-reference output with local
+querying, deltas, and a searchable run-log.
+
+## Implementation language
+
+Go. A single static binary with millisecond startup — the agent invokes the tool hundreds of
+times per session.
 
 ## CI
 
-Нет. Репозиторий приватный на GitHub, корпоративный раннер к нему не привязан и не нужен.
+None yet. The repository is private on GitHub; unit-test CI and a license choice are queued for
+the moment it goes public.

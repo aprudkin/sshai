@@ -1,47 +1,48 @@
 # sshai
 
-Инструмент удалённого выполнения для ИИ-агента: Windows (PowerShell) и Linux (bash) через SSH,
-с явной экономией контекста агента.
+Remote execution tool for AI agents: Windows (PowerShell) and Linux (bash) over SSH, designed
+around explicit agent-context frugality.
 
-Чартер (назначение, критерий готовности, что вне рамок):
+Charter (purpose, definition of done, out of scope):
 `docs/superpowers/specs/2026-08-06-sshai-charter.md`
-Задача: [aimem#636](https://github.com/aprudkin/aimem/issues/636), лейбл `project:sshai`
+Design (architecture, CLI surface, v1 scope):
+`docs/superpowers/specs/2026-08-06-sshai-design.md`
+Issue: [aimem#636](https://github.com/aprudkin/aimem/issues/636), label `project:sshai`
 
-## Состояние репозитория
+## Repository state
 
-Только каркас: этот файл, `README.md`, чартер, `.gitignore`. Исполняемого кода нет.
+Scaffold plus approved design. No executable code yet; the implementation plan comes next.
 
-## Раскладка
+## Layout (per the design doc; directories appear as code lands)
 
 ```
-sshai/
-├── README.md
-├── CLAUDE.md
-├── .gitignore
-└── docs/superpowers/specs/
-    └── 2026-08-06-sshai-charter.md
+cmd/sshai/           # entrypoint, subcommand dispatch
+internal/cli/        # flags, help text
+internal/transport/  # Transport interface + openssh implementation
+internal/shell/      # bash + pwsh adapters: wrappers, encodings, CLIXML filter
+internal/session/    # state capture/re-injection, host-facts cache
+internal/artifact/   # store, passport rendering, budget trimmer
+internal/delta/      # command keying + local diff
+internal/runlog/     # SQLite run-log + audit.jsonl
+internal/policy/     # readonly allowlist (fail-closed)
+docs/superpowers/specs/
 ```
 
-Раскладка кода появится вместе с выбором языка — придумывать её раньше нечестно: у python и go
-она разная.
+## Build and test commands
 
-## Команды запуска и тестов
+```
+go build ./...                     # build
+go test ./...                      # unit tests
+go test -tags=integration ./...    # integration tests (need reachable fleet hosts; never in CI)
+```
 
-**Их ещё нет, и это не пропуск в документации.** Язык реализации не выбран (aimem#636, раздел
-«Открытое решение» в чартере). Любая команда, записанная здесь сейчас, была бы утверждением о
-тулчейне, которого в репозитории нет.
+## Repository-specific rules
 
-Когда язык выбран — заполнить этот раздел вручную. Скрипт `new_project.py` его не поправит:
-`write_tree` перезаписывает только `.gitignore`, все остальные существующие файлы он пропускает
-навсегда (строки 176–208).
-
-Отдельно при выборе **go**: добавить в `.gitignore` строку `/sshai` — бинарь `go build` называется
-именем проекта, в общий стандартный `.gitignore` это не входит.
-
-## Правила, специфичные для этого репозитория
-
-- **Никаких секретов в argv.** Тул по построению ходит на контроллеры домена. Пароли и токены
-  идут через stdin или файл; `curl -H "Authorization: …"`, `--password` и подобное отдают секрет
-  в таблицу процессов всей машине.
-- **Тело скрипта не передаётся аргументом** — так же, как в `/ps-ssh`: `--body-file` или stdin.
-- Комментарии в коде — по-русски, как в соседних проектах `~/dev`.
+- **No secrets in argv.** This tool connects to domain controllers by design. Passwords and tokens
+  travel via stdin or files; `curl -H "Authorization: …"`, `--password` and the like hand the
+  secret to every process on the machine.
+- **Script bodies are never passed as an argument** — same as `/ps-ssh`: `--body-file` or stdin.
+- **English everywhere** — code, comments, docs, help output, error messages. The tool is intended
+  to be open-sourced.
+- The design doc's passport size target (<200 tokens for the metadata-only form) is a unit test,
+  not a guideline.

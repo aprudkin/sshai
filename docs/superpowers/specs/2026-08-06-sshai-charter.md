@@ -1,72 +1,70 @@
-# Чартер: sshai
+# Charter: sshai
 
-**Дата:** 2026-08-06
-**Задача:** [aimem#636](https://github.com/aprudkin/aimem/issues/636)
-**Тип:** CLI-инструмент на стороне агента, CI нет
-**Remote:** `github.com/aprudkin/sshai` (private)
-**Локально:** `~/dev/sshai`
-**Лейбл:** `project:sshai`
+**Date:** 2026-08-06 (amended same day by `2026-08-06-sshai-design.md`, which governs on conflict)
+**Issue:** [aimem#636](https://github.com/aprudkin/aimem/issues/636)
+**Type:** agent-side CLI tool, no CI
+**Remote:** `github.com/aprudkin/sshai` (private; intended to be open-sourced)
+**Local:** `~/dev/sshai`
+**Label:** `project:sshai`
 
-## Назначение
+## Purpose
 
-Дать ИИ-агенту (Claude Code, Codex) один способ выполнять команды на Windows- и Linux-серверах
-по SSH, спроектированный вокруг ресурса, который у агента кончается первым, — **контекста**.
+Give an AI agent (Claude Code, Codex) one way to execute commands on Windows and Linux servers
+over SSH, designed around the resource the agent runs out of first — **context**.
 
-Сырой `ssh` возвращает всё, что напечатал удалённый хост. Для человека это норма: лишнее
-пролистывается. Для агента каждый байт вывода — токены, которые он платит один раз и хранит до
-конца сессии; один неаккуратный `Get-WinEvent` съедает окно, в котором должна была поместиться
-вся задача. Поэтому экономия контекста здесь не оптимизация, а тип инструмента: `sshai` отвечает
-за транспорт и кодировки, а наверх отдаёт ограниченный по бюджету вывод, оставляя полный
-результат на диске по ссылке.
+Raw `ssh` returns everything the remote host printed. For a human that is fine: the noise scrolls
+by. For an agent every byte of output is tokens it pays for once and keeps until the end of the
+session; one careless `Get-WinEvent` eats the window the whole task was supposed to fit in.
+Context frugality is therefore not an optimization here but the type of the tool: `sshai` owns
+transport and encodings, returns budget-bounded output upward, and leaves the full result on disk
+by reference.
 
-Вторая причина завести отдельный репозиторий — у этой работы уже есть накопленный опыт, который
-живёт в `~/.claude/scripts/ps_ssh.py` и команде `/ps-ssh`: UTF-8 BOM, доставка тела через scp,
-вызов pwsh 7, определение DefaultShell, фильтр CLIXML, обрезка head/tail, статусная строка как
-источник истины вместо кода возврата процесса. Это оплаченные грабли. Они переносятся в проект,
-а не переоткрываются.
+The second reason for a separate repository: this work already has accumulated experience living
+in `~/.claude/scripts/ps_ssh.py` and the `/ps-ssh` command — UTF-8 BOM, body delivery via scp,
+pwsh 7 invocation, DefaultShell detection, CLIXML filtering, head/tail truncation, a status line
+as the source of truth instead of the process return code. Those are paid-for lessons. They are
+ported into the project, not rediscovered.
 
-## Форма
+## Form
 
-Один исполняемый инструмент с единым контрактом вывода для обеих ОС, вызываемый агентом как
-обычная команда оболочки. Не библиотека, не сервис, не демон.
+A single executable tool with a uniform output contract for both OSes, invoked by the agent as an
+ordinary shell command. Not a library, not a service.
 
-## Критерий готовности
+*Amended 2026-08-06:* the tool still runs **no daemon of its own**, but on-disk state between
+calls — artifacts, run-log, session state — and the ssh-managed ControlMaster background process
+are in scope by design. The original "no state between calls" wording is superseded by the design
+doc.
 
-**Версия 1 готова, когда `/ps-ssh` можно объявить устаревшим.** Это значит одновременно:
+## Definition of done
 
-1. **Паритет.** Всё, что сегодня делает `/ps-ssh` на одном Windows-хосте, `sshai` делает не хуже —
-   включая кодировки, CLIXML, определение DefaultShell и статусную строку.
-2. **Linux.** Цели на bash работают тем же вызовом и с тем же контрактом вывода, что и Windows;
-   выбор интерпретатора — забота инструмента, а не вызывающего.
-3. **Фан-аут.** Несколько хостов за один вызов, без обёртки в цикл на стороне агента.
-4. **Бюджет.** Агрегированный вывод по нескольким хостам укладывается в явный бюджет и
-   сопровождается ссылкой на полный результат на диске.
+**Version 1 is done when `/ps-ssh` can be declared deprecated.** That means, simultaneously:
 
-## Открытое решение — язык реализации
+1. **Parity.** Everything `/ps-ssh` does today on a single Windows host, `sshai` does no worse —
+   including encodings, CLIXML, DefaultShell detection, and the status line.
+2. **Linux.** bash targets work with the same invocation and the same output contract as Windows;
+   interpreter choice is the tool's concern, not the caller's.
+3. **Fan-out.** Multiple hosts in one call, no agent-side loop wrapper.
+4. **Budget.** Aggregated multi-host output fits an explicit budget and carries a reference to the
+   full on-disk result.
 
-Не выбран сознательно, а не по недосмотру. Два кандидата и их настоящая цена:
+The detailed v1 scope (artifact passports, query-over-artifact, deltas, run-log, state
+re-injection, readonly policy) lives in `2026-08-06-sshai-design.md`.
 
-- **python** — продолжает `ps_ssh.py`, который уже прошёл через BOM/CLIXML/DefaultShell; есть на
-  macOS, где живёт агент.
-- **go** — один статический бинарь, мгновенный старт (существенно, если агент дёргает инструмент
-  сотни раз за сессию), тривиальная раскладка на любую машину; цена — фильтр CLIXML и весь
-  разбор вывода портируются целиком.
+## Implementation language — resolved
 
-Решение блокирует раскладку кода и разделы «команды запуска и тестов» в `README.md` и `CLAUDE.md`,
-и ничего больше: каркас развёрнут без него. Проверено при планировании — на пути создания
-`new_project.py` читает `stack` только в валидации (строки 52–53) и дальше не использует нигде;
-`detect_stack` обслуживает только adopt.
+**Go** (decided 2026-08-06; previously held open). A static binary with ~5–10 ms startup matters
+at hundreds of invocations per session, and goroutines fit fan-out naturally. The price — porting
+314 lines of `ps_ssh.py` (CLIXML/BOM/DefaultShell) with its control cases — was measured and
+accepted. The follow-ups owed on this decision (CLAUDE.md commands section, code layout, `/sshai`
+in `.gitignore`) are applied together with this amendment.
 
-При выборе **go** не забыть строку `/sshai` в `.gitignore`: бинарь `go build` называется именем
-проекта, и в общий стандартный `.gitignore` это не входит.
+## Out of scope
 
-## Вне рамок
-
-- **Не** интерпретация результата. Инструмент возвращает текст; что он значит — решает агент.
-  Разбор вывода в структуры — отдельное решение, и принимать его сейчас рано.
-- **Не** интерактивные сценарии. `Read-Host` и его аналоги повиснут; на вход только
-  неинтерактивные тела.
-- **Не** замена конфигурации SSH. Хосты, ключи и прыжки описываются в `ssh_config`; инструмент
-  его читает, а не дублирует.
-- **Не** оркестратор. Ни расписаний, ни состояния между вызовами, ни очереди задач.
-- **Никаких секретов** ни в репозитории, ни в argv — только локаторы.
+- **Not** result interpretation. The tool returns text; what it means is the agent's job. Parsing
+  output into structures is a separate decision, premature now.
+- **Not** interactive scenarios. `Read-Host` and friends will hang; only non-interactive bodies.
+- **Not** an SSH configuration replacement. Hosts, keys, and jumps are described in `ssh_config`;
+  the tool reads it, never duplicates it.
+- **Not** an orchestrator: no schedules, no task queues. (*Amended:* on-disk state between calls
+  is now in scope — see Form above.)
+- **No secrets** in the repository or in argv — locators only.

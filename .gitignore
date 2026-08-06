@@ -39,6 +39,7 @@ node_modules/
 
 # --- Go ---
 *.test
+/sshai
 
 # --- PowerShell / Pester ---
 TestResults.xml
