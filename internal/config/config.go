@@ -14,7 +14,7 @@ type HostCfg struct {
 }
 
 type Config struct {
-	Root              string
+	Root              string             `toml:"-"`
 	BudgetTokens      int                `toml:"budget_tokens"`
 	TimeoutSec        int                `toml:"timeout_sec"`
 	StreamCapBytes    int64              `toml:"stream_cap_bytes"`

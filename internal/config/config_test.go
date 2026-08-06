@@ -35,3 +35,19 @@ func TestConfigTomlOverridesAndHostFlags(t *testing.T) {
 		t.Fatalf("toml not applied: %+v", cfg)
 	}
 }
+
+func TestConfigTomlCannotOverrideRoot(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SSHAI_ROOT", dir)
+	toml := "root = \"/elsewhere\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(toml), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Root != dir {
+		t.Fatalf("config.toml overrode SSHAI_ROOT-derived Root: got %q, want %q", cfg.Root, dir)
+	}
+}
