@@ -1,0 +1,45 @@
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Agent tooling (per-user; CLAUDE.md and .claude/commands/ stay tracked) ---
+.claude/settings.local.json
+.serena/
+ANTIGRAVITY.md
+
+# --- Secrets and local state ---
+.env
+.env.local
+secrets/
+state.json
+*.log
+logs/
+
+# --- Build and temporary ---
+tmp/
+build/
+dist/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# --- Node ---
+node_modules/
+
+# --- Go ---
+*.test
+
+# --- PowerShell / Pester ---
+TestResults.xml
+coverage.xml
