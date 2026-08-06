@@ -56,7 +56,14 @@ func TestGetUnknownAndPruned(t *testing.T) {
 	if _, err := st.DB.Exec(`UPDATE runs SET pruned=1 WHERE art_id=?`, m.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := st.Get(m.ID); err == nil || !strings.Contains(err.Error(), "artifact pruned") {
+	got, path, err := st.Get(m.ID)
+	if err == nil || !strings.Contains(err.Error(), "artifact pruned") {
 		t.Fatalf("want pruned error, got %v", err)
+	}
+	if path != "" {
+		t.Fatalf("want empty path on pruned artifact, got %q", path)
+	}
+	if got.ID != m.ID || got.Host != "h" {
+		t.Fatalf("pruned run's metadata must still be returned (audit history), got %+v", got)
 	}
 }

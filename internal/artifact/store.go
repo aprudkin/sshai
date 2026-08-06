@@ -138,7 +138,10 @@ func (s *Store) Get(id string) (Meta, string, error) {
 	m.Ts = ts
 
 	if pruned != 0 {
-		return Meta{}, "", fmt.Errorf("run %s: %w", id, ErrPruned)
+		// The row is retained for audit history even after its artifact
+		// file is pruned, so callers (e.g. `log`, `gc`) still get the
+		// metadata — only the path is withheld, alongside the error.
+		return m, "", fmt.Errorf("run %s: %w", id, ErrPruned)
 	}
 
 	return m, filepath.Join(s.Root, "art", m.ID), nil
