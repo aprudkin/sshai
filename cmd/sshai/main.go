@@ -38,7 +38,7 @@ func notImplemented(name string) int {
 func cmdRun(a []string) int   { return cli.Run(a, os.Stdout, os.Stderr) }
 func cmdQ(a []string) int     { return cli.Q(a, os.Stdout, os.Stderr) }
 func cmdDiff(a []string) int  { return cli.Diff(a, os.Stdout, os.Stderr) }
-func cmdLog(a []string) int   { return notImplemented("log") }
-func cmdHosts(a []string) int { return notImplemented("hosts") }
-func cmdGc(a []string) int    { return notImplemented("gc") }
+func cmdLog(a []string) int   { return cli.Log(a, os.Stdout, os.Stderr) }
+func cmdHosts(a []string) int { return cli.Hosts(a, os.Stdout, os.Stderr) }
+func cmdGc(a []string) int    { return cli.Gc(a, os.Stdout, os.Stderr) }
 func cmdHelp(a []string) int  { return notImplemented("help") }

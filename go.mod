@@ -4,6 +4,7 @@ go 1.26.5
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/kevinburke/ssh_config v1.6.0
 	github.com/pmezard/go-difflib v1.0.0
 	modernc.org/sqlite v1.56.0
 )

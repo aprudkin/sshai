@@ -211,7 +211,9 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 			Budget:   budgetTokens,
 			Timeout:  timeout,
 		}
-		return runHost(deps, opts, stdout, stderr)
+		rc := runHost(deps, opts, stdout, stderr)
+		maybeGC(deps.Store, cfg, stderr)
+		return rc
 	}
 
 	perHostBudget := fanoutBudget(budgetTokens, len(hosts))
@@ -228,7 +230,40 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 			Timeout:  timeout,
 		}
 	}
-	return runFanout(deps, hostOpts, stdout, stderr)
+	rc := runFanout(deps, hostOpts, stdout, stderr)
+	maybeGC(deps.Store, cfg, stderr)
+	return rc
+}
+
+// maybeGC runs gc opportunistically, at most once per `run` invocation —
+// called here once after every host in this invocation has already run
+// (never per host inside runFanout's loop) — when the artifact store's
+// total non-pruned size has grown past cfg.RetentionMaxBytes. The size
+// check itself is a single SUM(bytes) query rather than a filesystem walk:
+// the "cheap check" the task brief calls for. Pruning itself goes through
+// the same gcStore the `gc` command uses (misc.go), with the identical
+// cutoff computation (retentionCutoff) so an opportunistic run and an
+// explicit `sshai gc` agree on what counts as prunable.
+//
+// This is deliberately non-fatal: by the time this runs, the passport has
+// already been written to stdout and the exit code already decided, so a
+// gc failure here must never change either — only a stderr note, never
+// the return value.
+func maybeGC(store *artifact.Store, cfg config.Config, stderr io.Writer) {
+	if cfg.RetentionMaxBytes <= 0 {
+		return
+	}
+	var total int64
+	if err := store.DB.QueryRow(`SELECT COALESCE(SUM(bytes),0) FROM runs WHERE pruned=0`).Scan(&total); err != nil {
+		fmt.Fprintf(stderr, "run: gc size check: %v\n", err)
+		return
+	}
+	if total <= cfg.RetentionMaxBytes {
+		return
+	}
+	if _, _, err := gcStore(store, retentionCutoff(cfg.RetentionDays, time.Now()), cfg.RetentionMaxBytes); err != nil {
+		fmt.Fprintf(stderr, "run: opportunistic gc: %v\n", err)
+	}
 }
 
 // fanoutBudget divides total evenly across n hosts (integer division),

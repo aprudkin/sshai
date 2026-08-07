@@ -854,3 +854,55 @@ func TestRunBodyFileMetaCommandIncludesHashAndPreview(t *testing.T) {
 		t.Fatalf("Meta.Command = %q, want it to contain the redacted preview %q", m.Command, "echo hello")
 	}
 }
+
+// TestRunOpportunisticGCPrunesWhenOverCap covers the task-15 brief's
+// resolution 1: `run` calls gc opportunistically, once per invocation,
+// when the artifact store's total non-pruned size has grown past
+// RetentionMaxBytes. A tiny cap (100 bytes) and a 500-byte pre-existing
+// artifact guarantee the cap is already exceeded before this run even
+// starts; the run's own tiny "hello" output (well under the cap on its
+// own) must survive the prune while the oversized older artifact does
+// not — oldest-first, per gcStore's own contract. Crucially, the run's own
+// rc and passport must be entirely unaffected by gc running afterward.
+func TestRunOpportunisticGCPrunesWhenOverCap(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte("retention_max_bytes = 100\n"), 0o600); err != nil {
+		t.Fatalf("write config.toml: %v", err)
+	}
+	if err := session.SaveFacts(root, "web01", session.Facts{OS: "linux"}); err != nil {
+		t.Fatalf("SaveFacts: %v", err)
+	}
+
+	store, err := artifact.OpenStore(root)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	preexisting, err := store.Save(artifact.Meta{Host: "web01", Ctx: "default", Command: "old", Ts: time.Now()}, "kold", bytes.Repeat([]byte("x"), 500))
+	if err != nil {
+		t.Fatalf("seed pre-existing artifact: %v", err)
+	}
+	store.Close()
+
+	f := &fakeTr{rc: 0}
+	var out, errB bytes.Buffer
+	rc := runWith(f, []string{"--ctx", "t1", "web01", "--", "echo", "hello"}, &out, &errB)
+	if rc != 0 {
+		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
+	}
+	if !strings.Contains(out.String(), "a2 host=web01 exit=0") {
+		t.Fatalf("run's own passport must be unaffected by opportunistic gc: %q", out.String())
+	}
+
+	st2, err := artifact.OpenStore(root)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer st2.Close()
+	if _, _, err := st2.Get(preexisting.ID); err == nil || !strings.Contains(err.Error(), "artifact pruned") {
+		t.Fatalf("expected opportunistic gc to prune the oversized pre-existing artifact %s, got err=%v", preexisting.ID, err)
+	}
+	if _, path, err := st2.Get("a2"); err != nil || path == "" {
+		t.Fatalf("this run's own artifact a2 must survive (well under the cap): path=%q err=%v", path, err)
+	}
+}
