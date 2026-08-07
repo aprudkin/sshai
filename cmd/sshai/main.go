@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/aprudkin/sshai/internal/cli"
 )
 
 const (
@@ -33,7 +35,7 @@ func notImplemented(name string) int {
 	return exitUsage
 }
 
-func cmdRun(a []string) int   { return notImplemented("run") }
+func cmdRun(a []string) int   { return cli.Run(a, os.Stdout, os.Stderr) }
 func cmdQ(a []string) int     { return notImplemented("q") }
 func cmdDiff(a []string) int  { return notImplemented("diff") }
 func cmdLog(a []string) int   { return notImplemented("log") }
