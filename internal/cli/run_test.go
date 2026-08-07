@@ -595,6 +595,111 @@ func TestFanoutBudget(t *testing.T) {
 	}
 }
 
+// TestRunDeltaNoChangeSecondRun covers the brief's Step 1 third case: two
+// identical runs with --delta. fakeTr's Exec is deterministic (always
+// produces "hello" as the body), so the two runs write byte-identical
+// artifacts. The first run has no previous run for the key (exact line
+// "delta: no previous run for this key", no "delta=" flag on the status
+// line); the second must carry "delta=a1" on its status line and a body of
+// "no change since a1".
+func TestRunDeltaNoChangeSecondRun(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	if err := session.SaveFacts(root, "web01", session.Facts{OS: "linux"}); err != nil {
+		t.Fatalf("SaveFacts: %v", err)
+	}
+
+	f := &fakeTr{rc: 0}
+	var out1, errB1 bytes.Buffer
+	rc1 := runWith(f, []string{"--ctx", "t1", "--delta", "web01", "--", "echo", "hello"}, &out1, &errB1)
+	if rc1 != 0 {
+		t.Fatalf("first run rc=%d stderr=%s", rc1, errB1.String())
+	}
+	p1 := out1.String()
+	if strings.Contains(p1, "delta=") {
+		t.Fatalf("first run must have no previous run to key off of: %q", p1)
+	}
+	if !strings.Contains(p1, "delta: no previous run for this key") {
+		t.Fatalf("first run passport missing the exact no-previous-run line: %q", p1)
+	}
+
+	var out2, errB2 bytes.Buffer
+	rc2 := runWith(f, []string{"--ctx", "t1", "--delta", "web01", "--", "echo", "hello"}, &out2, &errB2)
+	if rc2 != 0 {
+		t.Fatalf("second run rc=%d stderr=%s", rc2, errB2.String())
+	}
+	p2 := out2.String()
+	if !strings.Contains(p2, "delta=a1") {
+		t.Fatalf("second run passport missing delta=a1 on the status line: %q", p2)
+	}
+	if !strings.Contains(p2, "no change since a1") {
+		t.Fatalf("second run passport missing the no-change body: %q", p2)
+	}
+}
+
+// TestRunHostDeltaKeysDoNotCollideAcrossHosts is the explicit regression
+// test for --delta's fan-out interaction: delta.Key includes the host (see
+// delta.Key's own signature), so two hosts running the identical
+// (ctx, command) pair must never see each other's previous run as their own
+// delta base. runHost is called directly (not through runFanout's
+// concurrent goroutines) so artifact IDs are assigned in a known,
+// deterministic order: h1's first run -> a1, h2's first run -> a2, h1's
+// second run -> a3, h2's second run -> a4.
+func TestRunHostDeltaKeysDoNotCollideAcrossHosts(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	seedLinuxFacts(t, root, "h1", "h2")
+
+	store, err := artifact.OpenStore(root)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	f := &fakeTr{rc: 0}
+	deps := Deps{Tr: f, Store: store}
+	base := Opts{Ctx: "t1", Command: "echo hello", Budget: 500, Delta: true}
+
+	opts1 := base
+	opts1.Host = "h1"
+	opts2 := base
+	opts2.Host = "h2"
+
+	var out bytes.Buffer
+	if rc := runHost(deps, opts1, &out, &out); rc != 0 {
+		t.Fatalf("h1 first run rc=%d: %s", rc, out.String())
+	}
+	out.Reset()
+	if rc := runHost(deps, opts2, &out, &out); rc != 0 {
+		t.Fatalf("h2 first run rc=%d: %s", rc, out.String())
+	}
+	out.Reset()
+
+	// h1's second run must key off its OWN previous run (a1), never h2's
+	// (a2) — a cross-host collision would show "delta=a2" here instead.
+	if rc := runHost(deps, opts1, &out, &out); rc != 0 {
+		t.Fatalf("h1 second run rc=%d: %s", rc, out.String())
+	}
+	p1 := out.String()
+	if !strings.Contains(p1, "delta=a1") {
+		t.Fatalf("h1 second run must key off its own a1: %q", p1)
+	}
+	if strings.Contains(p1, "delta=a2") {
+		t.Fatalf("h1 second run must not key off h2's a2 (cross-host collision): %q", p1)
+	}
+	out.Reset()
+
+	// h2's second run must key off its OWN previous run (a2), never h1's
+	// rows (a1 or a3).
+	if rc := runHost(deps, opts2, &out, &out); rc != 0 {
+		t.Fatalf("h2 second run rc=%d: %s", rc, out.String())
+	}
+	p2 := out.String()
+	if !strings.Contains(p2, "delta=a2") {
+		t.Fatalf("h2 second run must key off its own a2: %q", p2)
+	}
+}
+
 // TestRunBodyFileMetaCommandIncludesHashAndPreview covers Finding 1's
 // fix: the design doc's run-log row description is "command (or body
 // hash + first 80 chars)", so a --body-file run's stored Meta.Command

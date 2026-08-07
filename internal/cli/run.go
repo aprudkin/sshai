@@ -52,6 +52,7 @@ type Opts struct {
 	Command  string // the actual body run on the host (bash or pwsh)
 	FromFile bool   // true when Command came from --body-file/stdin rather than "-- words"
 	Readonly bool
+	Delta    bool // --delta: diff against the previous run of the same (host, ctx, command) key
 	Budget   int
 	Timeout  time.Duration
 }
@@ -112,10 +113,6 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
-	}
-
-	if *wantDelta {
-		fmt.Fprintln(stderr, "run: --delta is not wired yet (Task 14) — ignoring")
 	}
 
 	cfg, err := config.Load()
@@ -210,6 +207,7 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 			Command:  command,
 			FromFile: fromFile,
 			Readonly: cfg.Hosts[host].Readonly,
+			Delta:    *wantDelta,
 			Budget:   budgetTokens,
 			Timeout:  timeout,
 		}
@@ -225,6 +223,7 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 			Command:  command,
 			FromFile: fromFile,
 			Readonly: cfg.Hosts[host].Readonly,
+			Delta:    *wantDelta,
 			Budget:   perHostBudget,
 			Timeout:  timeout,
 		}
@@ -590,6 +589,29 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
 		Ts: time.Now(),
 	}
 	key := delta.Key(opts.Host, opts.Ctx, deltaKeyCommand(opts))
+
+	// --delta's lookup runs BEFORE Save, not after: LastByKey queries the
+	// table as it stands right now, so the row this call is about to
+	// insert is not there yet to exclude — no "art_id != ?" variant
+	// needed. This ordering is also what lets Meta.DeltaBase be set
+	// before Save, so the status line's own "delta=aN" comes from the
+	// same Save call as everything else instead of a second write.
+	// Nothing here skips Save in non-delta or no-previous-run cases: the
+	// full artifact is always stored first, so history is never lost to
+	// delta mode (the brief's invariant).
+	var prevMeta artifact.Meta
+	var havePrev bool
+	if opts.Delta {
+		prevMeta, havePrev, err = deps.Store.LastByKey(key)
+		if err != nil {
+			fmt.Fprintf(stderr, "run: delta lookup for %s: %v\n", opts.Host, err)
+			return exitUsage
+		}
+		if havePrev {
+			meta.DeltaBase = prevMeta.ID
+		}
+	}
+
 	savedMeta, err := deps.Store.Save(meta, key, out)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: save artifact: %v\n", err)
@@ -597,7 +619,22 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
 	}
 
 	artPath := filepath.Join(deps.Store.Root, "art", savedMeta.ID)
-	passport := artifact.RenderPassport(savedMeta, artPath, out, opts.Budget)
+
+	var passport string
+	switch {
+	case opts.Delta && havePrev:
+		prevPath := filepath.Join(deps.Store.Root, "art", prevMeta.ID)
+		deltaBody, derr := delta.Render(prevPath, out, prevMeta.ID, prevMeta.Ts, opts.Budget)
+		if derr != nil {
+			fmt.Fprintf(stderr, "run: render delta for %s: %v\n", opts.Host, derr)
+			return exitUsage
+		}
+		passport = artifact.StatusLine(savedMeta) + "\nfile=" + artPath + "\n" + deltaBody
+	case opts.Delta:
+		passport = artifact.RenderPassport(savedMeta, artPath, out, opts.Budget) + "\ndelta: no previous run for this key"
+	default:
+		passport = artifact.RenderPassport(savedMeta, artPath, out, opts.Budget)
+	}
 	if adv := artifact.PipeAdvisory(opts.Command); adv != "" {
 		passport += "\n" + adv
 	}
