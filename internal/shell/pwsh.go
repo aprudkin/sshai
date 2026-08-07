@@ -16,7 +16,11 @@ const PwshDefaultShell = `C:\Program Files\PowerShell\7\pwsh.exe`
 
 // RemoteDir is the remote scratch directory a staged script is uploaded
 // to, relative to the SSH login's home directory: the remote file is
-// <RemoteDir>/<slug>.ps1 (see BodySlug).
+// <RemoteDir>/<slug>.ps1 (see BodySlug). The staging-dir + slug-filename
+// convention is ported from ps_ssh.py's REMOTE_DIR (".claude-ps-ssh",
+// staged as f"{REMOTE_DIR}/{slug}.ps1"); only the value is renamed here,
+// to sshai's own scratch-dir convention (see ~/.sshai/ in the design
+// doc), not ps_ssh.py's Claude-Code-specific one.
 const RemoteDir = ".sshai"
 
 // pwq single-quotes s for safe embedding inside a PowerShell single-quoted
