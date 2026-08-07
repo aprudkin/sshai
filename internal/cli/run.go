@@ -361,7 +361,13 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
 			return exitUsage
 		}
 
-		slug := shell.BodySlug(script)
+		// Slug the raw command, not the wrapped script: the wrapper embeds
+		// a fresh random sentinel every run, so slugging script would
+		// defeat BodySlug's own documented purpose (same body -> same
+		// remote filename, so re-running the same command overwrites its
+		// prior staged file instead of accumulating a new one in
+		// RemoteDir on every single call).
+		slug := shell.BodySlug([]byte(opts.Command))
 		remotePath := shell.RemoteDir + "/" + slug + ".ps1"
 		if err := deps.Tr.Put(opts.Host, tmp.Name(), remotePath); err != nil {
 			if te, isTE := asTransportError(err); isTE {
