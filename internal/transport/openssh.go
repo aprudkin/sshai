@@ -16,6 +16,16 @@ import (
 // small script body, not meant for bulk file transfer.
 const defaultPutTimeout = 2 * time.Minute
 
+// execStartFailedRC is the out-of-band sentinel run() returns when the
+// local ssh/scp process never started at all (binary missing, exec
+// permission denied, ...). It is deliberately distinct from -1, which
+// ProcessState.ExitCode() itself returns for "started but has no clean
+// exit status" (killed by our own cap-overflow or timeout logic) — a
+// real, if uninformative, outcome. execStartFailedRC means there is no
+// remote exit code whatsoever to report; Exec and Put both escalate it
+// to a TransportError rather than passing it through as an honest exit.
+const execStartFailedRC = -2
+
 // OpenSSH is a Transport that shells out to the system ssh(1) and scp(1)
 // binaries, sharing one ControlMaster socket per host to avoid paying a
 // fresh TCP+auth handshake on every call.
@@ -82,10 +92,13 @@ func (tr *OpenSSH) scpArgv(host, localPath, remotePath string) []string {
 // failures (connection refused, auth failure, DNS) — never the remote
 // command's, since a well-behaved remote command that itself wants to
 // exit 255 is indistinguishable at this layer and treated the same way
-// ps_ssh.py treats it: as a transport failure, not an honest exit. Any
-// other exit code, including 0, is the remote command's own honest
-// status. A context deadline exceeded before the process finished maps
-// to TransportError{"timeout"} regardless of rc.
+// ps_ssh.py treats it: as a transport failure, not an honest exit. The
+// local ssh process failing to start at all (missing binary, exec
+// permission denied — see run's execStartFailedRC) is reported the same
+// way, since there is no remote exit code to speak of either. Any other
+// exit code, including 0, is the remote command's own honest status. A
+// context deadline exceeded before the process finished maps to
+// TransportError{"timeout"} regardless of rc.
 func (tr *OpenSSH) Exec(host, command string, stdin []byte, timeout time.Duration) (Result, error) {
 	argv := tr.sshArgv(host, command)
 	rc, out, timedOut := tr.Runner(argv, stdin, timeout)
@@ -93,17 +106,27 @@ func (tr *OpenSSH) Exec(host, command string, stdin []byte, timeout time.Duratio
 	if timedOut {
 		return Result{}, &TransportError{Reason: "timeout"}
 	}
-	if rc == 255 {
+	if rc == 255 || rc == execStartFailedRC {
 		return Result{}, &TransportError{Reason: "ssh"}
 	}
+
+	// The default Runner's capWriter retains at most streamCap+1 bytes:
+	// one byte past the advertised cap exists purely as an overflow
+	// sentinel (see capWriter.Write), so a write landing exactly at the
+	// cap is never mistaken for truncation. Output longer than streamCap
+	// here is proof of genuine overflow — trim the sentinel (and
+	// whatever else capWriter had buffered before the kill landed) back
+	// off so callers never see more than the cap they asked for.
+	truncated := false
+	if tr.streamCap > 0 && int64(len(out)) > tr.streamCap {
+		truncated = true
+		out = out[:tr.streamCap]
+	}
+
 	return Result{
-		ExitCode: rc,
-		Output:   out,
-		// The default Runner never returns more than streamCap bytes; if
-		// it returned exactly that many, treat the boundary as a cap hit
-		// rather than a coincidence, consistent with capWriter's own
-		// truncation trigger (see run and capWriter.Write below).
-		Truncated: tr.streamCap > 0 && int64(len(out)) >= tr.streamCap,
+		ExitCode:  rc,
+		Output:    out,
+		Truncated: truncated,
 	}, nil
 }
 
@@ -139,14 +162,19 @@ func (tr *OpenSSH) run(argv []string, stdin []byte, timeout time.Duration) (int,
 	cmd.Stdout = w
 	cmd.Stderr = w
 
-	// The error from Run is deliberately not surfaced: a non-zero exit,
-	// a kill triggered by capWriter on overflow, and a kill triggered by
-	// the context deadline all report themselves through
-	// cmd.ProcessState and ctx.Err() below, which is what the caller
-	// (Exec/Put) actually discriminates on.
+	// cmd.Run()'s error is redundant with cmd.ProcessState/ctx.Err() below
+	// for every case except one: a non-zero exit, a kill triggered by
+	// capWriter on overflow, and a kill triggered by the context deadline
+	// all report themselves through those two regardless of what Run()
+	// returned. The one case they can't cover is the child never having
+	// started at all (missing binary, exec permission denied, ...): then
+	// ProcessState stays nil and there is no remote exit code whatsoever
+	// — that's the execStartFailedRC branch below, which Exec/Put escalate
+	// to a TransportError instead of passing through as a fabricated
+	// honest exit.
 	_ = cmd.Run()
 
-	rc := -1
+	rc := execStartFailedRC
 	if cmd.ProcessState != nil {
 		rc = cmd.ProcessState.ExitCode()
 	}
@@ -160,18 +188,27 @@ func (tr *OpenSSH) run(argv []string, stdin []byte, timeout time.Duration) (int,
 // inspected by callers.
 var errStreamCapExceeded = errors.New("transport: stream cap exceeded")
 
-// capWriter accumulates up to max bytes of combined stdout+stderr. The
-// write that reaches or crosses max is truncated to fit, Truncated is
-// recorded, and cancel is invoked exactly once to kill the underlying
-// process — reaching the cap is treated as the truncation point outright,
-// not merely a hint to keep watching, so that a process is never left
-// running unbounded just because its output is large.
+// capWriter accumulates combined stdout+stderr up to max+1 bytes: max is
+// the caller's advertised cap, and the one extra byte is kept purely as
+// an overflow sentinel — proof that real output exceeded max — so that a
+// write landing exactly at max is retained in full rather than mistaken
+// for truncation (that off-by-one was the bug: triggering on "reaches
+// max" rather than "exceeds max" killed processes whose output fit
+// exactly). The kill trigger is "buffered bytes exceed max", checked
+// after every write, so it fires the moment real output crosses the cap
+// regardless of whether that happens within one write or is spread
+// across several — including a single write of exactly max+1 bytes.
+// cancel is invoked exactly once. Exec derives the caller-visible
+// Truncated fact from output length (len(out) > max) and trims the
+// sentinel byte back off — see Exec. Each Exec/Put call constructs its
+// own capWriter inside run(), so there is no mutable state shared
+// between concurrent calls on one OpenSSH instance.
 type capWriter struct {
-	mu        sync.Mutex
-	max       int64
-	buf       []byte
-	truncated bool
-	cancel    context.CancelFunc
+	mu     sync.Mutex
+	max    int64
+	buf    []byte
+	killed bool
+	cancel context.CancelFunc
 }
 
 func newCapWriter(max int64, cancel context.CancelFunc) *capWriter {
@@ -185,25 +222,34 @@ func (w *capWriter) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	if w.truncated {
+	if w.killed {
 		return 0, errStreamCapExceeded
 	}
 
-	remaining := w.max - int64(len(w.buf))
-	if remaining < 0 {
-		remaining = 0
+	hardCap := w.max + 1
+	room := hardCap - int64(len(w.buf))
+	if room < 0 {
+		room = 0
 	}
-	if int64(len(p)) < remaining {
-		w.buf = append(w.buf, p...)
-		return len(p), nil
+	take := int64(len(p))
+	if take > room {
+		take = room
+	}
+	w.buf = append(w.buf, p[:take]...)
+
+	if int64(len(w.buf)) <= w.max {
+		// Still at or under the advertised cap: no overflow yet.
+		return int(take), nil
 	}
 
-	w.buf = append(w.buf, p[:remaining]...)
-	w.truncated = true
+	// Buffered output now exceeds max — genuine overflow, whether that
+	// happened within this write or was the last of several. Kill the
+	// process and stop accepting further output.
+	w.killed = true
 	if w.cancel != nil {
 		w.cancel()
 	}
-	return int(remaining), errStreamCapExceeded
+	return int(take), errStreamCapExceeded
 }
 
 func (w *capWriter) Bytes() []byte {
