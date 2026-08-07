@@ -58,3 +58,16 @@ func TestArgvDiscipline(t *testing.T) {
 		t.Fatalf("argv shape: %q", captured)
 	}
 }
+
+// TestPutNonZeroIsTransportError covers Put's discrimination rule, which
+// (unlike Exec's) does not special-case 255: any non-zero rc from scp is
+// reported as TransportError{"scp"}.
+func TestPutNonZeroIsTransportError(t *testing.T) {
+	tr := NewOpenSSH(t.TempDir(), "15m", 1<<20)
+	tr.Runner = fake(1, "scp: No such file or directory", false)
+	err := tr.Put("h1", "/local/script.sh", "/remote/script.sh")
+	var te *TransportError
+	if !errors.As(err, &te) || te.Reason != "scp" {
+		t.Fatalf("want TransportError{scp}, got %v", err)
+	}
+}
