@@ -671,18 +671,18 @@ func TestRunHostDeltaKeysDoNotCollideAcrossHosts(t *testing.T) {
 	opts2.Host = "h2"
 
 	var out bytes.Buffer
-	if rc := runHost(deps, opts1, &out, &out); rc != 0 {
+	if rc, _ := runHost(deps, opts1, &out, &out); rc != 0 {
 		t.Fatalf("h1 first run rc=%d: %s", rc, out.String())
 	}
 	out.Reset()
-	if rc := runHost(deps, opts2, &out, &out); rc != 0 {
+	if rc, _ := runHost(deps, opts2, &out, &out); rc != 0 {
 		t.Fatalf("h2 first run rc=%d: %s", rc, out.String())
 	}
 	out.Reset()
 
 	// h1's second run must key off its OWN previous run (a1), never h2's
 	// (a2) — a cross-host collision would show "delta=a2" here instead.
-	if rc := runHost(deps, opts1, &out, &out); rc != 0 {
+	if rc, _ := runHost(deps, opts1, &out, &out); rc != 0 {
 		t.Fatalf("h1 second run rc=%d: %s", rc, out.String())
 	}
 	p1 := out.String()
@@ -696,7 +696,7 @@ func TestRunHostDeltaKeysDoNotCollideAcrossHosts(t *testing.T) {
 
 	// h2's second run must key off its OWN previous run (a2), never h1's
 	// rows (a1 or a3).
-	if rc := runHost(deps, opts2, &out, &out); rc != 0 {
+	if rc, _ := runHost(deps, opts2, &out, &out); rc != 0 {
 		t.Fatalf("h2 second run rc=%d: %s", rc, out.String())
 	}
 	p2 := out.String()
@@ -904,5 +904,51 @@ func TestRunOpportunisticGCPrunesWhenOverCap(t *testing.T) {
 	}
 	if _, path, err := st2.Get("a2"); err != nil || path == "" {
 		t.Fatalf("this run's own artifact a2 must survive (well under the cap): path=%q err=%v", path, err)
+	}
+}
+
+// TestRunFanoutOpportunisticGCProtectsAllJustWrittenArtifacts is the
+// fix-round-1 regression test for Finding 1: runFanout writes N artifacts
+// (one per host) in a single `run` invocation, but maybeGC is called only
+// once, after all N have already been saved (run.go:233-235). The
+// pre-fix "floor" heuristic in gcStore exempted exactly one row — the
+// single newest by ts across the whole store — so a fan-out run's other
+// N-1 just-written artifacts could still be pruned straight back out.
+// Verified RED against b983023 (the pre-fix commit): this exact test
+// failed there with "a1 ... artifact pruned". The fix replaces the
+// heuristic with an explicit protect set built from ALL N of this
+// invocation's saved ids (protectSet(ids...), run.go), threaded out of
+// runFanout via its second return value. With a cap far smaller than the
+// combined output of 3 hosts, none of the 3 artifacts this very
+// invocation just wrote may be pruned.
+func TestRunFanoutOpportunisticGCProtectsAllJustWrittenArtifacts(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte("retention_max_bytes = 1\n"), 0o600); err != nil {
+		t.Fatalf("write config.toml: %v", err)
+	}
+	seedLinuxFacts(t, root, "h1", "h2", "h3")
+
+	f := &multiHostTr{rcs: map[string]int{"h1": 0, "h2": 0, "h3": 0}}
+	var out, errB bytes.Buffer
+	rc := runWith(f, []string{"h1", "h2", "h3", "--", "true"}, &out, &errB)
+	if rc != 0 {
+		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
+	}
+
+	store, err := artifact.OpenStore(root)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	// Exactly 3 Save calls happened (one per host), so ids a1..a3 are
+	// each used exactly once, regardless of which host's goroutine
+	// committed first under fan-out's concurrent scheduling. ALL THREE
+	// must survive.
+	for _, id := range []string{"a1", "a2", "a3"} {
+		if _, path, err := store.Get(id); err != nil || path == "" {
+			t.Fatalf("artifact %s (one of this invocation's own N just-written artifacts) must survive opportunistic gc: path=%q err=%v", id, path, err)
+		}
 	}
 }

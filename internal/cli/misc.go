@@ -272,7 +272,13 @@ func Gc(args []string, stdout, stderr io.Writer) int {
 	}
 	defer store.Close()
 
-	pruned, freed, err := gcStore(store, retentionCutoff(cfg.RetentionDays, time.Now()), cfg.RetentionMaxBytes)
+	// Standalone `sshai gc` protects nothing: a user invoking it explicitly
+	// gets the brief's literal contract, "oldest first until under", with
+	// no exemptions — unlike run.go's opportunistic maybeGC call, which
+	// passes the ids this very invocation just wrote (see gcStore's and
+	// maybeGC's doc comments for why that call needs a non-empty set and
+	// this one deliberately does not).
+	pruned, freed, err := gcStore(store, retentionCutoff(cfg.RetentionDays, time.Now()), cfg.RetentionMaxBytes, nil)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc: %v\n", err)
 		return exitUsage
@@ -293,16 +299,23 @@ func retentionCutoff(retentionDays int, now time.Time) time.Time {
 // zero cutoff disables age-based pruning entirely — Search's own "no
 // lower bound" convention), OR — evaluated afterward, against whatever
 // remains — whose total size still exceeds maxBytes (maxBytes <= 0
-// disables the size cap), removed oldest-first until under, but never the
-// single newest still-live row (see the "floor" comment below — this is
-// what protects the artifact `run`'s own opportunistic maybeGC call just
-// wrote, immediately before calling this). Rows are never deleted, only
-// their artifact file is removed and pruned set to 1, keeping the row for
-// audit history — the same contract Store.Get's ErrPruned already
-// documents (see store.go's Get). It also removes orphaned Save .tmp
-// files older than tmpOrphanAge (see that constant's doc comment),
-// counting their freed bytes into the same total.
-func gcStore(store *artifact.Store, cutoff time.Time, maxBytes int64) (pruned int, freed int64, err error) {
+// disables the size cap), removed oldest-first until under — except any
+// row whose id is a key in protect (nil/empty is valid and protects
+// nothing: reading a missing key from a nil map is safe in Go). A
+// protected row is exempt from BOTH passes, not just the size-based one:
+// deliberately so, rather than protecting only against the size cap —
+// see maybeGC's doc comment in run.go for the scenario (a
+// RetentionDays=0 misconfiguration) that a size-only exemption would
+// still miss. protect is how run.go's opportunistic maybeGC call keeps
+// itself from pruning the artifact(s) it just wrote; standalone `sshai
+// gc` (Gc, above) always passes nil, restoring the literal "oldest first
+// until under, no exceptions" contract for the explicit command. Rows are
+// never deleted, only their artifact file is removed and pruned set to
+// 1, keeping the row for audit history — the same contract Store.Get's
+// ErrPruned already documents (see store.go's Get). It also removes
+// orphaned Save .tmp files older than tmpOrphanAge (see that constant's
+// doc comment), counting their freed bytes into the same total.
+func gcStore(store *artifact.Store, cutoff time.Time, maxBytes int64, protect map[string]bool) (pruned int, freed int64, err error) {
 	// Ordered by ts (not id): both pruning passes below are age-based —
 	// pass 1 directly, pass 2 ("oldest first") too — so this must be the
 	// same clock pass 1 already compares against cutoff on, not
@@ -346,42 +359,32 @@ func gcStore(store *artifact.Store, cutoff time.Time, maxBytes int64) (pruned in
 		return 0, 0, fmt.Errorf("gc: query runs: %w", rowsErr)
 	}
 
-	// Pass 1: age. Rows older than cutoff are pruned unconditionally.
+	// Pass 1: age. Rows older than cutoff are pruned unconditionally,
+	// except a protected row, which counts toward remaining (pass 2's
+	// input) exactly like any other live row but is never itself pruned.
 	toPrune := make(map[string]bool)
 	var remaining int64
 	for _, c := range all {
+		if protect[c.id] {
+			remaining += c.bytes
+			continue
+		}
 		if !cutoff.IsZero() && c.ts.Before(cutoff) {
 			toPrune[c.id] = true
 			continue
 		}
 		remaining += c.bytes
 	}
-	// Floor: the single newest row pass 1 left standing is never a
-	// size-based (pass 2) pruning candidate, no matter how far over
-	// maxBytes the store still sits. Without this, a small enough
-	// RetentionMaxBytes could prune the very artifact `run` just wrote —
-	// maybeGC calls gcStore immediately after Save, so that row is
-	// always the newest live one at this point — breaking the promise
-	// that the artifact id a passport just printed ("file=...") can
-	// still be read back right after. `all` is ts-ASC, so the newest
-	// live row is the last one, scanning backward, not already condemned
-	// by pass 1's age cutoff (an explicit RetentionDays policy still
-	// wins over this floor). Size-based pruning is a best-effort cap,
-	// not a hard guarantee, so leaving the store over maxBytes when only
-	// this one row remains is the accepted trade-off.
-	newestLiveID := ""
-	for i := len(all) - 1; i >= 0; i-- {
-		if !toPrune[all[i].id] {
-			newestLiveID = all[i].id
-			break
-		}
-	}
 
 	// Pass 2: size cap, oldest-first, only over whatever pass 1 left
-	// standing, floor excepted.
+	// standing, protected rows excepted. This can leave the store over
+	// maxBytes when every unprotected row has already been pruned and
+	// only protected ones remain — an accepted trade-off (size-based
+	// pruning is a best-effort cap, not a hard guarantee) rather than a
+	// bug: see gcStore's own doc comment on why protect exists at all.
 	if maxBytes > 0 && remaining > maxBytes {
 		for _, c := range all {
-			if toPrune[c.id] || remaining <= maxBytes || c.id == newestLiveID {
+			if toPrune[c.id] || protect[c.id] || remaining <= maxBytes {
 				continue
 			}
 			toPrune[c.id] = true

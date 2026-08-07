@@ -211,8 +211,8 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 			Budget:   budgetTokens,
 			Timeout:  timeout,
 		}
-		rc := runHost(deps, opts, stdout, stderr)
-		maybeGC(deps.Store, cfg, stderr)
+		rc, id := runHost(deps, opts, stdout, stderr)
+		maybeGC(deps.Store, cfg, stderr, protectSet(id))
 		return rc
 	}
 
@@ -230,9 +230,24 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 			Timeout:  timeout,
 		}
 	}
-	rc := runFanout(deps, hostOpts, stdout, stderr)
-	maybeGC(deps.Store, cfg, stderr)
+	rc, ids := runFanout(deps, hostOpts, stdout, stderr)
+	maybeGC(deps.Store, cfg, stderr, protectSet(ids...))
 	return rc
+}
+
+// protectSet builds gcStore's protect set from the artifact ids this
+// invocation of `run` itself just wrote — one for the single-host path,
+// up to N for fan-out. An empty id (a host that never reached Save, e.g.
+// policy-denied, or a Save that itself failed) is skipped rather than
+// protecting the empty string, which is never a real art_id.
+func protectSet(ids ...string) map[string]bool {
+	protect := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id != "" {
+			protect[id] = true
+		}
+	}
+	return protect
 }
 
 // maybeGC runs gc opportunistically, at most once per `run` invocation —
@@ -250,14 +265,21 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 // gc failure here must never change either — only a stderr note, never
 // the return value.
 //
-// This call always runs immediately after this invocation's own Save, so
-// the row(s) it just wrote are always the newest live rows in the store
-// at this point. gcStore's own "floor" (see its doc comment) is what
-// keeps this call from pruning them straight back out — without it, a
-// misconfigured RetentionMaxBytes smaller than a single run's own output
-// could delete the very artifact whose id this run's passport just
-// printed ("file=...") before a caller ever gets to read it back.
-func maybeGC(store *artifact.Store, cfg config.Config, stderr io.Writer) {
+// protect carries every artifact id this very invocation of `run` just
+// wrote (built by protectSet, above, from runHost's or runFanout's
+// return values) — one id for the single-host path, up to N for
+// fan-out. This call runs immediately after those Save(s), so every id
+// in protect is always among the newest live rows in the store at this
+// point; gcStore exempts all of them from BOTH its age and size passes
+// (see gcStore's own doc comment for why age too, not just size).
+// Without this, a misconfigured RetentionMaxBytes (or RetentionDays=0)
+// smaller than this very invocation's own output could delete the
+// artifact(s) whose ids this run's own passport(s) just printed
+// ("file=...") before a caller ever gets to read them back — and in
+// fan-out, ALL N of this invocation's artifacts need protecting, not
+// just one, since gcStore has no other way to single out "written by
+// this invocation" from "written a moment earlier by an unrelated one".
+func maybeGC(store *artifact.Store, cfg config.Config, stderr io.Writer, protect map[string]bool) {
 	if cfg.RetentionMaxBytes <= 0 {
 		return
 	}
@@ -269,7 +291,7 @@ func maybeGC(store *artifact.Store, cfg config.Config, stderr io.Writer) {
 	if total <= cfg.RetentionMaxBytes {
 		return
 	}
-	if _, _, err := gcStore(store, retentionCutoff(cfg.RetentionDays, time.Now()), cfg.RetentionMaxBytes); err != nil {
+	if _, _, err := gcStore(store, retentionCutoff(cfg.RetentionDays, time.Now()), cfg.RetentionMaxBytes, protect); err != nil {
 		fmt.Fprintf(stderr, "run: opportunistic gc: %v\n", err)
 	}
 }
@@ -287,7 +309,10 @@ func fanoutBudget(total, n int) int {
 
 // runFanout runs hostOpts (one Opts per host, already in argv order)
 // concurrently against the shared deps and returns the worst-outcome
-// process exit.
+// process exit, plus the artifact id each host's runHost call saved (""
+// for a host that never reached Save, e.g. policy-denied) — the second
+// return value exists solely so runArgs can build maybeGC's protect set
+// from every artifact this fan-out invocation just wrote, not just one.
 //
 // Concurrency shape, per the task brief's verified facts:
 //   - deps.Tr (transport.OpenSSH in production) is documented safe for
@@ -311,18 +336,19 @@ func fanoutBudget(total, n int) int {
 // the "results collected by index — deterministic print order = argv
 // order" requirement. The controller writes every buffer to the real
 // stdout/stderr only after WaitGroup.Wait, strictly in argv order.
-func runFanout(deps Deps, hostOpts []Opts, stdout, stderr io.Writer) int {
+func runFanout(deps Deps, hostOpts []Opts, stdout, stderr io.Writer) (int, []string) {
 	n := len(hostOpts)
 	outs := make([]bytes.Buffer, n)
 	errs := make([]bytes.Buffer, n)
 	rcs := make([]int, n)
+	ids := make([]string, n)
 
 	var wg sync.WaitGroup
 	wg.Add(n)
 	for i, opts := range hostOpts {
 		go func(i int, opts Opts) {
 			defer wg.Done()
-			rcs[i] = runHost(deps, opts, &outs[i], &errs[i])
+			rcs[i], ids[i] = runHost(deps, opts, &outs[i], &errs[i])
 		}(i, opts)
 	}
 	wg.Wait()
@@ -381,11 +407,11 @@ func runFanout(deps Deps, hostOpts []Opts, stdout, stderr io.Writer) int {
 
 	switch {
 	case sawTransportErr:
-		return exitTransport
+		return exitTransport, ids
 	case sawPolicyDenied:
-		return exitPolicy
+		return exitPolicy, ids
 	default:
-		return maxRemoteExit
+		return maxRemoteExit, ids
 	}
 }
 
@@ -473,8 +499,13 @@ func asTransportError(err error) (*transport.TransportError, bool) {
 // state/baseline save, artifact store, passport render, audit, and the
 // exit code to return (mirroring the remote exit, except for the
 // reserved policy/transport codes — see the package doc in
-// cmd/sshai/main.go).
-func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
+// cmd/sshai/main.go). The second return value is the artifact id this
+// call saved, if any ("" on every early-return path that never reaches
+// Store.Save, e.g. policy-denied) — runArgs threads it (or, in fan-out,
+// all N hosts' ids via runFanout) into maybeGC's protect set, so
+// opportunistic gc can never prune the very artifact(s) this invocation
+// just wrote (see maybeGC's doc comment).
+func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, string) {
 	root := deps.Store.Root
 
 	if err := policy.CheckReadonly(opts.Command, opts.Readonly); err != nil {
@@ -485,13 +516,13 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
 		}); auditErr != nil {
 			fmt.Fprintf(stderr, "run: append audit: %v\n", auditErr)
 		}
-		return exitPolicy
+		return exitPolicy, ""
 	}
 
 	facts, ok, err := session.LoadFacts(root, opts.Host)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: load facts for %s: %v\n", opts.Host, err)
-		return exitUsage
+		return exitUsage, ""
 	}
 	if !ok {
 		facts, err = session.Probe(deps.Tr, opts.Host, shell.PwshDefaultShell, opts.Timeout)
@@ -500,23 +531,23 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
 				return handleTransportError(deps, opts, te, stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: probe %s: %v\n", opts.Host, err)
-			return exitUsage
+			return exitUsage, ""
 		}
 		if err := session.SaveFacts(root, opts.Host, facts); err != nil {
 			fmt.Fprintf(stderr, "run: save facts for %s: %v\n", opts.Host, err)
-			return exitUsage
+			return exitUsage, ""
 		}
 	}
 
 	st, _, err := session.LoadState(root, opts.Host, opts.Ctx)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: load state for %s/%s: %v\n", opts.Host, opts.Ctx, err)
-		return exitUsage
+		return exitUsage, ""
 	}
 	baseline, baseOK, err := session.LoadBaseline(root, opts.Host)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: load baseline for %s: %v\n", opts.Host, err)
-		return exitUsage
+		return exitUsage, ""
 	}
 	restore := shell.EnvRestoreSet(baseline, st.Env)
 	sentinel := shell.NewSentinel()
@@ -537,17 +568,17 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
 		tmp, err := os.CreateTemp("", "sshai-*.ps1")
 		if err != nil {
 			fmt.Fprintf(stderr, "run: create temp script: %v\n", err)
-			return exitUsage
+			return exitUsage, ""
 		}
 		defer os.Remove(tmp.Name())
 		if _, err := tmp.Write(script); err != nil {
 			tmp.Close()
 			fmt.Fprintf(stderr, "run: write temp script: %v\n", err)
-			return exitUsage
+			return exitUsage, ""
 		}
 		if err := tmp.Close(); err != nil {
 			fmt.Fprintf(stderr, "run: close temp script: %v\n", err)
-			return exitUsage
+			return exitUsage, ""
 		}
 
 		// Slug the raw command, not the wrapped script: the wrapper embeds
@@ -563,7 +594,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
 				return handleTransportError(deps, opts, te, stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: put script to %s: %v\n", opts.Host, err)
-			return exitUsage
+			return exitUsage, ""
 		}
 
 		invocation := shell.PwshInvocation(facts.Form, facts.Shell, "-NoProfile -ExecutionPolicy Bypass -File "+remotePath)
@@ -573,7 +604,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
 				return handleTransportError(deps, opts, te, stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: exec on %s: %v\n", opts.Host, err)
-			return exitUsage
+			return exitUsage, ""
 		}
 		remoteExit, truncated = res.ExitCode, res.Truncated
 		out, parsedSt, parseOK = shell.PwshParse(res.Output, sentinel)
@@ -585,7 +616,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
 				return handleTransportError(deps, opts, te, stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: exec on %s: %v\n", opts.Host, err)
-			return exitUsage
+			return exitUsage, ""
 		}
 		remoteExit, truncated = res.ExitCode, res.Truncated
 		out, parsedSt, parseOK = shell.BashParse(res.Output, sentinel)
@@ -664,7 +695,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
 	savedMeta, err := deps.Store.Save(meta, key, out)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: save artifact: %v\n", err)
-		return exitUsage
+		return exitUsage, ""
 	}
 
 	artPath := filepath.Join(deps.Store.Root, "art", savedMeta.ID)
@@ -720,7 +751,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "run: append audit: %v\n", auditErr)
 	}
 
-	return remoteExit
+	return remoteExit, savedMeta.ID
 }
 
 // handleTransportError records a failed delivery (the body may not have
@@ -729,7 +760,11 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
 // by TransportErr being non-empty — the Store/Meta contract laid out in
 // artifact/passport.go's StatusLine. The artifact is empty; the passport
 // and audit entry are still written so the failure itself is traceable.
-func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, stdout, stderr io.Writer) int {
+// The second return value is the saved artifact's id ("" if Save itself
+// failed, in which case there is nothing for a caller to protect from gc)
+// — same two-value shape as runHost, for the same reason (see runHost's
+// own doc comment): maybeGC needs it to build its protect set.
+func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, stdout, stderr io.Writer) (int, string) {
 	root := deps.Store.Root
 
 	meta := artifact.Meta{
@@ -740,7 +775,7 @@ func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, st
 	savedMeta, err := deps.Store.Save(meta, key, nil)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: save artifact after transport error: %v\n", err)
-		return exitTransport
+		return exitTransport, ""
 	}
 
 	artPath := filepath.Join(deps.Store.Root, "art", savedMeta.ID)
@@ -755,5 +790,5 @@ func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, st
 		fmt.Fprintf(stderr, "run: append audit: %v\n", auditErr)
 	}
 
-	return exitTransport
+	return exitTransport, savedMeta.ID
 }
