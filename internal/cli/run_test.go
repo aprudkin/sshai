@@ -288,23 +288,6 @@ func TestRunRejectsCtxWithSlash(t *testing.T) {
 	}
 }
 
-// TestRunRejectsMultipleHosts covers the brief's "reject >1 host" rule —
-// fan-out is Task 12, not this one.
-func TestRunRejectsMultipleHosts(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("SSHAI_ROOT", root)
-
-	f := &fakeTr{rc: 0}
-	var out, errB bytes.Buffer
-	rc := runWith(f, []string{"web01", "web02", "--", "echo", "hi"}, &out, &errB)
-	if rc != exitUsage {
-		t.Fatalf("rc=%d, want %d; stderr=%s", rc, exitUsage, errB.String())
-	}
-	if errB.Len() == 0 {
-		t.Fatal("expected a usage error on stderr")
-	}
-}
-
 // TestRunPolicyDenialWritesAuditAndStatusLine covers the brief's policy
 // path: a readonly host denies a non-allowlisted command before ever
 // reaching facts/exec (f.lastCmd stays empty — Exec is never called), and
@@ -384,6 +367,231 @@ func TestRunLinuxPartialParseMergesWithPreviousState(t *testing.T) {
 	}
 	if got.Env["A"] != "1" {
 		t.Fatalf("Env clobbered by partial parse: got %v, want A=1", got.Env)
+	}
+}
+
+// multiHostTr fakes a transport whose Exec outcome differs per host,
+// exercising fan-out's per-host result collection (Task 12). rcs maps
+// host -> the ExitCode a normal run should observe; transportErr maps
+// host -> the Reason a *transport.TransportError should carry instead
+// (simulating an unreachable host, e.g. real ssh's exit 255). Both maps
+// are read-only after construction and never written to from Exec, so
+// concurrent calls from fan-out's goroutines need no locking — Go maps
+// are safe for concurrent reads with no concurrent writes.
+// body overrides the first line of a host's fake command output (default
+// "hello") — used to prove classification can't be fooled by remote
+// output that happens to look like a status line.
+type multiHostTr struct {
+	rcs          map[string]int
+	transportErr map[string]string
+	body         map[string]string
+}
+
+func (f *multiHostTr) Exec(host, cmd string, stdin []byte, _ time.Duration) (transport.Result, error) {
+	if reason, ok := f.transportErr[host]; ok {
+		return transport.Result{}, &transport.TransportError{Reason: reason}
+	}
+	sent := sentinelFromStdin(stdin)
+	env := base64.StdEncoding.EncodeToString([]byte("PATH=/usr/bin\x00"))
+	b := f.body[host]
+	if b == "" {
+		b = "hello"
+	}
+	out := []byte(b + "\n\n" + sent + "\n/tmp\n" + env + "\n")
+	return transport.Result{ExitCode: f.rcs[host], Output: out}, nil
+}
+
+func (f *multiHostTr) Put(host, l, r string) error { return nil }
+
+// seedLinuxFacts pre-seeds OS=linux facts for each host so runHost never
+// calls session.Probe — keeping multiHostTr's Exec to exactly one call
+// per host (the actual command), matching the pattern TestRunLinuxHappyPath
+// already establishes for the single-host fakes above.
+func seedLinuxFacts(t *testing.T, root string, hosts ...string) {
+	t.Helper()
+	for _, h := range hosts {
+		if err := session.SaveFacts(root, h, session.Facts{OS: "linux"}); err != nil {
+			t.Fatalf("SaveFacts(%s): %v", h, err)
+		}
+	}
+}
+
+// hostIndex returns the byte offset of "host=<h>" in s, or -1, used to
+// assert argv-order printing.
+func hostIndex(s, h string) int {
+	return strings.Index(s, "host="+h)
+}
+
+// TestRunFanoutTwoHostsAggregateAndArgvOrder covers the brief's Step 1
+// first case: two hosts, no transport error. Both passports must appear
+// in argv order (h1 before h2), separated by a blank line, followed by
+// one aggregate line, and the process exit must be the max remote exit
+// across hosts (h1=0, h2=5 -> 5) — no policy denial or transport error
+// is present to outrank it.
+func TestRunFanoutTwoHostsAggregateAndArgvOrder(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	seedLinuxFacts(t, root, "h1", "h2")
+
+	f := &multiHostTr{rcs: map[string]int{"h1": 0, "h2": 5}}
+	var out, errB bytes.Buffer
+	rc := runWith(f, []string{"h1", "h2", "--", "true"}, &out, &errB)
+	if rc != 5 {
+		t.Fatalf("rc=%d, want 5 (max remote exit); stdout=%s stderr=%s", rc, out.String(), errB.String())
+	}
+
+	s := out.String()
+	i1, i2 := hostIndex(s, "h1"), hostIndex(s, "h2")
+	if i1 < 0 || i2 < 0 || i1 > i2 {
+		t.Fatalf("passports not present in argv order (h1 then h2): %q", s)
+	}
+	if !strings.Contains(s, "host=h1 exit=0") {
+		t.Fatalf("missing h1 passport with exit=0: %q", s)
+	}
+	if !strings.Contains(s, "host=h2 exit=5") {
+		t.Fatalf("missing h2 passport with exit=5: %q", s)
+	}
+	// Anchor on the actual junction (h1's body "hello" immediately
+	// followed by the blank-line separator), not a bare "\n\n" — that
+	// would pass for unrelated reasons, e.g. any body containing a blank
+	// line of its own.
+	if !strings.Contains(s, "hello\n\n") {
+		t.Fatalf("passports must be separated by a blank line: %q", s)
+	}
+	if !strings.Contains(s, "hosts=2 ok=1 failed=1 transport-errors=0") {
+		t.Fatalf("missing aggregate line: %q", s)
+	}
+}
+
+// TestRunFanoutIgnoresStatusLookingTextInRemoteOutput is the regression
+// test for a classification bug found in review: runFanout must inspect
+// only a host's passport *first line* (its own status line), never the
+// whole buffer — otherwise a host whose command output happens to
+// contain "transport-error=" or " policy-denied" (e.g. grepping sshai's
+// own audit.jsonl, or catting another host's earlier passport) would be
+// misclassified from its own successful remote output.
+func TestRunFanoutIgnoresStatusLookingTextInRemoteOutput(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	seedLinuxFacts(t, root, "h1", "h2")
+
+	f := &multiHostTr{
+		rcs:  map[string]int{"h1": 0, "h2": 0},
+		body: map[string]string{"h2": "line1 transport-error=ssh h1 policy-denied"},
+	}
+	var out, errB bytes.Buffer
+	rc := runWith(f, []string{"h1", "h2", "--", "true"}, &out, &errB)
+	if rc != 0 {
+		t.Fatalf("rc=%d, want 0; stdout=%s stderr=%s", rc, out.String(), errB.String())
+	}
+	if !strings.Contains(out.String(), "hosts=2 ok=2 failed=0 transport-errors=0") {
+		t.Fatalf("aggregate line misread status-looking remote output: %q", out.String())
+	}
+}
+
+// TestRunFanoutTransportErrorForcesExit98 covers the brief's Step 1
+// second case: one host fails at the transport level (the fan-out
+// equivalent of real ssh's exit 255) rather than returning a remote
+// exit code. That must count toward "transport-errors" in the
+// aggregate, and force the overall process exit to 98 regardless of any
+// other host's outcome.
+func TestRunFanoutTransportErrorForcesExit98(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	seedLinuxFacts(t, root, "h1", "h2")
+
+	f := &multiHostTr{
+		rcs:          map[string]int{"h1": 0},
+		transportErr: map[string]string{"h2": "ssh"},
+	}
+	var out, errB bytes.Buffer
+	rc := runWith(f, []string{"h1", "h2", "--", "true"}, &out, &errB)
+	if rc != exitTransport {
+		t.Fatalf("rc=%d, want %d; stdout=%s stderr=%s", rc, exitTransport, out.String(), errB.String())
+	}
+
+	s := out.String()
+	if !strings.Contains(s, "host=h1 exit=0") {
+		t.Fatalf("missing h1 passport with exit=0: %q", s)
+	}
+	if !strings.Contains(s, "host=h2 transport-error=ssh") {
+		t.Fatalf("missing h2 transport-error passport: %q", s)
+	}
+	if !strings.Contains(s, "hosts=2 ok=1 failed=0 transport-errors=1") {
+		t.Fatalf("missing aggregate line: %q", s)
+	}
+}
+
+// TestRunFanoutPolicyDenialOutranksRemoteExit covers the brief's
+// worst-exit precedence: a policy denial (97) outranks a remote exit
+// even when that remote exit is numerically larger (h3=200 here) — the
+// rule is a strict priority tier, not a numeric max across all hosts.
+// Only h2 is configured readonly, so the shared command (not on the
+// allowlist) is denied for h2 alone while h1 and h3 actually run it.
+func TestRunFanoutPolicyDenialOutranksRemoteExit(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	seedLinuxFacts(t, root, "h1", "h2", "h3")
+	toml := "[hosts.h2]\nreadonly = true\n"
+	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte(toml), 0o600); err != nil {
+		t.Fatalf("write config.toml: %v", err)
+	}
+
+	f := &multiHostTr{rcs: map[string]int{"h1": 0, "h3": 200}}
+	var out, errB bytes.Buffer
+	rc := runWith(f, []string{"h1", "h2", "h3", "--", "rm", "-rf", "/tmp/x"}, &out, &errB)
+	if rc != exitPolicy {
+		t.Fatalf("rc=%d, want %d (policy denial outranks h3's remote exit 200); stdout=%s stderr=%s", rc, exitPolicy, out.String(), errB.String())
+	}
+
+	s := out.String()
+	if !strings.Contains(s, "h2 policy-denied") {
+		t.Fatalf("missing h2 policy-denied status line: %q", s)
+	}
+	if !strings.Contains(s, "hosts=3 ok=1 failed=2 transport-errors=0") {
+		t.Fatalf("missing aggregate line: %q", s)
+	}
+}
+
+// TestRunFanoutTransportErrorOutranksPolicyDenial covers the top of the
+// precedence tier: a transport error (98) wins even over a policy
+// denial (97) elsewhere in the same fan-out.
+func TestRunFanoutTransportErrorOutranksPolicyDenial(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	seedLinuxFacts(t, root, "h1", "h2")
+	toml := "[hosts.h2]\nreadonly = true\n"
+	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte(toml), 0o600); err != nil {
+		t.Fatalf("write config.toml: %v", err)
+	}
+
+	f := &multiHostTr{transportErr: map[string]string{"h1": "ssh"}}
+	var out, errB bytes.Buffer
+	rc := runWith(f, []string{"h1", "h2", "--", "rm", "-rf", "/tmp/x"}, &out, &errB)
+	if rc != exitTransport {
+		t.Fatalf("rc=%d, want %d; stdout=%s stderr=%s", rc, exitTransport, out.String(), errB.String())
+	}
+	if !strings.Contains(out.String(), "hosts=2 ok=0 failed=1 transport-errors=1") {
+		t.Fatalf("missing aggregate line: %q", out.String())
+	}
+}
+
+// TestFanoutBudget covers Step 3's per-host budget rule: --budget
+// divided evenly across hosts by integer division, floored at 100
+// tokens per host.
+func TestFanoutBudget(t *testing.T) {
+	cases := []struct {
+		total, n, want int
+	}{
+		{300, 3, 100},
+		{1000, 3, 333},
+		{50, 1, 100},
+		{0, 3, 100},
+	}
+	for _, c := range cases {
+		if got := fanoutBudget(c.total, c.n); got != c.want {
+			t.Errorf("fanoutBudget(%d, %d) = %d, want %d", c.total, c.n, got, c.want)
+		}
 	}
 }
 

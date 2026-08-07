@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aprudkin/sshai/internal/artifact"
@@ -172,11 +173,6 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 		fmt.Fprintln(stderr, "run: at least one host is required")
 		return exitUsage
 	}
-	if len(hosts) > 1 {
-		fmt.Fprintf(stderr, "run: %d hosts given — fan-out is not supported yet (Task 12); pass exactly one host\n", len(hosts))
-		return exitUsage
-	}
-	host := hosts[0]
 
 	store, err := artifact.OpenStore(cfg.Root)
 	if err != nil {
@@ -201,18 +197,154 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 		tr = transport.NewOpenSSH(controlDir, cfg.ControlPersist, cfg.StreamCapBytes)
 	}
 
-	opts := Opts{
-		Host:     host,
-		Ctx:      ctx,
-		Command:  command,
-		FromFile: fromFile,
-		Readonly: cfg.Hosts[host].Readonly,
-		Budget:   budgetTokens,
-		Timeout:  timeout,
-	}
 	deps := Deps{Tr: tr, Store: store}
 
-	return runHost(deps, opts, stdout, stderr)
+	// Single-host path: unchanged from Task 11, byte-for-byte — no
+	// aggregate line, no goroutine, no budget division. Fan-out (Task 12)
+	// only engages once there is more than one host to reconcile.
+	if len(hosts) == 1 {
+		host := hosts[0]
+		opts := Opts{
+			Host:     host,
+			Ctx:      ctx,
+			Command:  command,
+			FromFile: fromFile,
+			Readonly: cfg.Hosts[host].Readonly,
+			Budget:   budgetTokens,
+			Timeout:  timeout,
+		}
+		return runHost(deps, opts, stdout, stderr)
+	}
+
+	perHostBudget := fanoutBudget(budgetTokens, len(hosts))
+	hostOpts := make([]Opts, len(hosts))
+	for i, host := range hosts {
+		hostOpts[i] = Opts{
+			Host:     host,
+			Ctx:      ctx,
+			Command:  command,
+			FromFile: fromFile,
+			Readonly: cfg.Hosts[host].Readonly,
+			Budget:   perHostBudget,
+			Timeout:  timeout,
+		}
+	}
+	return runFanout(deps, hostOpts, stdout, stderr)
+}
+
+// fanoutBudget divides total evenly across n hosts (integer division),
+// flooring at 100 tokens per host — the brief's Step 3 rule, so a large
+// host count never squeezes a single passport down to nothing useful.
+func fanoutBudget(total, n int) int {
+	per := total / n
+	if per < 100 {
+		per = 100
+	}
+	return per
+}
+
+// runFanout runs hostOpts (one Opts per host, already in argv order)
+// concurrently against the shared deps and returns the worst-outcome
+// process exit.
+//
+// Concurrency shape, per the task brief's verified facts:
+//   - deps.Tr (transport.OpenSSH in production) is documented safe for
+//     concurrent Exec/Put on one instance — no shared mutable state
+//     between calls (see transport/openssh.go's capWriter doc comment).
+//   - deps.Store is one *artifact.Store shared across all goroutines, not
+//     one per goroutine: its SQLite connection runs in WAL mode with a
+//     busy_timeout (Task 4), and Save's own artifact file write derives
+//     its path from the row's autoincrement id, so concurrent Save calls
+//     never collide on a filename.
+//   - runlog.AppendAudit opens O_APPEND and issues exactly one Write of
+//     the whole line per call — the "single-write" shape its own doc
+//     comment already calls out as safe for concurrent processes to
+//     interleave at the line level — so each goroutine calling it via its
+//     own runHost, unmodified, needs no extra serialization on this side.
+//
+// What is NOT shared: each goroutine gets its own bytes.Buffer for both
+// stdout and stderr, since runWith's real stdout/stderr can themselves be
+// a *bytes.Buffer in tests (not safe for concurrent writes) and, even
+// against a real file, concurrent unsynchronized writers would defeat
+// the "results collected by index — deterministic print order = argv
+// order" requirement. The controller writes every buffer to the real
+// stdout/stderr only after WaitGroup.Wait, strictly in argv order.
+func runFanout(deps Deps, hostOpts []Opts, stdout, stderr io.Writer) int {
+	n := len(hostOpts)
+	outs := make([]bytes.Buffer, n)
+	errs := make([]bytes.Buffer, n)
+	rcs := make([]int, n)
+
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i, opts := range hostOpts {
+		go func(i int, opts Opts) {
+			defer wg.Done()
+			rcs[i] = runHost(deps, opts, &outs[i], &errs[i])
+		}(i, opts)
+	}
+	wg.Wait()
+
+	var okCount, failedCount, transportErrCount int
+	sawTransportErr := false
+	sawPolicyDenied := false
+	maxRemoteExit := 0
+
+	for i := range hostOpts {
+		if i > 0 {
+			fmt.Fprintln(stdout)
+		}
+		stdout.Write(outs[i].Bytes())
+		stderr.Write(errs[i].Bytes())
+
+		// The passport status line is the source of truth for
+		// classification, not rcs[i] alone: a genuine remote exit of 97
+		// or 98 is numerically indistinguishable from the reserved
+		// policy/transport codes without it (see the design doc's "own
+		// process exit code ... disambiguated by the status line").
+		//
+		// Only the first line is inspected — RenderPassport always
+		// writes the status line first (StatusLine, then "\nfile=..."),
+		// and the policy path writes exactly "<host> policy-denied\n" —
+		// so line 1 is the status line on every path, always. Any line
+		// after it is the command's own output, which a host is free to
+		// fill with arbitrary text (e.g. `grep transport-error=
+		// audit.jsonl`); scanning the whole buffer would let that text
+		// be mistaken for this host's own status (regression test:
+		// TestRunFanoutIgnoresStatusLookingTextInRemoteOutput).
+		first := outs[i].String()
+		if j := strings.IndexByte(first, '\n'); j >= 0 {
+			first = first[:j]
+		}
+		switch {
+		case strings.Contains(first, " transport-error="):
+			transportErrCount++
+			sawTransportErr = true
+		case first == hostOpts[i].Host+" policy-denied":
+			failedCount++
+			sawPolicyDenied = true
+		default:
+			if rcs[i] == 0 {
+				okCount++
+			} else {
+				failedCount++
+			}
+			if rcs[i] > maxRemoteExit {
+				maxRemoteExit = rcs[i]
+			}
+		}
+	}
+
+	fmt.Fprintf(stdout, "hosts=%d ok=%d failed=%d transport-errors=%d\n", n, okCount, failedCount, transportErrCount)
+
+	switch {
+	case sawTransportErr:
+		return exitTransport
+	case sawPolicyDenied:
+		return exitPolicy
+	default:
+		return maxRemoteExit
+	}
 }
 
 // loadBody reads the command body from path — "-" means stdin, matching
