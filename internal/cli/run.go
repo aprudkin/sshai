@@ -628,6 +628,19 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
 
 	var passport string
 	switch {
+	case opts.Delta && havePrev && savedMeta.Binary:
+		// Binary output: RenderPassport's own m.Binary suppression
+		// (passport.go) is exactly the right shape here too — status
+		// line + file=, no body — so this routes through it directly
+		// rather than attempting delta.Render at all. A text unified
+		// diff of raw binary bytes would be garbled noise, and this is
+		// a distinct branch (not folded into the render-error fallback
+		// below) precisely so it can never fall through to the
+		// no-previous-run case and print the false "no previous run"
+		// line when a previous run in fact exists. "Previous exists"
+		// is still communicated: savedMeta.DeltaBase was set before
+		// Save, so StatusLine still renders delta=aN here.
+		passport = artifact.RenderPassport(savedMeta, artPath, out, opts.Budget)
 	case opts.Delta && havePrev:
 		prevPath := filepath.Join(deps.Store.Root, "art", prevMeta.ID)
 		deltaBody, derr := delta.Render(prevPath, out, prevMeta.ID, prevMeta.Ts, opts.Budget)

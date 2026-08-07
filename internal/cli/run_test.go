@@ -196,6 +196,7 @@ type fakeTr struct {
 	lastCmd   string
 	lastStdin []byte
 	rc        int
+	body      string // overrides the default "hello" body — e.g. a NUL-embedded binary body
 }
 
 // sentinelFromStdin extracts the sentinel BashWrap embeds between single
@@ -218,7 +219,11 @@ func (f *fakeTr) Exec(host, cmd string, stdin []byte, _ time.Duration) (transpor
 	f.lastCmd, f.lastStdin = cmd, stdin
 	sent := sentinelFromStdin(stdin)
 	env := base64.StdEncoding.EncodeToString([]byte("PATH=/usr/bin\x00"))
-	out := []byte("hello\n\n" + sent + "\n/tmp\n" + env + "\n")
+	b := f.body
+	if b == "" {
+		b = "hello"
+	}
+	out := []byte(b + "\n\n" + sent + "\n/tmp\n" + env + "\n")
 	return transport.Result{ExitCode: f.rc, Output: out}, nil
 }
 
@@ -742,8 +747,67 @@ func TestRunDeltaRenderErrorFallsBackToNormalPassport(t *testing.T) {
 	if !strings.Contains(p2, "file=") {
 		t.Fatalf("second run stdout missing file= line: %q", p2)
 	}
+	if !strings.Contains(p2, "delta=a1") {
+		t.Fatalf("second run status line must still carry delta=a1 (DeltaBase was set before Save, independent of the render failure): %q", p2)
+	}
 	if errB2.Len() == 0 {
 		t.Fatal("expected the render failure to be reported on stderr")
+	}
+}
+
+// TestRunDeltaBinaryArtifactSuppressesDiffBody is the task-review
+// regression test: a binary artifact (NUL detected within the first 8KiB
+// of output — the same rule artifact.RenderPassport already uses to
+// suppress its own tail/inline body) must not get a text unified diff of
+// raw binary bytes even when a previous run for the key exists. Before
+// this fix, the opts.Delta && havePrev branch called delta.Render
+// unconditionally, so a binary artifact would get "binary=1" on its status
+// line immediately followed by a garbled diff of raw bytes — suppression
+// depended on whether a previous run happened to exist, an accident of
+// history rather than a deliberate rule. Per the required fix shape, the
+// binary case routes through RenderPassport directly instead: no diff
+// body, but the status line still carries delta=aN via Meta.DeltaBase (set
+// before Save regardless of the branch taken), so "a previous run exists"
+// is still communicated.
+func TestRunDeltaBinaryArtifactSuppressesDiffBody(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	if err := session.SaveFacts(root, "web01", session.Facts{OS: "linux"}); err != nil {
+		t.Fatalf("SaveFacts: %v", err)
+	}
+
+	f := &fakeTr{rc: 0, body: "bin\x00ary-old"}
+	var out1, errB1 bytes.Buffer
+	rc1 := runWith(f, []string{"--ctx", "t1", "--delta", "web01", "--", "cat", "file.bin"}, &out1, &errB1)
+	if rc1 != 0 {
+		t.Fatalf("first run rc=%d stderr=%s", rc1, errB1.String())
+	}
+	if !strings.Contains(out1.String(), "binary=1") {
+		t.Fatalf("first run must be classified binary: %q", out1.String())
+	}
+
+	// Different binary content on the second run — a diff of differing
+	// binary bytes is what actually produces garbled unified-diff noise
+	// (identical content would just take the "no change" branch, which is
+	// short text and would mask the bug this test targets).
+	f.body = "bin\x00ary-new"
+	var out2, errB2 bytes.Buffer
+	rc2 := runWith(f, []string{"--ctx", "t1", "--delta", "web01", "--", "cat", "file.bin"}, &out2, &errB2)
+	if rc2 != 0 {
+		t.Fatalf("second run rc=%d stderr=%s", rc2, errB2.String())
+	}
+	p2 := out2.String()
+	if !strings.Contains(p2, "binary=1") {
+		t.Fatalf("second run must still be classified binary: %q", p2)
+	}
+	if !strings.Contains(p2, "delta=a1") {
+		t.Fatalf("second run status line must carry delta=a1 even without a diff body: %q", p2)
+	}
+	if strings.Contains(p2, "-bin") || strings.Contains(p2, "+bin") || strings.Contains(p2, "@@") {
+		t.Fatalf("binary artifact must not get a text diff body (unified-diff markers found): %q", p2)
+	}
+	if strings.Contains(p2, "\x00") {
+		t.Fatalf("binary artifact passport must not contain raw NUL bytes: %q", p2)
 	}
 }
 
