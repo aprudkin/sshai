@@ -598,14 +598,20 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
 	// same Save call as everything else instead of a second write.
 	// Nothing here skips Save in non-delta or no-previous-run cases: the
 	// full artifact is always stored first, so history is never lost to
-	// delta mode (the brief's invariant).
+	// delta mode (the brief's invariant) — including when the lookup
+	// itself fails. The remote command has already run by this point, so
+	// a transient LastByKey error (e.g. a busy SQLite under fan-out) must
+	// degrade to "no previous run" rather than abort: the alternative
+	// would throw away a completed run's output over a lookup failure,
+	// which is exactly the loss the invariant forbids.
 	var prevMeta artifact.Meta
 	var havePrev bool
 	if opts.Delta {
-		prevMeta, havePrev, err = deps.Store.LastByKey(key)
-		if err != nil {
-			fmt.Fprintf(stderr, "run: delta lookup for %s: %v\n", opts.Host, err)
-			return exitUsage
+		var lookupErr error
+		prevMeta, havePrev, lookupErr = deps.Store.LastByKey(key)
+		if lookupErr != nil {
+			fmt.Fprintf(stderr, "run: delta lookup for %s: %v\n", opts.Host, lookupErr)
+			havePrev = false
 		}
 		if havePrev {
 			meta.DeltaBase = prevMeta.ID
@@ -626,10 +632,20 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
 		prevPath := filepath.Join(deps.Store.Root, "art", prevMeta.ID)
 		deltaBody, derr := delta.Render(prevPath, out, prevMeta.ID, prevMeta.Ts, opts.Budget)
 		if derr != nil {
+			// The artifact is already saved (savedMeta.DeltaBase is
+			// already persisted, so the status line keeps its
+			// delta=aN) — only the delta *rendering* failed (e.g. the
+			// previous artifact file is gone despite pruned=0, a gc
+			// race or manual removal under art/). Per the repo's own
+			// pattern for post-exec failures (SaveState, SaveBaseline,
+			// AppendAudit all print-and-continue), fall back to the
+			// normal passport instead of discarding an already-saved,
+			// already-completed run.
 			fmt.Fprintf(stderr, "run: render delta for %s: %v\n", opts.Host, derr)
-			return exitUsage
+			passport = artifact.RenderPassport(savedMeta, artPath, out, opts.Budget)
+		} else {
+			passport = artifact.StatusLine(savedMeta) + "\nfile=" + artPath + "\n" + deltaBody
 		}
-		passport = artifact.StatusLine(savedMeta) + "\nfile=" + artPath + "\n" + deltaBody
 	case opts.Delta:
 		passport = artifact.RenderPassport(savedMeta, artPath, out, opts.Budget) + "\ndelta: no previous run for this key"
 	default:

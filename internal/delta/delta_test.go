@@ -88,7 +88,10 @@ func TestRenderChangedBudgetTrims(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Render: %v", err)
 	}
-	if len(got) >= len(oldData)+len(newData) {
-		t.Fatalf("Render output not trimmed: got %d bytes", len(got))
+	// Assert the clip marker itself, not just "shorter than the inputs" —
+	// a trimmer that clipped to (say) 5000 bytes instead of ~80 would
+	// still pass a bare length check against these ~9000-byte inputs.
+	if !strings.Contains(got, "clipped at budget") {
+		t.Fatalf("Render output missing clip marker: got %d bytes: %q", len(got), got)
 	}
 }

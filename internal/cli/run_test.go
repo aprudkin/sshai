@@ -700,6 +700,53 @@ func TestRunHostDeltaKeysDoNotCollideAcrossHosts(t *testing.T) {
 	}
 }
 
+// TestRunDeltaRenderErrorFallsBackToNormalPassport is the advisor-review
+// regression test for the render-error-path fix: LastByKey filters on
+// pruned=0 only, so a previous run's artifact file can be gone (gc race,
+// manual removal) while its row still looks eligible as a delta base —
+// delta.Render then fails to read prevPath. The already-completed remote
+// run (and its already-Saved artifact) must not be thrown away over that:
+// the run must still succeed (rc==0), print a normal passport for the new
+// artifact (host line + file=), and report the render failure on stderr
+// rather than silently dropping to a bare exit code with no stdout at all.
+func TestRunDeltaRenderErrorFallsBackToNormalPassport(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	if err := session.SaveFacts(root, "web01", session.Facts{OS: "linux"}); err != nil {
+		t.Fatalf("SaveFacts: %v", err)
+	}
+
+	f := &fakeTr{rc: 0}
+	var out1, errB1 bytes.Buffer
+	rc1 := runWith(f, []string{"--ctx", "t1", "--delta", "web01", "--", "echo", "hello"}, &out1, &errB1)
+	if rc1 != 0 {
+		t.Fatalf("first run rc=%d stderr=%s", rc1, errB1.String())
+	}
+
+	// Simulate the previous artifact's file being gone despite its row
+	// still carrying pruned=0 (a gc race or manual removal), which is
+	// exactly what LastByKey does not filter out.
+	if err := os.Remove(filepath.Join(root, "art", "a1")); err != nil {
+		t.Fatalf("remove previous artifact: %v", err)
+	}
+
+	var out2, errB2 bytes.Buffer
+	rc2 := runWith(f, []string{"--ctx", "t1", "--delta", "web01", "--", "echo", "hello"}, &out2, &errB2)
+	if rc2 != 0 {
+		t.Fatalf("second run rc=%d, want 0 (render failure must not abort an already-saved run); stdout=%q stderr=%q", rc2, out2.String(), errB2.String())
+	}
+	p2 := out2.String()
+	if !strings.Contains(p2, "a2 host=web01") {
+		t.Fatalf("second run stdout missing the normal passport for the new artifact: %q", p2)
+	}
+	if !strings.Contains(p2, "file=") {
+		t.Fatalf("second run stdout missing file= line: %q", p2)
+	}
+	if errB2.Len() == 0 {
+		t.Fatal("expected the render failure to be reported on stderr")
+	}
+}
+
 // TestRunBodyFileMetaCommandIncludesHashAndPreview covers Finding 1's
 // fix: the design doc's run-log row description is "command (or body
 // hash + first 80 chars)", so a --body-file run's stored Meta.Command
