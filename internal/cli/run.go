@@ -244,25 +244,40 @@ func splitAtDashDash(args []string) (before, after []string, found bool) {
 	return nil, nil, false
 }
 
-// recordCommand returns the string used to represent opts.Command in the
-// artifact store — artifact.Meta.Command (the long-lived SQLite "command"
-// column) and the delta key derived from it — as opposed to execution or
-// the audit log: for an inline "-- words" command it is the command
-// itself, but for a --body-file/stdin body, which can be arbitrarily
-// large, it is "body:"+sha256hex(body)[:16], exactly the convention
-// delta.Key's own doc comment specifies for its callers. This keeps the
-// DB row and its delta key self-consistent and keeps a large script body
-// out of the database. It is deliberately NOT used for
-// runlog.AuditEntry.CommandPreview: policy.CheckReadonly's doc comment
-// expects a denial's log line to carry the (redacted) command itself, not
-// an opaque hash, so audit entries call runlog.Preview(opts.Command)
-// directly — Preview's own 80-rune clip already bounds a large body's
-// footprint in the log.
-func recordCommand(opts Opts) string {
+// deltaKeyCommand returns the string passed as delta.Key's third argument
+// (and, for a --body-file/stdin run, doubles as the hash prefix of
+// metaCommand below): for an inline "-- words" command it is the command
+// itself, but for a body — which can be arbitrarily large — it is
+// "body:"+sha256hex(body)[:16], exactly the convention delta.Key's own doc
+// comment specifies for its callers, and matching the design doc's Deltas
+// section ("body-file runs key on the body's sha256").
+func deltaKeyCommand(opts Opts) string {
 	if !opts.FromFile {
 		return opts.Command
 	}
 	return "body:" + sha256Hex(opts.Command)[:16]
+}
+
+// metaCommand returns the string stored in artifact.Meta.Command — the
+// long-lived SQLite "command" column. It matches the design doc's run-log
+// row description verbatim: "command (or body hash + first 80 chars)".
+// For an inline "-- words" command that's just the command itself
+// (deltaKeyCommand's raw-command branch already covers it); for a
+// --body-file/stdin body it is deltaKeyCommand's hash form followed by a
+// redacted 80-rune preview of the body, so a --body-file row is not
+// opaque in the database — the hash alone would tell a reader nothing
+// about what the run actually did.
+//
+// This is deliberately NOT used for runlog.AuditEntry.CommandPreview:
+// policy.CheckReadonly's doc comment expects a denial's log line to carry
+// the (redacted) command itself, not a hash-prefixed one, so audit
+// entries call runlog.Preview(opts.Command) directly.
+func metaCommand(opts Opts) string {
+	key := deltaKeyCommand(opts)
+	if !opts.FromFile {
+		return key
+	}
+	return key + " " + runlog.Preview(opts.Command)
 }
 
 func sha256Hex(s string) string {
@@ -436,14 +451,13 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
 	}
 
 	binary := bytes.IndexByte(out[:min(8192, len(out))], 0) >= 0
-	cmdForRecord := recordCommand(opts)
 
 	meta := artifact.Meta{
-		Host: opts.Host, Ctx: opts.Ctx, Command: cmdForRecord,
+		Host: opts.Host, Ctx: opts.Ctx, Command: metaCommand(opts),
 		Exit: remoteExit, DurationMs: durationMs, Truncated: truncated, Binary: binary,
 		Ts: time.Now(),
 	}
-	key := delta.Key(opts.Host, opts.Ctx, cmdForRecord)
+	key := delta.Key(opts.Host, opts.Ctx, deltaKeyCommand(opts))
 	savedMeta, err := deps.Store.Save(meta, key, out)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: save artifact: %v\n", err)
@@ -476,13 +490,12 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) int {
 // and audit entry are still written so the failure itself is traceable.
 func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, stdout, stderr io.Writer) int {
 	root := deps.Store.Root
-	cmdForRecord := recordCommand(opts)
 
 	meta := artifact.Meta{
-		Host: opts.Host, Ctx: opts.Ctx, Command: cmdForRecord,
+		Host: opts.Host, Ctx: opts.Ctx, Command: metaCommand(opts),
 		TransportErr: te.Reason, Ts: time.Now(),
 	}
-	key := delta.Key(opts.Host, opts.Ctx, cmdForRecord)
+	key := delta.Key(opts.Host, opts.Ctx, deltaKeyCommand(opts))
 	savedMeta, err := deps.Store.Save(meta, key, nil)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: save artifact after transport error: %v\n", err)
