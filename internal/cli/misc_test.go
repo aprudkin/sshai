@@ -325,6 +325,83 @@ func TestGcStorePrunesOldestFirstUntilUnderSizeCap(t *testing.T) {
 	}
 }
 
+// TestGcStoreSizeCapNeverPrunesNewestLiveRow is the advisor-review
+// regression test for gcStore's "floor": a size cap smaller than even the
+// single newest row's own bytes must not prune that row — without the
+// floor, both m1 and m2 would go, leaving zero artifacts and defeating
+// maybeGC's whole purpose (protecting the artifact a `run` invocation
+// just wrote, whose id its own passport already printed, from being
+// deleted by that same invocation's opportunistic gc call).
+func TestGcStoreSizeCapNeverPrunesNewestLiveRow(t *testing.T) {
+	root := t.TempDir()
+	st, err := artifact.OpenStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	now := time.Now()
+	m1, err := st.Save(artifact.Meta{Host: "h", Ctx: "default", Command: "c1", Ts: now.Add(-2 * time.Hour)}, "k1", bytes.Repeat([]byte("a"), 100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m2, err := st.Save(artifact.Meta{Host: "h", Ctx: "default", Command: "c2", Ts: now.Add(-1 * time.Hour)}, "k2", bytes.Repeat([]byte("b"), 100))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// cap=1: far smaller than even m2 (the newest row) alone.
+	pruned, freed, err := gcStore(st, time.Time{}, 1)
+	if err != nil {
+		t.Fatalf("gcStore: %v", err)
+	}
+	if pruned != 1 {
+		t.Fatalf("pruned=%d, want 1 (only m1 — the floor must protect m2)", pruned)
+	}
+	if freed != 100 {
+		t.Fatalf("freed=%d, want 100", freed)
+	}
+	if _, _, err := st.Get(m1.ID); err == nil || !strings.Contains(err.Error(), "artifact pruned") {
+		t.Fatalf("expected m1 pruned, got err=%v", err)
+	}
+	if _, path, err := st.Get(m2.ID); err != nil || path == "" {
+		t.Fatalf("m2 (newest live row) must survive the size cap regardless of how small it is: path=%q err=%v", path, err)
+	}
+}
+
+// TestGcStoreFloorDoesNotOverrideAgeCutoff covers the floor's own
+// documented limit: an explicit RetentionDays cutoff (pass 1) still wins
+// over the floor — the floor only exempts the newest row from pass 2's
+// size-based pruning, never from pass 1's age-based pruning.
+func TestGcStoreFloorDoesNotOverrideAgeCutoff(t *testing.T) {
+	root := t.TempDir()
+	st, err := artifact.OpenStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	m, err := st.Save(artifact.Meta{Host: "h", Ctx: "default", Command: "c", Ts: time.Now()}, "k", []byte("data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A cutoff after the row's ts prunes it by age even though it is
+	// also the (only, hence newest) live row — the floor does not apply
+	// to pass 1.
+	cutoff := time.Now().Add(time.Hour)
+	pruned, _, err := gcStore(st, cutoff, 0)
+	if err != nil {
+		t.Fatalf("gcStore: %v", err)
+	}
+	if pruned != 1 {
+		t.Fatalf("pruned=%d, want 1 (age cutoff must still prune the sole/newest row)", pruned)
+	}
+	if _, _, err := st.Get(m.ID); err == nil || !strings.Contains(err.Error(), "artifact pruned") {
+		t.Fatalf("expected %s pruned by age despite being the newest row, got err=%v", m.ID, err)
+	}
+}
+
 func TestGcStoreRemovesOldOrphanedTmpButKeepsFreshOnes(t *testing.T) {
 	root := t.TempDir()
 	st, err := artifact.OpenStore(root)

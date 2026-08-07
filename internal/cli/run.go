@@ -249,6 +249,14 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 // already been written to stdout and the exit code already decided, so a
 // gc failure here must never change either — only a stderr note, never
 // the return value.
+//
+// This call always runs immediately after this invocation's own Save, so
+// the row(s) it just wrote are always the newest live rows in the store
+// at this point. gcStore's own "floor" (see its doc comment) is what
+// keeps this call from pruning them straight back out — without it, a
+// misconfigured RetentionMaxBytes smaller than a single run's own output
+// could delete the very artifact whose id this run's passport just
+// printed ("file=...") before a caller ever gets to read it back.
 func maybeGC(store *artifact.Store, cfg config.Config, stderr io.Writer) {
 	if cfg.RetentionMaxBytes <= 0 {
 		return

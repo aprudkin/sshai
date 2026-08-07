@@ -293,12 +293,15 @@ func retentionCutoff(retentionDays int, now time.Time) time.Time {
 // zero cutoff disables age-based pruning entirely — Search's own "no
 // lower bound" convention), OR — evaluated afterward, against whatever
 // remains — whose total size still exceeds maxBytes (maxBytes <= 0
-// disables the size cap), removed oldest-first until under. Rows are
-// never deleted, only their artifact file is removed and pruned set to 1,
-// keeping the row for audit history — the same contract Store.Get's
-// ErrPruned already documents (see store.go's Get). It also removes
-// orphaned Save .tmp files older than tmpOrphanAge (see that constant's
-// doc comment), counting their freed bytes into the same total.
+// disables the size cap), removed oldest-first until under, but never the
+// single newest still-live row (see the "floor" comment below — this is
+// what protects the artifact `run`'s own opportunistic maybeGC call just
+// wrote, immediately before calling this). Rows are never deleted, only
+// their artifact file is removed and pruned set to 1, keeping the row for
+// audit history — the same contract Store.Get's ErrPruned already
+// documents (see store.go's Get). It also removes orphaned Save .tmp
+// files older than tmpOrphanAge (see that constant's doc comment),
+// counting their freed bytes into the same total.
 func gcStore(store *artifact.Store, cutoff time.Time, maxBytes int64) (pruned int, freed int64, err error) {
 	// Ordered by ts (not id): both pruning passes below are age-based —
 	// pass 1 directly, pass 2 ("oldest first") too — so this must be the
@@ -306,7 +309,11 @@ func gcStore(store *artifact.Store, cutoff time.Time, maxBytes int64) (pruned in
 	// insertion order. The two normally coincide (Save always stamps
 	// Ts=time.Now()), but nothing guarantees it — a manually-adjusted or
 	// backdated row must still be treated as old by size-based pruning
-	// too. id is the tiebreaker for rows sharing a timestamp.
+	// too. id is the tiebreaker for rows sharing a timestamp. Lexical
+	// ordering on the ts column is safe because Store.Save always writes
+	// it as m.Ts.UTC().Format(time.RFC3339) — fixed-width and always
+	// "Z"-suffixed — so lexical order equals chronological order for
+	// every row this codebase's own writer ever produces.
 	rows, err := store.DB.Query(`SELECT art_id, ts, bytes FROM runs WHERE pruned=0 ORDER BY ts ASC, id ASC`)
 	if err != nil {
 		return 0, 0, fmt.Errorf("gc: query runs: %w", err)
@@ -349,11 +356,32 @@ func gcStore(store *artifact.Store, cutoff time.Time, maxBytes int64) (pruned in
 		}
 		remaining += c.bytes
 	}
+	// Floor: the single newest row pass 1 left standing is never a
+	// size-based (pass 2) pruning candidate, no matter how far over
+	// maxBytes the store still sits. Without this, a small enough
+	// RetentionMaxBytes could prune the very artifact `run` just wrote —
+	// maybeGC calls gcStore immediately after Save, so that row is
+	// always the newest live one at this point — breaking the promise
+	// that the artifact id a passport just printed ("file=...") can
+	// still be read back right after. `all` is ts-ASC, so the newest
+	// live row is the last one, scanning backward, not already condemned
+	// by pass 1's age cutoff (an explicit RetentionDays policy still
+	// wins over this floor). Size-based pruning is a best-effort cap,
+	// not a hard guarantee, so leaving the store over maxBytes when only
+	// this one row remains is the accepted trade-off.
+	newestLiveID := ""
+	for i := len(all) - 1; i >= 0; i-- {
+		if !toPrune[all[i].id] {
+			newestLiveID = all[i].id
+			break
+		}
+	}
+
 	// Pass 2: size cap, oldest-first, only over whatever pass 1 left
-	// standing.
+	// standing, floor excepted.
 	if maxBytes > 0 && remaining > maxBytes {
 		for _, c := range all {
-			if toPrune[c.id] || remaining <= maxBytes {
+			if toPrune[c.id] || remaining <= maxBytes || c.id == newestLiveID {
 				continue
 			}
 			toPrune[c.id] = true
@@ -389,12 +417,23 @@ func gcStore(store *artifact.Store, cutoff time.Time, maxBytes int64) (pruned in
 // older than tmpOrphanAge — the crash-orphan case for Store.Save's
 // write-then-rename mechanic (writeArtifactFile in
 // internal/artifact/store.go): a process that dies between the
-// os.WriteFile and the os.Rename leaves a stray "<art_id>.tmp" behind
-// forever, since nothing else ever revisits it. The age guard is what
-// makes this safe to run concurrently with a live Save: a real in-flight
-// tmp file is only ever open for the duration of one os.WriteFile call —
-// well under a second — so it can never be mistaken for an orphan and
-// removed out from under its writer.
+// os.WriteFile and the os.Rename (or whose Rename fails and whose own
+// best-effort os.Remove(tmp) cleanup also fails) leaves a stray
+// "<art_id>.tmp" behind. Save only reaches tx.Commit() after
+// writeArtifactFile returns successfully, so a surviving tmp file's
+// transaction was always rolled back — no committed row ever points at
+// it. (Note: SQLite AUTOINCREMENT does NOT guarantee that art_id will
+// never be reused by a later, successful Save — verified empirically, a
+// rolled-back insert's rowid is reused by the very next insert when
+// nothing else has committed in between. That is not a hazard here
+// either way: os.WriteFile always truncates, so whether gc removes a
+// stale tmp first or a reused Save just overwrites it directly, the
+// file's final content is identical — this cleanup is purely reclaiming
+// disk space, never a correctness precondition for a future write.) The
+// age guard is what makes it safe to run concurrently with a live Save: a
+// real in-flight tmp file is only ever open for the duration of one
+// os.WriteFile call — well under a second — so it can never be mistaken
+// for stale garbage and removed out from under its writer.
 func cleanOrphanedTmp(root string) (freed int64, err error) {
 	artDir := filepath.Join(root, "art")
 	entries, err := os.ReadDir(artDir)
