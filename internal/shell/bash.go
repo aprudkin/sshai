@@ -97,6 +97,30 @@ func BashWrap(body string, st State, restore map[string]string, sentinel string)
 func BashParse(raw []byte, sentinel string) (out []byte, st State, ok bool) {
 	lines := strings.Split(string(raw), "\n")
 
+	out, rest, ok := splitAtSentinel(lines, sentinel)
+	if !ok {
+		return raw, State{}, false
+	}
+
+	if len(rest) > 0 {
+		st.Cwd = rest[0]
+	}
+	if len(rest) > 1 {
+		st.Env = decodeEnvDump(rest[1])
+	}
+	return out, st, true
+}
+
+// splitAtSentinel scans lines from the end for the last line exactly
+// equal to sentinel — an epilogue always runs last, so this finds the
+// real marker even if the wrapped command's own output happens to
+// contain the same text. It returns everything before that line
+// re-joined with "\n" as out, and the lines that follow the sentinel
+// (state lines: cwd first, then the encoded env dump) as rest. ok is
+// false when sentinel never appears in lines, in which case out and rest
+// are both nil — shared by BashParse and PwshParse, whose state lines
+// carry differently-encoded env dumps but split off the same way.
+func splitAtSentinel(lines []string, sentinel string) (out []byte, rest []string, ok bool) {
 	idx := -1
 	for i := len(lines) - 1; i >= 0; i-- {
 		if lines[i] == sentinel {
@@ -105,18 +129,9 @@ func BashParse(raw []byte, sentinel string) (out []byte, st State, ok bool) {
 		}
 	}
 	if idx == -1 {
-		return raw, State{}, false
+		return nil, nil, false
 	}
-
-	out = []byte(strings.Join(lines[:idx], "\n"))
-
-	if idx+1 < len(lines) {
-		st.Cwd = lines[idx+1]
-	}
-	if idx+2 < len(lines) {
-		st.Env = decodeEnvDump(lines[idx+2])
-	}
-	return out, st, true
+	return []byte(strings.Join(lines[:idx], "\n")), lines[idx+1:], true
 }
 
 // decodeEnvDump decodes b64 — the base64 form of a NUL-separated
