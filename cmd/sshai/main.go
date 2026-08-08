@@ -30,15 +30,10 @@ func main() {
 	os.Exit(fn(os.Args[2:]))
 }
 
-func notImplemented(name string) int {
-	fmt.Fprintf(os.Stderr, "%s: not implemented yet\n", name)
-	return exitUsage
-}
-
 func cmdRun(a []string) int   { return cli.Run(a, os.Stdout, os.Stderr) }
 func cmdQ(a []string) int     { return cli.Q(a, os.Stdout, os.Stderr) }
 func cmdDiff(a []string) int  { return cli.Diff(a, os.Stdout, os.Stderr) }
 func cmdLog(a []string) int   { return cli.Log(a, os.Stdout, os.Stderr) }
 func cmdHosts(a []string) int { return cli.Hosts(a, os.Stdout, os.Stderr) }
 func cmdGc(a []string) int    { return cli.Gc(a, os.Stdout, os.Stderr) }
-func cmdHelp(a []string) int  { return notImplemented("help") }
+func cmdHelp(a []string) int  { return cli.Help(a, os.Stdout, os.Stderr) }

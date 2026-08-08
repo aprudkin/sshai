@@ -106,10 +106,15 @@ func PwshScript(body string, st State, restore map[string]string, sentinel strin
 // ps_ssh.py's wrap_invocation.
 func PwshInvocation(form, shell, tail string) string {
 	prefix := ""
+	suffix := ""
 	if form == "pwsh" {
 		prefix = "& "
+		// OpenSSH's PowerShell DefaultShell otherwise collapses a native
+		// child process's non-zero exit to 1. Propagate the exact pwsh.exe
+		// code so callers can distinguish (for example) exit 5 from exit 1.
+		suffix = "; exit $LASTEXITCODE"
 	}
-	return prefix + `"` + shell + `" ` + tail
+	return prefix + `"` + shell + `" ` + tail + suffix
 }
 
 // LooksLikePwshDefault reports whether output carries one of the

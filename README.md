@@ -24,9 +24,28 @@ survives context compaction.
 
 ## Status
 
-Design approved, implementation pending. Architecture, CLI surface, and v1 scope:
+v1 implemented: `run` (single host and fan-out, `--delta`, `--ctx` state re-injection), `q`,
+`diff`, `log`, `hosts`, `gc`, and `help` all exist and are unit-tested; the Linux path is
+integration-verified against a live host, the Windows path against a live host via the manual
+parity gate ([evidence](docs/windows-parity.md)). Architecture, CLI surface, and v1 scope:
 `docs/superpowers/specs/2026-08-06-sshai-design.md`. Purpose and definition of done:
 `docs/superpowers/specs/2026-08-06-sshai-charter.md`.
+
+## Usage
+
+```
+sshai run [flags] <host...> -- <command>     # execute; N hosts = fan-out
+sshai run --body-file f.ps1 <host...>        # body from file or stdin (never argv)
+sshai q <id> -- <tool> <args>                # run a local tool over a stored artifact
+sshai diff <id1> <id2>                       # diff two artifacts (any hosts)
+sshai log [--host H] [--since T] [--grep P]  # search the run-log
+sshai hosts                                  # known aliases, detected OS, readonly flag
+sshai gc                                     # prune artifacts per retention policy
+sshai help [command]                         # this list, or the full reference for one command
+```
+
+The agent-facing quick-start (what an operator pastes into their agent's instructions):
+`docs/agent-usage.md`.
 
 ## Origin
 

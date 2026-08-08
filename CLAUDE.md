@@ -11,7 +11,10 @@ Issue: [aimem#636](https://github.com/aprudkin/aimem/issues/636), label `project
 
 ## Repository state
 
-Scaffold plus approved design. No executable code yet; the implementation plan comes next.
+v1 implemented: `run` (single host and fan-out, `--delta`, `--ctx` state re-injection), `q`,
+`diff`, `log`, `hosts`, `gc`, and `help` all exist and are unit-tested. The Linux path is
+integration-verified against a live host; the Windows path is integration-verified via the manual
+parity gate (`.superpowers/sdd/2026-08-06-sshai-v1/task-16-report.md`).
 
 ## Layout (per the design doc; directories appear as code lands)
 

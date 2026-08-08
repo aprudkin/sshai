@@ -26,11 +26,11 @@ func TestPwshScriptStartsWithBOMAndPreamble(t *testing.T) {
 
 func TestPwshInvocationForms(t *testing.T) {
 	shell := `C:\Program Files\PowerShell\7\pwsh.exe`
-	if got := PwshInvocation("cmd", shell, "-NoProfile -File x.ps1"); strings.HasPrefix(got, "& ") {
-		t.Fatalf("cmd form must not lead with '& ': %q", got)
+	if got, want := PwshInvocation("cmd", shell, "-NoProfile -File x.ps1"), `"C:\Program Files\PowerShell\7\pwsh.exe" -NoProfile -File x.ps1`; got != want {
+		t.Fatalf("cmd form = %q, want %q", got, want)
 	}
-	if got := PwshInvocation("pwsh", shell, "-NoProfile -File x.ps1"); !strings.HasPrefix(got, `& "`) {
-		t.Fatalf("pwsh form must lead with '& ': %q", got)
+	if got, want := PwshInvocation("pwsh", shell, "-NoProfile -File x.ps1"), `& "C:\Program Files\PowerShell\7\pwsh.exe" -NoProfile -File x.ps1; exit $LASTEXITCODE`; got != want {
+		t.Fatalf("pwsh form = %q, want %q", got, want)
 	}
 }
 
