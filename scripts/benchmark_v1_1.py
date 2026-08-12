@@ -62,8 +62,9 @@ def shell_call(step: dict[str, Any], branch: str) -> str:
     delta = bool(step.get("delta"))
     marker = f"BENCH_STEP={step_id}"
     delimiter = f"SSHAI_BENCH_{step_id}"
+    timeout_seconds = int(step.get("timeout_seconds", 180))
     if branch == "sshai":
-        delta_args = f"--ctx benchmark-v1.1-{host} "
+        delta_args = f"--timeout {timeout_seconds} --ctx benchmark-v1.1-{host} "
         if delta:
             delta_args += "--delta "
         return (
@@ -72,9 +73,10 @@ def shell_call(step: dict[str, Any], branch: str) -> str:
             f"{body}\n{delimiter}"
         )
     if os_name == "linux":
-        command = f"ssh {host} bash -s"
+        remote_command = f"ssh {host} bash -s"
     else:
-        command = f"ssh {host} pwsh -NoProfile -NonInteractive -File -"
+        remote_command = f"ssh {host} pwsh -NoProfile -NonInteractive -File -"
+    command = f"perl -e 'alarm shift; exec @ARGV' {timeout_seconds} {remote_command}"
     return f"# {marker}\n{command} <<'{delimiter}'\n{body}\n{delimiter}"
 
 
