@@ -74,7 +74,7 @@ def shell_call(step: dict[str, Any], branch: str) -> str:
     if os_name == "linux":
         command = f"ssh {host} bash -s"
     else:
-        command = f"ssh {host} pwsh -NoProfile -NonInteractive -Command -"
+        command = f"ssh {host} pwsh -NoProfile -NonInteractive -File -"
     return f"# {marker}\n{command} <<'{delimiter}'\n{body}\n{delimiter}"
 
 
