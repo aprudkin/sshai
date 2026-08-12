@@ -182,6 +182,7 @@ def analyze_branch(path: Path, expected_exits: dict[str, int]) -> dict[str, Any]
     tokens = [(len(value.encode("utf-8")) + 3) // 4 for value in outputs]
     attempts: dict[str, int] = {}
     observed_exits: dict[str, int | None] = {}
+    marked_tokens: list[int] = []
     unmarked = 0
     for item in completed:
         match = STEP_RE.search(str(item.get("command") or ""))
@@ -190,6 +191,8 @@ def analyze_branch(path: Path, expected_exits: dict[str, int]) -> dict[str, Any]
             attempts[step_id] = attempts.get(step_id, 0) + 1
             exit_code = item.get("exit_code")
             observed_exits[step_id] = exit_code if isinstance(exit_code, int) else None
+            output = str(item.get("aggregated_output") or "")
+            marked_tokens.append((len(output.encode("utf-8")) + 3) // 4)
         else:
             unmarked += 1
     turns = [event for event in events if event.get("type") == "turn.completed"]
@@ -227,6 +230,11 @@ def analyze_branch(path: Path, expected_exits: dict[str, int]) -> dict[str, Any]
             "max": max(tokens, default=0),
             "sum": sum(tokens),
         },
+        "marked_tool_response_est_tokens": {
+            "p95": percentile_nearest_rank(marked_tokens, 0.95),
+            "max": max(marked_tokens, default=0),
+            "sum": sum(marked_tokens),
+        },
         "explicit_compaction_mentions": compactions,
         "possible_truncation_markers": sum(
             value.lower().count("truncat") + value.lower().count("output clipped")
@@ -248,11 +256,25 @@ def analyze(manifest_path: Path, raw_path: Path, sshai_path: Path, output: Path 
     raw_input = int(raw["usage"].get("input_tokens") or 0)
     sshai_input = int(sshai["usage"].get("input_tokens") or 0)
     reduction = None if raw_input <= 0 else (raw_input - sshai_input) / raw_input
+    raw_cached = int(raw["usage"].get("cached_input_tokens") or 0)
+    sshai_cached = int(sshai["usage"].get("cached_input_tokens") or 0)
+    cached_reduction = None if raw_cached <= 0 else (raw_cached - sshai_cached) / raw_cached
+    raw_noncached = raw_input - raw_cached
+    sshai_noncached = sshai_input - sshai_cached
+    noncached_reduction = (
+        None if raw_noncached <= 0 else (raw_noncached - sshai_noncached) / raw_noncached
+    )
+    raw_visible = raw["marked_tool_response_est_tokens"]["sum"]
+    sshai_visible = sshai["marked_tool_response_est_tokens"]["sum"]
+    visible_reduction = None if raw_visible <= 0 else (raw_visible - sshai_visible) / raw_visible
     report = {
         "schema": "sshai-benchmark-analysis/v1",
         "raw": raw,
         "sshai": sshai,
         "input_token_reduction": reduction,
+        "cached_input_token_reduction": cached_reduction,
+        "noncached_input_token_reduction": noncached_reduction,
+        "marked_tool_output_reduction": visible_reduction,
         "targets": {
             "input_reduction_ge_80pct": reduction is not None and reduction >= 0.80,
             "sshai_p95_lt_500": sshai["tool_response_est_tokens"]["p95"] < 500,
@@ -262,6 +284,9 @@ def analyze(manifest_path: Path, raw_path: Path, sshai_path: Path, output: Path 
             "all_steps_observed": not raw["missing_steps"] and not sshai["missing_steps"],
         },
     }
+    report["decision"] = (
+        "confirmed" if all(report["targets"].values()) else "needs-work"
+    )
     rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if output:
         if output.exists():

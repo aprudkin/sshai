@@ -68,12 +68,15 @@ def main() -> None:
         event_file(sshai, "sshai", 10_000, 400)
         report = BENCH.analyze(manifest, raw, sshai, None)
         assert report["input_token_reduction"] == 0.9
+        assert report["cached_input_token_reduction"] is None
+        assert report["marked_tool_output_reduction"] == 0.9
         assert report["targets"]["input_reduction_ge_80pct"] is True
         assert report["targets"]["sshai_p95_lt_500"] is True
         assert report["targets"]["all_steps_observed"] is True
         assert report["targets"]["sshai_success_ge_raw"] is True
         assert report["raw"]["tool_response_est_tokens"]["p95"] == 1000
         assert report["sshai"]["tool_response_est_tokens"]["p95"] == 100
+        assert report["decision"] == "confirmed"
     print("benchmark_v1_1 tests: ok")
 
 

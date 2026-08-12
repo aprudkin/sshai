@@ -70,11 +70,16 @@ cache-read tokens. This is a model of repeated context reads, not an isolated A/
 - fan-out divides the configured inlining threshold across hosts (with a 100-token per-host floor)
   instead of giving every host the full threshold.
 
-Token estimates in the CLI use `ceil(bytes / 4)`, not a model-specific tokenizer. A controlled
-`sshai` vs raw-SSH benchmark is still the v1.1 milestone; its **targets**, not current results, are
-at least 80% input-token reduction, p95 tool responses below 500 tokens for outputs up to 10 MB,
-zero compactions, success rate at least equal to baseline, and approximately zero quoting-debug
-turns. See the [design](docs/superpowers/specs/2026-08-06-sshai-design.md) and
+Token estimates in the CLI use `ceil(bytes / 4)`, not a model-specific tokenizer.
+
+The controlled v1.1 benchmark completed on 2026-08-13: 36 read-only observations across two Linux
+and one Windows host, in fresh raw-SSH and `sshai` Codex sessions. `sshai` reduced agent-visible
+marked tool output by **99.86%** (p95 **262,152 → 50** estimated tokens) and actual Codex input
+tokens by **44.71%** (**2,896,077 → 1,601,293**). Both branches succeeded on 34/36 observations,
+had zero marker retries, and exposed zero compaction events. The p95, compaction, success, and
+quoting-debug targets passed; the primary ≥80% input-token target did not, so the decision is
+**needs work**, not v1.1 confirmed. See the [full result and boundaries](docs/benchmarks/v1.1-results-2026-08-13.md),
+the [design](docs/superpowers/specs/2026-08-06-sshai-design.md), and
 [aimem#735](https://github.com/aprudkin/aimem/issues/735).
 
 ## Usage
