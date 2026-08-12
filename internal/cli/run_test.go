@@ -811,21 +811,19 @@ func TestRunDeltaBinaryArtifactSuppressesDiffBody(t *testing.T) {
 	}
 }
 
-// TestRunBodyFileMetaCommandIncludesHashAndPreview covers Finding 1's
-// fix: the design doc's run-log row description is "command (or body
-// hash + first 80 chars)", so a --body-file run's stored Meta.Command
-// must combine deltaKeyCommand's hash form with a redacted preview of
-// the body — the hash alone would make the row opaque, and the raw body
-// alone would defeat the point of hashing it for the DB in the first
-// place.
-func TestRunBodyFileMetaCommandIncludesHashAndPreview(t *testing.T) {
+// TestRunBodyFilePersistsHashWithoutBodyText protects the body-file
+// boundary: arbitrary script text may contain values that a heuristic
+// redactor cannot recognize. Long-lived run metadata and audit JSONL must
+// therefore keep only the body hash, never a textual preview.
+func TestRunBodyFilePersistsHashWithoutBodyText(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("SSHAI_ROOT", root)
 	if err := session.SaveFacts(root, "web01", session.Facts{OS: "linux"}); err != nil {
 		t.Fatalf("SaveFacts: %v", err)
 	}
 	bodyFile := filepath.Join(t.TempDir(), "body.sh")
-	if err := os.WriteFile(bodyFile, []byte("echo hello"), 0o644); err != nil {
+	const body = "echo opaque-value-9e7d"
+	if err := os.WriteFile(bodyFile, []byte(body), 0o644); err != nil {
 		t.Fatalf("write body file: %v", err)
 	}
 
@@ -846,12 +844,20 @@ func TestRunBodyFileMetaCommandIncludesHashAndPreview(t *testing.T) {
 		t.Fatalf("store.Get: %v", err)
 	}
 
-	wantHash := "body:" + sha256Hex("echo hello")[:16]
-	if !strings.HasPrefix(m.Command, wantHash+" ") {
-		t.Fatalf("Meta.Command = %q, want it to start with %q", m.Command, wantHash+" ")
+	wantHash := "body:" + sha256Hex(body)[:16]
+	if m.Command != wantHash {
+		t.Fatalf("Meta.Command = %q, want hash only %q", m.Command, wantHash)
 	}
-	if !strings.Contains(m.Command, "echo hello") {
-		t.Fatalf("Meta.Command = %q, want it to contain the redacted preview %q", m.Command, "echo hello")
+
+	audit, err := os.ReadFile(filepath.Join(root, "audit.jsonl"))
+	if err != nil {
+		t.Fatalf("read audit.jsonl: %v", err)
+	}
+	if strings.Contains(string(audit), body) || strings.Contains(string(audit), "opaque-value-9e7d") {
+		t.Fatalf("audit.jsonl persisted body text: %s", audit)
+	}
+	if !strings.Contains(string(audit), wantHash) {
+		t.Fatalf("audit.jsonl = %s, want body hash %q", audit, wantHash)
 	}
 }
 

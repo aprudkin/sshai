@@ -172,7 +172,7 @@ config.toml          # budgets, retention, timeouts, per-host: os override, read
 ```
 
 Artifact IDs are short and monotonic (`a1`, `a2`, …) via a SQLite sequence. The run-log row stores:
-ts, host, ctx, command (or body hash + first 80 chars), exit/transport-error, bytes, lines, sha256,
+ts, host, ctx, command (or body hash only), exit/transport-error, bytes, lines, sha256,
 duration, truncated/binary flags, delta base.
 
 **Retention:** artifacts pruned by age and total size (default 7 days / 1 GB), auto-gc on run plus
@@ -193,9 +193,9 @@ never lost to delta mode.
   `ssh_config`/ssh-agent. Only aliases and passports enter agent context.
 - **Bodies never in argv** (process table): `--body-file` or stdin, enforced (no `--body` string
   flag exists).
-- **S3:** `audit.jsonl`, append-only: ts, host, ctx, subcommand, body sha256 + first 80 chars
-  passed through a secret-redaction filter (`password|token|secret` patterns → `***`), policy
-  verdict, exit.
+- **S3:** `audit.jsonl`, append-only: ts, host, ctx, subcommand, body sha256, policy verdict, exit.
+  Inline commands retain a short secret-redacted preview; `--body-file`/stdin bodies are hash-only
+  because heuristic redaction cannot safely classify arbitrary script text.
 - **readonly flag (mini-S2):** a host with `readonly = true` in `config.toml` accepts only
   commands matching a curated global allowlist of read-only patterns (shipped default: `cat`, `ls`,
   `grep`, `df`, `ps`, `journalctl`, `systemctl status`, `Get-*`, …), fail-closed otherwise. The

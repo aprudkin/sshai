@@ -29,7 +29,9 @@ v1 implemented: `run` (single host and fan-out, `--delta`, `--ctx` state re-inje
 integration-verified against a live host, the Windows path against a live host via the manual
 parity gate ([evidence](docs/windows-parity.md)). Architecture, CLI surface, and v1 scope:
 `docs/superpowers/specs/2026-08-06-sshai-design.md`. Purpose and definition of done:
-`docs/superpowers/specs/2026-08-06-sshai-charter.md`.
+`docs/superpowers/specs/2026-08-06-sshai-charter.md`. The current server-workflow migration,
+fallback boundary, and fresh Windows/Linux acceptance evidence are in
+`docs/server-workflow-migration.md`.
 
 ## Usage
 
@@ -46,6 +48,18 @@ sshai help [command]                         # this list, or the full reference 
 
 The agent-facing quick-start (what an operator pastes into their agent's instructions):
 `docs/agent-usage.md`.
+
+## Installation
+
+Install the current checkout into `~/.local/bin` (or set `SSHAI_INSTALL_DIR` to another existing
+PATH directory):
+
+```bash
+scripts/install.sh
+```
+
+The installer builds a temporary binary, refuses to replace a symlink or non-file, atomically
+replaces the exact `sshai` target, and runs `sshai help` as a smoke check.
 
 ## Origin
 

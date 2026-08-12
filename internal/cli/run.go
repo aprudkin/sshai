@@ -458,26 +458,28 @@ func deltaKeyCommand(opts Opts) string {
 	return "body:" + sha256Hex(opts.Command)[:16]
 }
 
-// metaCommand returns the string stored in artifact.Meta.Command — the
-// long-lived SQLite "command" column. It matches the design doc's run-log
-// row description verbatim: "command (or body hash + first 80 chars)".
-// For an inline "-- words" command that's just the command itself
-// (deltaKeyCommand's raw-command branch already covers it); for a
-// --body-file/stdin body it is deltaKeyCommand's hash form followed by a
-// redacted 80-rune preview of the body, so a --body-file row is not
-// opaque in the database — the hash alone would tell a reader nothing
-// about what the run actually did.
-//
-// This is deliberately NOT used for runlog.AuditEntry.CommandPreview:
-// policy.CheckReadonly's doc comment expects a denial's log line to carry
-// the (redacted) command itself, not a hash-prefixed one, so audit
-// entries call runlog.Preview(opts.Command) directly.
+// metaCommand returns the string stored in artifact.Meta.Command, the
+// long-lived SQLite "command" column. Inline commands remain searchable
+// text. A --body-file/stdin body is represented by its hash only: an
+// arbitrary script can contain values no heuristic redactor recognizes,
+// so persisting even a short preview would violate the body-file safety
+// boundary.
 func metaCommand(opts Opts) string {
 	key := deltaKeyCommand(opts)
-	if !opts.FromFile {
+	if opts.FromFile {
 		return key
 	}
-	return key + " " + runlog.Preview(opts.Command)
+	return key
+}
+
+// auditCommandPreview follows the same body-file boundary as metaCommand:
+// body text is hash-only, while inline commands keep the existing redacted
+// and clipped preview used by audit readers and readonly denials.
+func auditCommandPreview(opts Opts) string {
+	if opts.FromFile {
+		return deltaKeyCommand(opts)
+	}
+	return runlog.Preview(opts.Command)
 }
 
 func sha256Hex(s string) string {
@@ -512,7 +514,8 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, string) {
 		fmt.Fprintf(stdout, "%s policy-denied\n", opts.Host)
 		if auditErr := runlog.AppendAudit(root, runlog.AuditEntry{
 			Ts: time.Now(), Host: opts.Host, Ctx: opts.Ctx, Subcommand: "run",
-			CommandPreview: runlog.Preview(opts.Command), Verdict: "denied-readonly",
+			CommandPreview: auditCommandPreview(opts), BodySHA256: sha256Hex(opts.Command),
+			Verdict: "denied-readonly",
 		}); auditErr != nil {
 			fmt.Fprintf(stderr, "run: append audit: %v\n", auditErr)
 		}
@@ -745,7 +748,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, string) {
 
 	if auditErr := runlog.AppendAudit(root, runlog.AuditEntry{
 		Ts: time.Now(), Host: opts.Host, Ctx: opts.Ctx, Subcommand: "run",
-		CommandPreview: runlog.Preview(opts.Command), BodySHA256: sha256Hex(opts.Command),
+		CommandPreview: auditCommandPreview(opts), BodySHA256: sha256Hex(opts.Command),
 		Verdict: "allowed", Exit: remoteExit,
 	}); auditErr != nil {
 		fmt.Fprintf(stderr, "run: append audit: %v\n", auditErr)
@@ -784,7 +787,8 @@ func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, st
 
 	if auditErr := runlog.AppendAudit(root, runlog.AuditEntry{
 		Ts: time.Now(), Host: opts.Host, Ctx: opts.Ctx, Subcommand: "run",
-		CommandPreview: runlog.Preview(opts.Command), Verdict: "allowed",
+		CommandPreview: auditCommandPreview(opts), BodySHA256: sha256Hex(opts.Command),
+		Verdict:      "allowed",
 		TransportErr: te.Reason,
 	}); auditErr != nil {
 		fmt.Fprintf(stderr, "run: append audit: %v\n", auditErr)
