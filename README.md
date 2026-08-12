@@ -33,6 +33,50 @@ parity gate ([evidence](docs/windows-parity.md)). Architecture, CLI surface, and
 fallback boundary, and fresh Windows/Linux acceptance evidence are in
 `docs/server-workflow-migration.md`.
 
+## Context economics
+
+The available measurements are a historical baseline for the predecessor `/ps-ssh` workflow,
+not a completed before/after benchmark of `sshai`. A 2026-07-29 transcript audit found:
+
+| Measurement | Historical result |
+|---|---:|
+| Claude `/usage` attribution to `/ps-ssh` | 26% |
+| Agent-visible Bash calls per remote invocation | 457 / 113 = **4.04** |
+| Longest quoting/`DefaultShell` debug tail | **20** calls |
+| Heaviest sampled session | 271 assistant turns, 118 Bash calls, 69 related to `ps-ssh` |
+| Same session's total token counters | 40.79M cache-read, 0.24M output |
+
+The 26% and 40.79M figures describe whole sessions and must not be read as token cost caused only
+by the helper. They identify the amplification mechanism: **cost grows roughly as agent-visible
+round trips × accumulated context**. As an illustrative calculation from the audit, 5k tokens of
+output introduced at turn 40 of a 271-turn session can contribute about 1.2M cumulative later
+cache-read tokens. This is a model of repeated context reads, not an isolated A/B measurement.
+
+`sshai` reduces that amplification in several layers:
+
+- one `sshai run` contains staging, transport, encoding, execution, and collection behind one
+  agent tool call, replacing the historical 4.04-call average and avoiding 10–20-turn quoting
+  repair loops;
+- tiered output inlines a small result, but a large result returns only metadata plus `tail3`; the
+  complete bytes remain in `~/.sshai/art/<id>`;
+- the metadata-only passport fixture is unit-asserted below 200 estimated tokens; `run` uses a
+  factory 500-token estimate (approximately 2 KB at bytes/4) as its full-body inlining threshold,
+  while `q` (per stream) and `diff` trim their output to the same default estimate;
+- `sshai q` filters the local artifact, while `diff` and `--delta` return only relevant changes;
+  an unchanged delta is represented by the short `no change since ...` line (approximately 20
+  tokens by design);
+- `log` and artifact IDs keep evidence outside the conversation, so analysis can resume after
+  compaction without replaying full remote output;
+- fan-out divides the configured inlining threshold across hosts (with a 100-token per-host floor)
+  instead of giving every host the full threshold.
+
+Token estimates in the CLI use `ceil(bytes / 4)`, not a model-specific tokenizer. A controlled
+`sshai` vs raw-SSH benchmark is still the v1.1 milestone; its **targets**, not current results, are
+at least 80% input-token reduction, p95 tool responses below 500 tokens for outputs up to 10 MB,
+zero compactions, success rate at least equal to baseline, and approximately zero quoting-debug
+turns. See the [design](docs/superpowers/specs/2026-08-06-sshai-design.md) and
+[aimem#735](https://github.com/aprudkin/aimem/issues/735).
+
 ## Usage
 
 ```
