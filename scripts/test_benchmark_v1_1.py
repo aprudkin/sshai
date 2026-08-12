@@ -54,11 +54,13 @@ def main() -> None:
                 "os": target["os"],
                 "body": "printf ok",
                 "expected_exit": 0,
+                "timeout_seconds": 180,
             })
         manifest.write_text(json.dumps({
             "schema": "sshai-benchmark/v1",
             "frozen": True,
             "branch_order": ["raw", "sshai"],
+            "timeout_seconds": 180,
             "targets": targets,
             "steps": steps,
         }), encoding="utf-8")

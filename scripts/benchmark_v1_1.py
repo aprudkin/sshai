@@ -52,6 +52,11 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         fail("manifest step IDs must be present and unique")
     if manifest.get("branch_order") != list(BRANCHES):
         fail(f"branch_order must be {list(BRANCHES)!r}")
+    if "supersedes_manifest" in manifest:
+        if manifest.get("timeout_seconds") != 180:
+            fail("v2 manifest timeout_seconds must be the frozen value 180")
+        if any(step.get("timeout_seconds") != 180 for step in steps):
+            fail("every v2 manifest step must freeze timeout_seconds=180")
 
 
 def shell_call(step: dict[str, Any], branch: str) -> str:
