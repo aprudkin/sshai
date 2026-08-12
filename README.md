@@ -63,14 +63,14 @@ replaces the exact `sshai` target, and runs `sshai help` as a smoke check.
 
 ## Origin
 
-A generalization of `/ps-ssh` (`~/.claude/scripts/ps_ssh.py`) — one Windows host, one shot. It
-already paid for UTF-8 BOM, scp body delivery, pwsh 7 invocation, DefaultShell detection, CLIXML
-filtering, head/tail truncation, and a status line as the source of truth. That experience is
-ported, not rediscovered.
+A generalization of the now-archived `ps_ssh.py` helper — one Windows host, one shot. It already
+paid for UTF-8 BOM, scp body delivery, pwsh 7 invocation, DefaultShell detection, CLIXML filtering,
+head/tail truncation, and a status line as the source of truth. That experience is ported, not
+rediscovered; the legacy helper is no longer an active fallback.
 
-What `/ps-ssh` lacks and what this project exists for: Linux/bash targets, multiple hosts per
-call, persistent session state (cwd/env) between calls, artifact-by-reference output with local
-querying, deltas, and a searchable run-log.
+What the archived helper lacked and what this project exists for: Linux/bash targets, multiple
+hosts per call, persistent session state (cwd/env) between calls, artifact-by-reference output
+with local querying, deltas, and a searchable run-log.
 
 ## Implementation language
 

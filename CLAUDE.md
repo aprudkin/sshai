@@ -44,7 +44,7 @@ go test -tags=integration ./...    # integration tests (need reachable fleet hos
 - **No secrets in argv.** This tool connects to domain controllers by design. Passwords and tokens
   travel via stdin or files; `curl -H "Authorization: …"`, `--password` and the like hand the
   secret to every process on the machine.
-- **Script bodies are never passed as an argument** — same as `/ps-ssh`: `--body-file` or stdin.
+- **Script bodies are never passed as an argument** — use `sshai run --body-file` or protected stdin.
 - **English everywhere** — code, comments, docs, help output, error messages. The tool is intended
   to be open-sourced.
 - The design doc's passport size target (<200 tokens for the metadata-only form) is a unit test,

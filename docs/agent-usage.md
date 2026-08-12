@@ -33,7 +33,7 @@ secret values in a body.
 
 ## Explicit fallbacks
 
-Use the existing dedicated workflow instead of `sshai` when the task needs any of the following:
+Use an explicit purpose-built workflow instead of `sshai` when the task needs any of the following:
 
 - secret input streamed to the remote program (stdin is occupied by the script wrapper);
 - `scp`, `rsync`, backup download, or another file-transfer contract;
@@ -44,5 +44,7 @@ Use the existing dedicated workflow instead of `sshai` when the task needs any o
 - a server or production mutation that has not passed its own authorization and verification
   workflow.
 
-Record which fallback condition applied. Raw `ssh` is an exception in covered command-execution
-scenarios, not a shorter default.
+Record which fallback condition applied. The archived `ps_ssh.py` helper is never a fallback and
+must not be restored or invoked. For PowerShell 5.1, secret stdin, or an unsupported two-hop shape,
+stop and require a separately approved workflow. Raw `ssh` is an exception in covered
+command-execution scenarios, not a shorter default.

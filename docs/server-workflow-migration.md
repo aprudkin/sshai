@@ -2,6 +2,7 @@
 
 **Task:** [aimem#709](https://github.com/aprudkin/aimem/issues/709)
 **Inventory date:** 2026-08-12
+**Legacy retirement:** [aimem#734](https://github.com/aprudkin/aimem/issues/734)
 
 This inventory separates command execution that `sshai` can own from surrounding server work that
 must keep an explicit fallback. It is based on current project behavior plus existing Windows
@@ -22,7 +23,7 @@ shapes, not proof that a named host or procedure is still current; live checks r
 | P1 | Fleet read-only check | Deterministic fan-out passports and aggregate result | Covered; live proof after P0 |
 | P1 | File upload/download | Preserve `scp`/`rsync` semantics | Out of scope; explicit fallback |
 | P1 | Secret streamed to a remote program | Secret never enters command body, argv, audit, or artifact | Out of scope; protected stdin fallback |
-| P1 | PowerShell 5.1-only host | BOM/encoding plus selectable shell | Not covered; retain `ps-ssh` fallback |
+| P1 | PowerShell 5.1-only host | BOM/encoding plus selectable shell | Not covered; fail closed pending a separately approved workflow |
 | P1 | IP/ad-hoc identity invocation | Select identity without putting credentials in sshai config | Use an `ssh_config` alias or fallback |
 | P1 | Interactive/REPL/foreground stream | Terminal semantics and operator control | Out of scope; explicit fallback |
 | P1 | Nested two-hop from a Windows runner | Preserve quoting, encoding, and inner exit evidence | Prefer `ProxyJump`; otherwise fallback |
@@ -36,9 +37,9 @@ shapes, not proof that a named host or procedure is still current; live checks r
   mutations or replace their runbooks.
 - Linux operations use working-directory continuity, Docker/systemd status, logs, database checks,
   multi-step deploy commands, explicit identity files, and separate backup transfers.
-- The current `ps-ssh` workflow additionally covers PowerShell 5.1 fallback, nested two-hop shapes,
-  and error diagnosis. Those remain fallback requirements until `sshai` has equivalent verified
-  coverage or the workflow is retired.
+- The former `ps_ssh.py` workflow covered PowerShell 5.1 and nested two-hop shapes. It was archived
+  under aimem#734 and is intentionally absent from active paths. Those scenarios now fail closed
+  until `sshai` gains verified coverage or a separate purpose-built workflow is approved.
 
 ## Minimum migration gaps and result
 
@@ -49,7 +50,8 @@ shapes, not proof that a named host or procedure is still current; live checks r
 3. Completed for Codex: route agent instructions to `sshai` by default for covered
    command-execution scenarios.
 4. Completed: keep fallbacks explicit for secret stdin, file transfer, interactive work,
-   PowerShell 5.1, ad-hoc identity selection, and unsupported two-hop cases.
+   PowerShell 5.1, ad-hoc identity selection, and unsupported two-hop cases; never invoke the
+   archived legacy helper.
 5. Completed: run fresh safe controls on at least one Windows and one Linux host before declaring
    migration complete.
 
@@ -85,7 +87,8 @@ were the only writes.
 For the eight live body-file runs, the run-log contained eight `body:<hash>` records and zero rows
 matching known body text; `audit.jsonl` also contained none of the known test body strings.
 
-Fresh-process Codex proof loaded the applied global reference and shared PowerShell-over-SSH skill,
-then selected installed `sshai` as the default while naming PowerShell 5.1 and unsupported two-hop
-behavior as legacy fallback conditions. This proves instruction loading; continued real-session use
-is the operational control for the default-path adoption criterion.
+Fresh-process Codex proof loaded the applied global reference and shared remote-command skill, then
+selected installed `sshai` as the default. PowerShell 5.1 and unsupported two-hop behavior are
+fail-closed requirements for a separately approved workflow, not reasons to revive the archived
+helper. Continued real-session use is the operational control for the default-path adoption
+criterion.
