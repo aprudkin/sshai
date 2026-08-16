@@ -255,11 +255,18 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 			}
 			summary, metas := singleHostSummaryAndRuns(m, rc)
 			env := artifact.RenderResult(cfg.Root, metas, summary, newBatchID())
+			// Write the envelope to stdout BEFORE attempting --result-out:
+			// a successful run's envelope must reach stdout even if the
+			// side-file write later fails (otherwise a bad --result-out
+			// path would discard a perfectly good result). The envelope
+			// was already written to stdout by the caller (writeResultOut's
+			// own contract).
+			stdout.Write(env)
+			stdout.Write([]byte("\n"))
 			if code := writeResultOut(opts.ResultOut, env, stderr); code != 0 {
 				return code
 			}
-			stdout.Write(env)
-			stdout.Write([]byte("\n"))
+
 			id := ""
 			if m != nil {
 				id = m.ID
@@ -577,12 +584,18 @@ func runFanout(deps Deps, hostOpts []Opts, stdout, stderr io.Writer) (int, []*ar
 		for i := range hostOpts {
 			stderr.Write(errs[i].Bytes())
 		}
+		// Write the envelope to stdout BEFORE attempting --result-out: a
+		// successful fan-out's envelope must reach stdout even if the
+		// side-file write later fails (otherwise a bad --result-out path
+		// would discard a perfectly good result). writeResultOut's own
+		// contract assumes the envelope has already reached stdout.
+		stdout.Write(env)
+		stdout.Write([]byte("\n"))
 		if code := writeResultOut(hostOpts[0].ResultOut, env, stderr); code != 0 {
 			return code, metas
 		}
-		stdout.Write(env)
-		stdout.Write([]byte("\n"))
 		switch {
+
 		case summary.TransportErrors > 0:
 			return exitTransport, metas
 		case summary.PolicyDenied > 0:
