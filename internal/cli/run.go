@@ -211,7 +211,11 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 			Budget:   budgetTokens,
 			Timeout:  timeout,
 		}
-		rc, id := runHost(deps, opts, stdout, stderr)
+		rc, m := runHost(deps, opts, stdout, stderr)
+		id := ""
+		if m != nil {
+			id = m.ID
+		}
 		maybeGC(deps.Store, cfg, stderr, protectSet(id))
 		return rc
 	}
@@ -230,7 +234,13 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 			Timeout:  timeout,
 		}
 	}
-	rc, ids := runFanout(deps, hostOpts, stdout, stderr)
+	rc, metas := runFanout(deps, hostOpts, stdout, stderr)
+	ids := make([]string, len(metas))
+	for i, m := range metas {
+		if m != nil {
+			ids[i] = m.ID
+		}
+	}
 	maybeGC(deps.Store, cfg, stderr, protectSet(ids...))
 	return rc
 }
@@ -309,10 +319,12 @@ func fanoutBudget(total, n int) int {
 
 // runFanout runs hostOpts (one Opts per host, already in argv order)
 // concurrently against the shared deps and returns the worst-outcome
-// process exit, plus the artifact id each host's runHost call saved (""
-// for a host that never reached Save, e.g. policy-denied) — the second
-// return value exists solely so runArgs can build maybeGC's protect set
-// from every artifact this fan-out invocation just wrote, not just one.
+// process exit, plus each host's saved artifact Meta (nil for a host
+// that never reached Save, e.g. policy-denied) — the second return
+// value exists solely so runArgs can build maybeGC's protect set from
+// every artifact this fan-out invocation just wrote, not just one.
+// Callers use m.ID ("" when m == nil) where they previously used the
+// returned string id.
 //
 // Concurrency shape, per the task brief's verified facts:
 //   - deps.Tr (transport.OpenSSH in production) is documented safe for
@@ -336,19 +348,19 @@ func fanoutBudget(total, n int) int {
 // the "results collected by index — deterministic print order = argv
 // order" requirement. The controller writes every buffer to the real
 // stdout/stderr only after WaitGroup.Wait, strictly in argv order.
-func runFanout(deps Deps, hostOpts []Opts, stdout, stderr io.Writer) (int, []string) {
+func runFanout(deps Deps, hostOpts []Opts, stdout, stderr io.Writer) (int, []*artifact.Meta) {
 	n := len(hostOpts)
 	outs := make([]bytes.Buffer, n)
 	errs := make([]bytes.Buffer, n)
 	rcs := make([]int, n)
-	ids := make([]string, n)
+	metas := make([]*artifact.Meta, n)
 
 	var wg sync.WaitGroup
 	wg.Add(n)
 	for i, opts := range hostOpts {
 		go func(i int, opts Opts) {
 			defer wg.Done()
-			rcs[i], ids[i] = runHost(deps, opts, &outs[i], &errs[i])
+			rcs[i], metas[i] = runHost(deps, opts, &outs[i], &errs[i])
 		}(i, opts)
 	}
 	wg.Wait()
@@ -407,11 +419,11 @@ func runFanout(deps Deps, hostOpts []Opts, stdout, stderr io.Writer) (int, []str
 
 	switch {
 	case sawTransportErr:
-		return exitTransport, ids
+		return exitTransport, metas
 	case sawPolicyDenied:
-		return exitPolicy, ids
+		return exitPolicy, metas
 	default:
-		return maxRemoteExit, ids
+		return maxRemoteExit, metas
 	}
 }
 
@@ -501,13 +513,14 @@ func asTransportError(err error) (*transport.TransportError, bool) {
 // state/baseline save, artifact store, passport render, audit, and the
 // exit code to return (mirroring the remote exit, except for the
 // reserved policy/transport codes — see the package doc in
-// cmd/sshai/main.go). The second return value is the artifact id this
-// call saved, if any ("" on every early-return path that never reaches
+// cmd/sshai/main.go). The second return value is the artifact Meta this
+// call saved, if any (nil on every early-return path that never reaches
 // Store.Save, e.g. policy-denied) — runArgs threads it (or, in fan-out,
-// all N hosts' ids via runFanout) into maybeGC's protect set, so
+// all N hosts' metas via runFanout) into maybeGC's protect set, so
 // opportunistic gc can never prune the very artifact(s) this invocation
-// just wrote (see maybeGC's doc comment).
-func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, string) {
+// just wrote (see maybeGC's doc comment). Callers use m.ID ("" when
+// m == nil) where they previously used the returned string id.
+func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, *artifact.Meta) {
 	root := deps.Store.Root
 
 	if err := policy.CheckReadonly(opts.Command, opts.Readonly); err != nil {
@@ -519,13 +532,13 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, string) {
 		}); auditErr != nil {
 			fmt.Fprintf(stderr, "run: append audit: %v\n", auditErr)
 		}
-		return exitPolicy, ""
+		return exitPolicy, nil
 	}
 
 	facts, ok, err := session.LoadFacts(root, opts.Host)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: load facts for %s: %v\n", opts.Host, err)
-		return exitUsage, ""
+		return exitUsage, nil
 	}
 	if !ok {
 		facts, err = session.Probe(deps.Tr, opts.Host, shell.PwshDefaultShell, opts.Timeout)
@@ -534,23 +547,23 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, string) {
 				return handleTransportError(deps, opts, te, stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: probe %s: %v\n", opts.Host, err)
-			return exitUsage, ""
+			return exitUsage, nil
 		}
 		if err := session.SaveFacts(root, opts.Host, facts); err != nil {
 			fmt.Fprintf(stderr, "run: save facts for %s: %v\n", opts.Host, err)
-			return exitUsage, ""
+			return exitUsage, nil
 		}
 	}
 
 	st, _, err := session.LoadState(root, opts.Host, opts.Ctx)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: load state for %s/%s: %v\n", opts.Host, opts.Ctx, err)
-		return exitUsage, ""
+		return exitUsage, nil
 	}
 	baseline, baseOK, err := session.LoadBaseline(root, opts.Host)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: load baseline for %s: %v\n", opts.Host, err)
-		return exitUsage, ""
+		return exitUsage, nil
 	}
 	restore := shell.EnvRestoreSet(baseline, st.Env)
 	sentinel := shell.NewSentinel()
@@ -571,17 +584,17 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, string) {
 		tmp, err := os.CreateTemp("", "sshai-*.ps1")
 		if err != nil {
 			fmt.Fprintf(stderr, "run: create temp script: %v\n", err)
-			return exitUsage, ""
+			return exitUsage, nil
 		}
 		defer os.Remove(tmp.Name())
 		if _, err := tmp.Write(script); err != nil {
 			tmp.Close()
 			fmt.Fprintf(stderr, "run: write temp script: %v\n", err)
-			return exitUsage, ""
+			return exitUsage, nil
 		}
 		if err := tmp.Close(); err != nil {
 			fmt.Fprintf(stderr, "run: close temp script: %v\n", err)
-			return exitUsage, ""
+			return exitUsage, nil
 		}
 
 		// Slug the raw command, not the wrapped script: the wrapper embeds
@@ -597,7 +610,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, string) {
 				return handleTransportError(deps, opts, te, stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: put script to %s: %v\n", opts.Host, err)
-			return exitUsage, ""
+			return exitUsage, nil
 		}
 
 		invocation := shell.PwshInvocation(facts.Form, facts.Shell, "-NoProfile -ExecutionPolicy Bypass -File "+remotePath)
@@ -607,7 +620,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, string) {
 				return handleTransportError(deps, opts, te, stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: exec on %s: %v\n", opts.Host, err)
-			return exitUsage, ""
+			return exitUsage, nil
 		}
 		remoteExit, truncated = res.ExitCode, res.Truncated
 		out, parsedSt, parseOK = shell.PwshParse(res.Output, sentinel)
@@ -619,7 +632,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, string) {
 				return handleTransportError(deps, opts, te, stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: exec on %s: %v\n", opts.Host, err)
-			return exitUsage, ""
+			return exitUsage, nil
 		}
 		remoteExit, truncated = res.ExitCode, res.Truncated
 		out, parsedSt, parseOK = shell.BashParse(res.Output, sentinel)
@@ -698,7 +711,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, string) {
 	savedMeta, err := deps.Store.Save(meta, key, out)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: save artifact: %v\n", err)
-		return exitUsage, ""
+		return exitUsage, nil
 	}
 
 	artPath := filepath.Join(deps.Store.Root, "art", savedMeta.ID)
@@ -754,7 +767,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, string) {
 		fmt.Fprintf(stderr, "run: append audit: %v\n", auditErr)
 	}
 
-	return remoteExit, savedMeta.ID
+	return remoteExit, &savedMeta
 }
 
 // handleTransportError records a failed delivery (the body may not have
@@ -763,11 +776,13 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, string) {
 // by TransportErr being non-empty — the Store/Meta contract laid out in
 // artifact/passport.go's StatusLine. The artifact is empty; the passport
 // and audit entry are still written so the failure itself is traceable.
-// The second return value is the saved artifact's id ("" if Save itself
-// failed, in which case there is nothing for a caller to protect from gc)
-// — same two-value shape as runHost, for the same reason (see runHost's
-// own doc comment): maybeGC needs it to build its protect set.
-func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, stdout, stderr io.Writer) (int, string) {
+// The second return value is the saved artifact's Meta (nil if Save
+// itself failed, in which case there is nothing for a caller to protect
+// from gc) — same two-value shape as runHost, for the same reason (see
+// runHost's own doc comment): maybeGC needs it to build its protect set.
+// Callers use m.ID ("" when m == nil) where they previously used the
+// returned string id.
+func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, stdout, stderr io.Writer) (int, *artifact.Meta) {
 	root := deps.Store.Root
 
 	meta := artifact.Meta{
@@ -778,7 +793,7 @@ func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, st
 	savedMeta, err := deps.Store.Save(meta, key, nil)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: save artifact after transport error: %v\n", err)
-		return exitTransport, ""
+		return exitTransport, nil
 	}
 
 	artPath := filepath.Join(deps.Store.Root, "art", savedMeta.ID)
@@ -794,5 +809,5 @@ func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, st
 		fmt.Fprintf(stderr, "run: append audit: %v\n", auditErr)
 	}
 
-	return exitTransport, savedMeta.ID
+	return exitTransport, &savedMeta
 }
