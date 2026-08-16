@@ -7,7 +7,7 @@ import (
 )
 
 // Summary is the top-level aggregate of a run invocation's machine-readable
-// envelope. Counts are computed by the CLI layer (cli/run.go); RenderResult
+// envelope. Counts are computed by the CLI result-mode layer; RenderResult
 // only serializes them. The json tags are the frozen v1 field names.
 type Summary struct {
 	Hosts           int `json:"hosts"`

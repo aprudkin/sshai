@@ -4,10 +4,8 @@ package cli
 import (
 	"bytes"
 	"encoding/base64"
-	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -389,9 +387,10 @@ func TestRunLinuxPartialParseMergesWithPreviousState(t *testing.T) {
 // "hello") — used to prove classification can't be fooled by remote
 // output that happens to look like a status line.
 type multiHostTr struct {
-	rcs          map[string]int
-	transportErr map[string]string
-	body         map[string]string
+	rcs           map[string]int
+	transportErr  map[string]string
+	body          map[string]string
+	failStateSave bool
 }
 
 func (f *multiHostTr) Exec(host, cmd string, stdin []byte, _ time.Duration) (transport.Result, error) {
@@ -405,6 +404,11 @@ func (f *multiHostTr) Exec(host, cmd string, stdin []byte, _ time.Duration) (tra
 		b = "hello"
 	}
 	out := []byte(b + "\n\n" + sent + "\n/tmp\n" + env + "\n")
+	if f.failStateSave {
+		if err := os.Mkdir(filepath.Join(os.Getenv("SSHAI_ROOT"), "state", host, "default.json"), 0o700); err != nil {
+			return transport.Result{}, err
+		}
+	}
 	return transport.Result{ExitCode: f.rcs[host], Output: out}, nil
 }
 
@@ -471,12 +475,11 @@ func TestRunFanoutTwoHostsAggregateAndArgvOrder(t *testing.T) {
 }
 
 // TestRunFanoutIgnoresStatusLookingTextInRemoteOutput is the regression
-// test for a classification bug found in review: runFanout must inspect
-// only a host's passport *first line* (its own status line), never the
-// whole buffer — otherwise a host whose command output happens to
-// contain "transport-error=" or " policy-denied" (e.g. grepping sshai's
-// own audit.jsonl, or catting another host's earlier passport) would be
-// misclassified from its own successful remote output.
+// test for a classification bug found in review: runInvocation must use the
+// typed host outcome, never rendered output — otherwise a host whose output
+// happens to contain "transport-error=" or " policy-denied" (e.g. grepping
+// sshai's own audit.jsonl, or catting another host's earlier passport) would
+// be misclassified from its own successful remote output.
 func TestRunFanoutIgnoresStatusLookingTextInRemoteOutput(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("SSHAI_ROOT", root)
@@ -648,7 +651,7 @@ func TestRunDeltaNoChangeSecondRun(t *testing.T) {
 // test for --delta's fan-out interaction: delta.Key includes the host (see
 // delta.Key's own signature), so two hosts running the identical
 // (ctx, command) pair must never see each other's previous run as their own
-// delta base. runHost is called directly (not through runFanout's
+// delta base. runHost is called directly (not through runInvocation's
 // concurrent goroutines) so artifact IDs are assigned in a known,
 // deterministic order: h1's first run -> a1, h2's first run -> a2, h1's
 // second run -> a3, h2's second run -> a4.
@@ -673,19 +676,19 @@ func TestRunHostDeltaKeysDoNotCollideAcrossHosts(t *testing.T) {
 	opts2.Host = "h2"
 
 	var out bytes.Buffer
-	if rc, _ := runHost(deps, opts1, &out, &out); rc != 0 {
-		t.Fatalf("h1 first run rc=%d: %s", rc, out.String())
+	if outcome := runHost(deps, opts1, &out, &out); outcome.ExitCode() != 0 {
+		t.Fatalf("h1 first run rc=%d: %s", outcome.ExitCode(), out.String())
 	}
 	out.Reset()
-	if rc, _ := runHost(deps, opts2, &out, &out); rc != 0 {
-		t.Fatalf("h2 first run rc=%d: %s", rc, out.String())
+	if outcome := runHost(deps, opts2, &out, &out); outcome.ExitCode() != 0 {
+		t.Fatalf("h2 first run rc=%d: %s", outcome.ExitCode(), out.String())
 	}
 	out.Reset()
 
 	// h1's second run must key off its OWN previous run (a1), never h2's
 	// (a2) — a cross-host collision would show "delta=a2" here instead.
-	if rc, _ := runHost(deps, opts1, &out, &out); rc != 0 {
-		t.Fatalf("h1 second run rc=%d: %s", rc, out.String())
+	if outcome := runHost(deps, opts1, &out, &out); outcome.ExitCode() != 0 {
+		t.Fatalf("h1 second run rc=%d: %s", outcome.ExitCode(), out.String())
 	}
 	p1 := out.String()
 	if !strings.Contains(p1, "delta=a1") {
@@ -698,8 +701,8 @@ func TestRunHostDeltaKeysDoNotCollideAcrossHosts(t *testing.T) {
 
 	// h2's second run must key off its OWN previous run (a2), never h1's
 	// rows (a1 or a3).
-	if rc, _ := runHost(deps, opts2, &out, &out); rc != 0 {
-		t.Fatalf("h2 second run rc=%d: %s", rc, out.String())
+	if outcome := runHost(deps, opts2, &out, &out); outcome.ExitCode() != 0 {
+		t.Fatalf("h2 second run rc=%d: %s", outcome.ExitCode(), out.String())
 	}
 	p2 := out.String()
 	if !strings.Contains(p2, "delta=a2") {
@@ -916,7 +919,7 @@ func TestRunOpportunisticGCPrunesWhenOverCap(t *testing.T) {
 }
 
 // TestRunFanoutOpportunisticGCProtectsAllJustWrittenArtifacts is the
-// fix-round-1 regression test for Finding 1: runFanout writes N artifacts
+// fix-round-1 regression test for Finding 1: runInvocation writes N artifacts
 // (one per host) in a single `run` invocation, but maybeGC is called only
 // once, after all N have already been saved (run.go:233-235). The
 // pre-fix "floor" heuristic in gcStore exempted exactly one row — the
@@ -926,7 +929,7 @@ func TestRunOpportunisticGCPrunesWhenOverCap(t *testing.T) {
 // failed there with "a1 ... artifact pruned". The fix replaces the
 // heuristic with an explicit protect set built from ALL N of this
 // invocation's saved ids (protectSet(ids...), run.go), threaded out of
-// runFanout via its second return value. With a cap far smaller than the
+// runInvocation via its second return value. With a cap far smaller than the
 // combined output of 3 hosts, none of the 3 artifacts this very
 // invocation just wrote may be pruned.
 func TestRunFanoutOpportunisticGCProtectsAllJustWrittenArtifacts(t *testing.T) {
@@ -958,500 +961,5 @@ func TestRunFanoutOpportunisticGCProtectsAllJustWrittenArtifacts(t *testing.T) {
 		if _, path, err := store.Get(id); err != nil || path == "" {
 			t.Fatalf("artifact %s (one of this invocation's own N just-written artifacts) must survive opportunistic gc: path=%q err=%v", id, path, err)
 		}
-	}
-}
-
-// TestRunResultFormatJSONSuccess covers the single-host --result-format=json
-// success path (Task 4 of aimem#767): stdout is exactly one JSON object
-// matching the v1 envelope, no human passport lines leak through, and the
-// run was actually saved (sha256 is non-empty).
-func TestRunResultFormatJSONSuccess(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("SSHAI_ROOT", root)
-	seedLinuxFacts(t, root, "web01")
-
-	f := &fakeTr{rc: 0}
-	var out, errB bytes.Buffer
-	rc := runWith(f, []string{"--result-format=json", "web01", "--", "true"}, &out, &errB)
-	if rc != 0 {
-		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
-	}
-	var env map[string]any
-	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
-		t.Fatalf("stdout is not one JSON object: %v\n%s", err, out.String())
-	}
-	if env["schema_version"] != "v1" {
-		t.Fatalf("schema_version=%v", env["schema_version"])
-	}
-	runs, _ := env["runs"].([]any)
-	if len(runs) != 1 {
-		t.Fatalf("len(runs)=%d", len(runs))
-	}
-	r0, _ := runs[0].(map[string]any)
-	if r0["host"] != "web01" || r0["exit"].(float64) != 0 {
-		t.Fatalf("runs[0]=%v", r0)
-	}
-	if strings.Contains(out.String(), "tail3:") {
-		t.Fatalf("human tail3 leaked into JSON: %s", out.String())
-	}
-	if r0["sha256"] == "" {
-		t.Fatal("sha256 empty on a successful run")
-	}
-}
-
-// TestRunResultFormatJSONFanOutMixed covers the fan-out --result-format=json
-// envelope rendering (Task 5 of aimem#767): three hosts producing one ok,
-// one non-zero exit, and one transport error all land in a single envelope
-// whose summary, runs[] (in argv order), and exit code are derived from
-// the per-host Metas alone, with no human passport/aggregate lines leaking
-// into stdout.
-func TestRunResultFormatJSONFanOutMixed(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("SSHAI_ROOT", root)
-	seedLinuxFacts(t, root, "h1", "h2", "h3")
-
-	f := &multiHostTr{
-		rcs:          map[string]int{"h1": 0, "h2": 1},
-		transportErr: map[string]string{"h3": "ssh"},
-	}
-	var out, errB bytes.Buffer
-	rc := runWith(f, []string{"--result-format=json", "h1", "h2", "h3", "--", "true"}, &out, &errB)
-	if rc != exitTransport {
-		t.Fatalf("rc=%d, want %d; stderr=%s", rc, exitTransport, errB.String())
-	}
-	var env map[string]any
-	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
-		t.Fatalf("stdout not one JSON object: %v", err)
-	}
-	sum, _ := env["summary"].(map[string]any)
-	if sum["hosts"].(float64) != 3 || sum["ok"].(float64) != 1 ||
-		sum["failed"].(float64) != 1 || sum["transport_errors"].(float64) != 1 ||
-		sum["policy_denied"].(float64) != 0 || sum["worst_exit"].(float64) != 1 {
-		t.Fatalf("summary=%v", sum)
-	}
-	runs, _ := env["runs"].([]any)
-	if len(runs) != 3 {
-		t.Fatalf("len(runs)=%d, want 3", len(runs))
-	}
-	// runs[] must be in argv order.
-	for i, host := range []string{"h1", "h2", "h3"} {
-		r, _ := runs[i].(map[string]any)
-		if r["host"] != host {
-			t.Fatalf("runs[%d] host=%v, want %s (argv order)", i, r["host"], host)
-		}
-	}
-	if strings.Contains(out.String(), "hosts=3") {
-		t.Fatalf("human aggregate line leaked into JSON: %s", out.String())
-	}
-}
-
-// Non-zero remote exit: envelope carries exit, summary.failed=1.
-func TestRunResultFormatJSONNonZeroExit(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("SSHAI_ROOT", root)
-	seedLinuxFacts(t, root, "web01")
-	f := &fakeTr{rc: 2}
-	var out, errB bytes.Buffer
-	rc := runWith(f, []string{"--result-format=json", "web01", "--", "exit 2"}, &out, &errB)
-	if rc != 2 {
-		t.Fatalf("rc=%d, want 2", rc)
-	}
-	var env map[string]any
-	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
-		t.Fatalf("not JSON: %v", err)
-	}
-	sum, _ := env["summary"].(map[string]any)
-	r0, _ := env["runs"].([]any)[0].(map[string]any)
-	if sum["failed"].(float64) != 1 || r0["exit"].(float64) != 2 {
-		t.Fatalf("summary=%v runs[0].exit=%v", sum, r0["exit"])
-	}
-}
-
-// Transport error: envelope carries transport_error=ssh, exit 0, empty
-// artifact (bytes 0) still with a saved artifact_path.
-func TestRunResultFormatJSONTransportError(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("SSHAI_ROOT", root)
-	seedLinuxFacts(t, root, "web01")
-	f := &probeFailsTr{}
-	var out, errB bytes.Buffer
-	rc := runWith(f, []string{"--result-format=json", "web01", "--", "true"}, &out, &errB)
-	if rc != exitTransport {
-		t.Fatalf("rc=%d, want %d", rc, exitTransport)
-	}
-	var env map[string]any
-	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
-		t.Fatalf("not JSON: %v", err)
-	}
-	r0, _ := env["runs"].([]any)[0].(map[string]any)
-	if r0["transport_error"] != "ssh" || r0["exit"].(float64) != 0 {
-		t.Fatalf("runs[0]=%v", r0)
-	}
-	ap, _ := r0["artifact_path"].(string)
-	if ap == "" {
-		t.Fatal("artifact_path empty on transport error")
-	}
-	sum, _ := env["summary"].(map[string]any)
-	if sum["transport_errors"].(float64) != 1 {
-		t.Fatalf("summary=%v", sum)
-	}
-}
-
-// Malformed/unavailable artifact -> Store.Save failure: no JSON envelope,
-// human fallback, exit 96. Simulated by corrupting the config to force a
-// Save failure is not feasible; instead inject via a Store wrapper is not
-// possible (runArgs builds its own Store). So assert the policy-denied path
-// (which also has m==nil but rc==exitPolicy, NOT exitUsage) and rely on the
-// save-failure branch being covered by the code path where rc==exitUsage is
-// never returned with m==nil except by a genuine Save failure — the unit
-// coverage for that specific injection lives in a focused test below.
-func TestRunResultFormatJSONPolicyDenied(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("SSHAI_ROOT", root)
-	toml := "[hosts.web01]\nreadonly = true\n"
-	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte(toml), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var out, errB bytes.Buffer
-	rc := runWith(&fakeTr{}, []string{"--result-format=json", "web01", "--", "rm", "-rf", "/tmp/x"}, &out, &errB)
-	if rc != exitPolicy {
-		t.Fatalf("rc=%d, want %d", rc, exitPolicy)
-	}
-	var env map[string]any
-	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
-		t.Fatalf("not JSON: %v", err)
-	}
-	sum, _ := env["summary"].(map[string]any)
-	runs, _ := env["runs"].([]any)
-	if sum["policy_denied"].(float64) != 1 || sum["hosts"].(float64) != 1 || len(runs) != 0 {
-		t.Fatalf("summary=%v runs=%v", sum, runs)
-	}
-}
-
-// Path with spaces: artifact_path round-trips through JSON with the space
-// intact and resolves to the saved artifact file.
-func TestRunResultFormatJSONPathWithSpaces(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "with space", "sshai")
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("SSHAI_ROOT", root)
-	seedLinuxFacts(t, root, "web01")
-	f := &fakeTr{rc: 0}
-	var out, errB bytes.Buffer
-	if rc := runWith(f, []string{"--result-format=json", "web01", "--", "true"}, &out, &errB); rc != 0 {
-		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
-	}
-	var env map[string]any
-	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
-		t.Fatalf("not JSON: %v", err)
-	}
-	r0, _ := env["runs"].([]any)[0].(map[string]any)
-	ap, _ := r0["artifact_path"].(string)
-	if !strings.Contains(ap, "with space") {
-		t.Fatalf("artifact_path missing space: %q", ap)
-	}
-	if _, err := os.ReadFile(ap); err != nil {
-		t.Fatalf("artifact_path does not resolve: %v", err)
-	}
-}
-func TestRunResultFormatJSONBodyFileBoundary(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("SSHAI_ROOT", root)
-	seedLinuxFacts(t, root, "web01")
-	body := "printf 'SECRET_TOKEN_XYZ\\n'\n"
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.WriteString(body); err != nil {
-		t.Fatal(err)
-	}
-	w.Close()
-	os.Stdin = r
-	defer func() { os.Stdin = os.NewFile(0, os.DevNull) }()
-	f := &fakeTr{rc: 0}
-	var out, errB bytes.Buffer
-	rc := runWith(f, []string{"--result-format=json", "--body-file", "-", "web01"}, &out, &errB)
-	if rc != 0 {
-		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
-	}
-	var env map[string]any
-	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
-		t.Fatalf("not JSON: %v", err)
-	}
-	r0, _ := env["runs"].([]any)[0].(map[string]any)
-	cmd, _ := r0["command"].(string)
-	if !strings.HasPrefix(cmd, "body:") {
-		t.Fatalf("command=%q, want body:<sha256>[:16]", cmd)
-	}
-	if strings.Contains(out.String(), "SECRET_TOKEN_XYZ") {
-		t.Fatalf("body text leaked into envelope: %s", out.String())
-	}
-}
-
-// --result-out writes identical bytes to stdout to the file, mode 0600.
-func TestRunResultFormatJSONResultOutToFile(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("SSHAI_ROOT", root)
-	seedLinuxFacts(t, root, "web01")
-	f := &fakeTr{rc: 0}
-	outFile := filepath.Join(t.TempDir(), "result.json")
-	var out, errB bytes.Buffer
-	rc := runWith(f, []string{"--result-format=json", "--result-out", outFile, "web01", "--", "true"}, &out, &errB)
-	if rc != 0 {
-		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
-	}
-	data, err := os.ReadFile(outFile)
-	if err != nil {
-		t.Fatalf("read result-out: %v", err)
-	}
-	if string(data) != out.String() {
-		t.Fatalf("result-out != stdout\nstdout: %s\nfile: %s", out.String(), data)
-	}
-	if fi, _ := os.Stat(outFile); fi.Mode().Perm() != 0o600 {
-		t.Fatalf("mode=%o, want 600", fi.Mode().Perm())
-	}
-}
-
-// Existing --result-out files are tightened to the documented private mode
-// before the envelope is appended.
-func TestRunResultFormatJSONResultOutExistingFileMode(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("SSHAI_ROOT", root)
-	seedLinuxFacts(t, root, "web01")
-	outFile := filepath.Join(t.TempDir(), "result.json")
-	if err := os.WriteFile(outFile, []byte("existing\n"), 0o644); err != nil {
-		t.Fatalf("seed result-out: %v", err)
-	}
-	if err := os.Chmod(outFile, 0o644); err != nil {
-		t.Fatalf("chmod result-out: %v", err)
-	}
-
-	var out, errB bytes.Buffer
-	rc := runWith(&fakeTr{rc: 0}, []string{"--result-format=json", "--result-out", outFile, "web01", "--", "true"}, &out, &errB)
-	if rc != 0 {
-		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
-	}
-	fi, err := os.Stat(outFile)
-	if err != nil {
-		t.Fatalf("stat result-out: %v", err)
-	}
-	if fi.Mode().Perm() != 0o600 {
-		t.Fatalf("mode=%o, want 600", fi.Mode().Perm())
-	}
-}
-
-// Symlink result-out targets are refused rather than followed.
-func TestRunResultFormatJSONResultOutSymlinkRefused(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("SSHAI_ROOT", root)
-	seedLinuxFacts(t, root, "web01")
-	target := filepath.Join(t.TempDir(), "target.json")
-	link := filepath.Join(t.TempDir(), "result.json")
-	if err := os.WriteFile(target, []byte("untouched\n"), 0o600); err != nil {
-		t.Fatalf("seed target: %v", err)
-	}
-	if err := os.Symlink(target, link); err != nil {
-		t.Fatalf("symlink result-out: %v", err)
-	}
-	var out, errB bytes.Buffer
-	rc := runWith(&fakeTr{rc: 0}, []string{"--result-format=json", "--result-out", link, "web01", "--", "true"}, &out, &errB)
-	if rc != exitUsage {
-		t.Fatalf("rc=%d, want %d", rc, exitUsage)
-	}
-	data, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatalf("read target: %v", err)
-	}
-	if string(data) != "untouched\n" {
-		t.Fatalf("symlink target modified: %q", data)
-	}
-}
-
-// --result-out on a directory refuses with exitUsage.
-func TestRunResultFormatJSONResultOutDirRefused(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("SSHAI_ROOT", root)
-	seedLinuxFacts(t, root, "web01")
-	dir := t.TempDir()
-	var out, errB bytes.Buffer
-	rc := runWith(&fakeTr{}, []string{"--result-format=json", "--result-out", dir, "web01", "--", "true"}, &out, &errB)
-	if rc != exitUsage {
-		t.Fatalf("rc=%d, want %d", rc, exitUsage)
-	}
-}
-
-// Human mode byte-equivalence: default output (no flag) equals explicit
-// --result-format=human on the same inputs. Each runWith invocation
-// assigns fresh artifact IDs and a fresh artifact subdirectory under
-// SSHAI_ROOT, so the comparison normalizes those before checking that
-// the surrounding format (status-line shape, aggregate line, body
-// layout) is byte-identical.
-func TestRunResultFormatHumanModeByteEquivalent(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("SSHAI_ROOT", root)
-	seedLinuxFacts(t, root, "h1", "h2")
-	f := &multiHostTr{rcs: map[string]int{"h1": 0, "h2": 5}}
-	run := func(extra string) string {
-		args := []string{"h1", "h2", "--", "true"}
-		if extra != "" {
-			args = append([]string{extra}, args...)
-		}
-		var out, errB bytes.Buffer
-		if rc := runWith(f, args, &out, &errB); rc != 5 {
-			t.Fatalf("rc=%d", rc)
-		}
-		return out.String()
-	}
-	timeRe := regexp.MustCompile(`time=[0-9.]+(?:ms|s)`)
-	normalize := func(s string) string {
-		lines := strings.Split(s, "\n")
-		for i, line := range lines {
-			if strings.HasPrefix(line, "file=") {
-				lines[i] = "file=<path>"
-				continue
-			}
-			// Replace leading "a1234 " artifact IDs on status lines with "aN ".
-			idx := strings.IndexByte(line, ' ')
-			if idx <= 1 || line[0] != 'a' {
-				continue
-			}
-			allDigits := true
-			for _, c := range line[1:idx] {
-				if c < '0' || c > '9' {
-					allDigits = false
-					break
-				}
-			}
-			if allDigits {
-				// Also mask wall-clock duration ("time=12ms", "time=1.8s") — the
-				// same command can report different durations across runs, which
-				// would otherwise flake this byte-equivalence check. Matches the
-				// exact shapes artifact.HumanDuration emits.
-				lines[i] = timeRe.ReplaceAllString("aN"+line[idx:], "time=X")
-			}
-		}
-		return strings.Join(lines, "\n")
-	}
-	if normalize(run("")) != normalize(run("--result-format=human")) {
-		t.Fatal("explicit --result-format=human differs from default output")
-	}
-}
-
-// TestRunResultFormatJSONSaveFailure covers the single-host Save-failure
-// fallback (Task 4 of aimem#767, acceptance criterion "malformed/unavailable
-// artifact"): when Store.Save cannot write its artifact file, runArgs must
-// not emit any JSON envelope (the run-count-vs-hosts invariant cannot hold
-// for a save-failed host), must surface the Save error on stderr with the
-// existing "run: save artifact:" prefix runHost already prints, and must
-// exit exitUsage (96). The fallback is injected by opening a real Store on
-// a t.TempDir() root and then chmod 0o500 on <root>/art so any
-// artifact-file write inside it fails with EACCES — the same EACCES Save
-// would see in production if <root>/art were unwritable. runArgs's own
-// Store injection point is runWithStore, which mirrors the existing
-// runWith transport seam; with store != nil, runArgsWithStore skips its
-// own OpenStore / Close so the test holds the lifetime.
-func TestRunResultFormatJSONSaveFailure(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("SSHAI_ROOT", root)
-	seedLinuxFacts(t, root, "web01")
-
-	store, err := artifact.OpenStore(root)
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	t.Cleanup(func() {
-		// Restore write permission so t.TempDir's automatic cleanup can
-		// remove <root>/art; without this the dir is left behind on some
-		// filesystems (and any post-test debugging is harder).
-		_ = os.Chmod(filepath.Join(root, "art"), 0o700)
-		store.Close()
-	})
-	if err := os.Chmod(filepath.Join(root, "art"), 0o500); err != nil {
-		t.Fatalf("chmod art: %v", err)
-	}
-
-	f := &fakeTr{rc: 0}
-	var out, errB bytes.Buffer
-	rc := runWithStore(f, store, []string{"--result-format=json", "web01", "--", "true"}, &out, &errB)
-	if rc != exitUsage {
-		t.Fatalf("rc=%d, want %d; stdout=%q stderr=%q", rc, exitUsage, out.String(), errB.String())
-	}
-	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), new(map[string]any)); err == nil {
-		t.Fatalf("expected no JSON envelope on stdout, got %q", out.String())
-	}
-	if !strings.Contains(errB.String(), "run: save artifact:") {
-		t.Fatalf("stderr missing the save-artifact diagnostic: %q", errB.String())
-	}
-}
-
-// TestRunResultFormatJSONFanOutSaveFailure covers the fan-out Save-failure
-// branch in runFanout: any host whose Store.Save fails trips the
-// saveFailed flag for the whole invocation (the envelope's run-count
-// invariant cannot hold), runFanout flushes the per-host human passports
-// and prints the human aggregate line in place of the envelope, and the
-// process exits exitUsage (96). Since runFanout shares one Store across
-// every goroutine, chmod 0o500 on <root>/art fails Save for every host;
-// that is sufficient to exercise the branch — the same code path also
-// covers the "only one host's Save failed" shape (the flag is a single
-// OR over all hosts, not per-host), so this test asserts that fan-out
-// save-failure path end to end.
-func TestRunResultFormatJSONFanOutSaveFailure(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("SSHAI_ROOT", root)
-	seedLinuxFacts(t, root, "h1", "h2")
-
-	store, err := artifact.OpenStore(root)
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.Chmod(filepath.Join(root, "art"), 0o700)
-		store.Close()
-	})
-	if err := os.Chmod(filepath.Join(root, "art"), 0o500); err != nil {
-		t.Fatalf("chmod art: %v", err)
-	}
-
-	f := &multiHostTr{rcs: map[string]int{"h1": 0, "h2": 0}}
-	var out, errB bytes.Buffer
-	rc := runWithStore(f, store, []string{"--result-format=json", "h1", "h2", "--", "true"}, &out, &errB)
-	if rc != exitUsage {
-		t.Fatalf("rc=%d, want %d; stdout=%q stderr=%q", rc, exitUsage, out.String(), errB.String())
-	}
-	s := out.String()
-	if !strings.Contains(s, "hosts=2 ok=0 failed=2 transport-errors=0") {
-		t.Fatalf("human aggregate line missing or wrong: %q", s)
-	}
-	if !strings.Contains(errB.String(), "run: save artifact:") {
-		t.Fatalf("stderr missing the save-artifact diagnostic: %q", errB.String())
-	}
-}
-
-func TestRunResultFormatJSONFanoutInvariant(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("SSHAI_ROOT", root)
-	seedLinuxFacts(t, root, "h1", "h2")
-	toml := "[hosts.h2]\nreadonly = true\n"
-	if err := os.WriteFile(filepath.Join(root, "config.toml"), []byte(toml), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	f := &multiHostTr{rcs: map[string]int{"h1": 0}}
-	var out, errB bytes.Buffer
-	rc := runWith(f, []string{"--result-format=json", "h1", "h2", "--", "true"}, &out, &errB)
-	if rc != exitPolicy {
-		t.Fatalf("rc=%d, want %d", rc, exitPolicy)
-	}
-	var env map[string]any
-	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
-		t.Fatalf("not JSON: %v", err)
-	}
-	sum, _ := env["summary"].(map[string]any)
-	runs, _ := env["runs"].([]any)
-	hosts := int(sum["hosts"].(float64))
-	denied := int(sum["policy_denied"].(float64))
-	if len(runs) != hosts-denied {
-		t.Fatalf("len(runs)=%d != hosts(%d)-policy_denied(%d)", len(runs), hosts, denied)
 	}
 }

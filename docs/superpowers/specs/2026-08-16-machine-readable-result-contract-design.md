@@ -42,28 +42,22 @@ Adapters that need the run's metadata (run id, host, exit, artifact path, counts
 | Flag shape | `--result-format=human\|json` (enum, default `human`) | `--json` boolean (locks a second format behind another flag); per-flag `human-passport/json-passport/...` (overfits the schema's name to its transport) |
 | Fan-out envelope | One document per `sshai run` invocation: top-level `runs: [...]` in argv order + `summary` counters | NDJSON (one envelope per host, line-by-line) — conflicts with the acceptance criterion's "one bounded document" |
 | Schema versioning | Literal `"schema_version": "v1"`; `vN` literal only — new flag value `json-v2` may be added later in `result-format` for breaking changes | SemVer `"1.0.0"` (over-precise; the field exists so adapters know when to switch parsers, not to negotiate additively) |
-| Companion file flag | `--result-out <path>` writes the same envelope bytes to disk (mode `0600`, `O_APPEND|O_CREATE`) after stdout, only meaningful with `--result-format=json` | None — a small, mechanical addition that helps processes that prefer file handoffs |
+| Companion file flag | `--result-out <path>` atomically replaces one regular destination with the same envelope bytes plus newline (mode `0600`), refusing symlinks and other non-regular paths | None — a small, mechanical addition that helps processes that prefer file handoffs |
 | Field naming | `snake_case` keys derived verbatim from `artifact.Meta` plus top-level `schema_version`, `batch_id`, `summary` | Human-friendly aliases (`error_reason`, `duration`) — duplicates the source of truth and invites drift |
 | Body excerpt in envelope | None. `tail3` / delta body / pipe advisory / fan-out aggregate line all suppressed on stdout in JSON mode | Inline last-N lines — violates "Do not expose ... broad raw output" |
 | Field for run id | `runs[].id` is the existing artifact autoincrement id (`Meta.ID`); a separate `batch_id` at the top level correlates fan-out | A new UUID per host — collides with the persisted artifact id the agent is already using as the index into `sshai q`/`diff`/`log` |
-| Body-file boundary | Inherited from `metaCommand`: `--body-file` / `--body-file -` bodies become `"body:<sha256hex>[:16]"` in `runs[].command` automatically | A second-pass redactor — the boundary already lives next to the data it protects |
+| Body-file boundary | Inherited from `deltaKeyCommand`: `--body-file` / `--body-file -` bodies become `"body:<sha256hex>[:16]"` in `runs[].command` automatically | A second-pass redactor — the boundary already lives next to the data it protects |
 | Default behavior on `Save` failure in JSON mode | Skip the envelope, fall through to the existing human passport path, exit `exitUsage` | Emit a partial envelope (`runs.length < summary.hosts - summary.policy_denied`) — violates the run-count-vs-hosts invariant |
 | Default behavior on `--result-out` without `--result-format=json` | `exitUsage` + stderr note: `--result-out requires --result-format=json` | Honor the file and write the human passport there — surprising, undocumented |
 | Mixed mode (human + JSON on one stream) | Forbidden. JSON mode writes exactly one JSON object to stdout, nothing else | Interleaved — violates "machine-readable output is not mixed" |
 
 ## Architecture
 
-A single new helper, `artifact.RenderResult`, takes a slice of `Meta` (one per host, already in argv order) plus a `Summary` and returns the JSON bytes for the v1 envelope. The three current stdout write sites in `internal/cli/run.go` route through it:
+`artifact.RenderResult` takes saved `Meta` values in argv order plus a `Summary` and returns the JSON bytes for the v1 envelope. `runArgs` parses `--result-format` and `--result-out` once as invocation-level options; per-host `Opts` contains only execution state.
 
-| Site | Path | Today | After |
-|---|---|---|---|
-| `runHost:747` | success path, single host | `fmt.Fprintln(stdout, RenderPassport(...))` | If `opts.RenderFormat == json`: append to a per-host envelope buffer; else unchanged |
-| `handleTransportError:786` | single-host transport failure | `fmt.Fprintln(stdout, RenderPassport(...))` | Same gate — transport errors are still a valid run with `transport_error != ""`, included in the envelope |
-| `runFanout:365-406` | per-host passports + aggregate line | write each `bytes.Buffer`, then `fmt.Fprintf(stdout, "hosts=%d ok=%d ...")` | Each goroutine still fills its per-host `bytes.Buffer` (no shared mutable state, today's pattern); on `wg.Wait`, aggregate counters are recomputed from `Meta` (same algorithm as today) and `RenderResult` is called once for the whole fan-out |
+Both a single host and fan-out enter `runInvocation`. Each worker writes human stdout/stderr into its own `hostRunResult` buffers and returns a typed `RunOutcome`. After every worker completes, one `writeRunResults` controller owns deterministic stderr flushing, human fallback, aggregation, JSON rendering, exit precedence, and optional side-file publication. Human mode renders an aggregate line only when the invocation has more than one host.
 
-`runArgs` parses `--result-format` and `--result-out` once and threads them into `Opts`. `runFanout` already owns the per-host-buffer pattern that makes a single end-of-invocation write trivial — the JSON envelope is just a different renderer consuming the same buffer slice.
-
-The classification loop in `runFanout:387-403` (which scans each host's first line for `transport-error=`, the literal `policy-denied` line, or a numeric exit) is preserved verbatim for human mode. For JSON mode the same counters are rebuilt from `Meta` directly:
+`RunOutcome` distinguishes success, remote non-zero, transport failure, policy denial, and unsaved internal failure without interpreting `nil Meta` plus a numeric return code. JSON summaries are computed from these typed outcomes:
 
 - `transport_errors` = count of hosts where `Meta.TransportErr != ""`
 - `failed` = count of hosts with `TransportErr == ""` and `Meta.Exit != 0`
@@ -71,9 +65,9 @@ The classification loop in `runFanout:387-403` (which scans each host's first li
 - `worst_exit` = `max(Meta.Exit)` over hosts where `TransportErr == ""` (0 if none)
 - `policy_denied` = count of hosts that were denied before running
 
-A policy-denied host is **not** in `runs[]` — that path returns `exitPolicy` from `runHost:513-523` before `Store.Save` is ever called, so no `Meta` and no artifact exists for it. It is surfaced only via the `summary.policy_denied` counter (and the process exit `exitPolicy`), so the adapter still learns which host was denied without the envelope fabricating a result that never happened. This preserves the invariant that every `runs[]` entry has a real saved artifact.
+A policy-denied host is **not** in `runs[]` because no `Meta` or artifact exists for it. It is surfaced only via `summary.policy_denied` and process exit `exitPolicy`. An unsaved internal failure suppresses the envelope and uses the existing human fallback with `exitUsage`, preserving the invariant that every `runs[]` entry has a real saved artifact.
 
-`batch_id` is a single `crypto/rand`-generated UUID-ish identifier (`a[0-9a-z]{32}` is fine; the field's only contract is "stable, unique per `sshai run` invocation") so a consumer receiving fan-out output can correlate the N `runs[]` entries. It is not persisted.
+`batch_id` is a single `crypto/rand`-generated `a` plus 32 lowercase hexadecimal characters; it correlates the `runs[]` entries from one invocation and is not persisted.
 
 ## Schema (v1)
 
@@ -157,7 +151,7 @@ The envelope is one JSON object on stdout, terminated by `\n`:
 ### `--result-out <path>`
 
 - Optional; only meaningful with `--result-format=json`.
-- When set in JSON mode: after the envelope has been written to stdout, the same bytes are written to `<path>` with `O_APPEND|O_CREATE|O_WRONLY`, mode `0600`. If `<path>` exists and is a regular file it is appended to (the envelope is then invalid JSON — enforce a fresh path per run by convention); if it is a directory or symlink-to-directory, refuse with `exitUsage`.
+- When set in JSON mode: after the envelope has been written to stdout, the same bytes plus a trailing newline are written to a same-directory temporary file with mode `0600`, synced, closed, and atomically renamed to `<path>`. Existing regular files are replaced; symlinks and other non-regular paths are refused.
 - When set in human mode: `exitUsage` + `run: --result-out requires --result-format=json`.
 - No `--result-out` in JSON mode: identical to today's behavior except for the envelope itself.
 
@@ -191,8 +185,8 @@ All tests live in `internal/cli/run_test.go` against the existing `fakeTr` (no n
 5. **`TestRunResultFormatJSONFanOutMixed`** — three hosts in argv order: one ok, one `ExitCode:1`, one `*transport.TransportError`. Assert: `len(runs) == 3` in argv order; `summary.hosts == 3`; `summary.ok == 1`; `summary.failed == 1`; `summary.transport_errors == 1`; `summary.policy_denied == 0`; `summary.worst_exit == 1`; each `runs[i].host` matches the corresponding argv host.
 6. **`TestRunResultFormatJSONPolicyDenied`** — one host whose command fails the readonly allowlist (`policy.CheckReadonly` returns an error). Assert: `len(runs) == 0`; `summary.hosts == 1`; `summary.policy_denied == 1`; `summary.ok == 0`; the envelope round-trips; the process exits `exitPolicy` (97); the envelope contains no fabricated `artifact_path`.
 7. **`TestRunResultFormatJSONPathWithSpaces`** — set `SSHAI_ROOT` to a `t.TempDir()` containing a space in the path (`/tmp/with space/.sshai`). Run a successful single host. Assert: the envelope round-trips through `json.Unmarshal`; `runs[0].artifact_path` contains the space; `runs[0].artifact_path` resolves via `os.ReadFile` to a non-empty result.
-8. **`TestRunResultFormatJSONBodyFileBoundary`** — pipe a 200-byte script into `sshai run --body-file - <host>` with `result-format=json`. Assert: `runs[0].command` equals `"body:<sha256hex>[:16]"`; the envelope, treated as a string, contains zero matches of three distinctive substrings taken from the script body; `audit.jsonl` likewise contains zero matches (`metaCommand` and `auditCommandPreview` already encode hash-only — assert the JSON inherits this).
-9. **`TestRunResultFormatJSONResultOutToFile`** — `--result-out <file>` with `result-format=json`. Assert: `os.Stat(file).Mode().Perm() == 0o600`; reading the file yields bytes identical to stdout; closing and re-running produces a second envelope appended (call out the convention that callers use a fresh path per invocation to keep the file a single-envelope artifact too — and add a test that `--result-out` on a directory path returns `exitUsage`).
+8. **`TestRunResultFormatJSONBodyFileBoundary`** — pipe a 200-byte script into `sshai run --body-file - <host>` with `result-format=json`. Assert: `runs[0].command` equals `"body:<sha256hex>[:16]"`; the envelope, treated as a string, contains zero matches of three distinctive substrings taken from the script body; `audit.jsonl` likewise contains zero matches (artifact command metadata and `auditCommandPreview` already encode hash-only — assert the JSON inherits this).
+9. **`TestRunResultFormatJSONResultOutToFile`** — `--result-out <file>` with `result-format=json`. Assert: `os.Stat(file).Mode().Perm() == 0o600`; reading the file yields bytes identical to stdout; reusing the path atomically replaces the previous document rather than appending; injected write/close failures leave the previous document unchanged and publish no temporary file; directory and symlink targets return `exitUsage`.
 10. **`TestRunResultFormatHumanModeByteEquivalent`** — freeze today's per-host passport and aggregate line against the existing `fakeTr` fixtures (commands `TestRunSingleHost*`, `TestRunFanout*`); rerun with `--result-format=human`; assert byte-equality. The whole point of the change is "default `human` is unchanged"; this is that guarantee.
 11. **`TestHelpRunDocumentsResultFormat`** — `internal/cli/help_test.go` flag-presence assertions grow by two: `--result-format` and `--result-out`. The detail block `helpDetail["run"]` is updated in lockstep.
 
@@ -224,11 +218,11 @@ English everywhere, matching the repo rule.
 
 ## Risks & edge cases
 
-- **Field-name drift.** `Meta` and the schema must agree. Mitigation: the schema's per-host keys are generated from `Meta` via a single helper (`metaForJSON(m Meta) map[string]any`) so any rename fails the helper's table-driven test in `internal/artifact/result_test.go`. Field names then stay frozen.
+- **Field-name drift.** `Meta` and the schema must agree. Mitigation: `artifact.RenderResult` maps each `Meta` into one typed `runEntry` whose explicit JSON tags are locked by `internal/artifact/result_test.go`.
 - **Goroutine safety.** Per-host `Meta` records are read-only after `wg.Wait`; identical to today's human fan-out. No new shared mutable state.
-- **`--result-out` collisions.** Symlink-to-directory, existing directory, permission mismatch. Mitigation: pre-stat with `os.Lstat`; refuse with `exitUsage` on any non-regular-file path; create with `O_APPEND|O_CREATE|O_WRONLY` and `0o600`; never follow a symlink (`O_NOFOLLOW` if available; falling back to `Lstat` re-check after open).
+- **`--result-out` collisions.** Symlink, existing directory, and other non-regular targets are refused with `exitUsage`; existing regular files are atomically replaced. The complete document is written to a same-directory `0600` temporary file, synced, closed, then renamed, so write/close failures cannot publish partial JSON.
 - **Marshal performance.** `Meta` is O(100 bytes); envelope is O(hosts). Worst-case fan-out (say 200 hosts) is still O(KB); unmarshalling is well under a millisecond per call. Not a concern.
-- **Out-of-order `runs[]`.** The pre-decision is `runs[]` is argv order. The fan-out classification loop is preserved; failure to preserve order is caught by an explicit positional assertion in `TestRunResultFormatJSONFanOutMixed`.
+- **Out-of-order `runs[]`.** `runInvocation` stores every `hostRunResult` by argv index; failure to preserve order is caught by explicit positional assertions in `TestRunResultFormatJSONFanOutMixed` and `TestRenderResultEnvelopePreservesOutcomeOrder`.
 - **`--delta` interaction.** The `runs[].delta_base` field is the only envelope surface for delta; the body diff is human-passport territory and is suppressed in JSON. Adapters that want the diff call `sshai diff <delta_base> <runs[i].id>`. Documented in the example.
 - **Runlog, audit.jsonl.** Untouched. `Meta.Command` already encodes `body:<sha256hex>[:16]` for body-file runs; the envelope inherits this. `auditCommandPreview` already does the same for the audit log.
 
