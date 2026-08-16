@@ -239,13 +239,19 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 			// it (normal JSON success).
 			var human bytes.Buffer
 			rc, m := runHost(deps, opts, &human, stderr)
-			if m == nil && rc == exitUsage {
-				// Save failed: the envelope invariant (len(runs)==summary.hosts-
-				// summary.policy_denied) cannot hold, so fall back to the human
-				// output runHost already rendered.
+			if m == nil && rc != exitPolicy {
+				// No saved Meta and not a policy denial: a Store.Save failure
+				// (exitUsage) or a transport error whose own Save failed
+				// (exitTransport) — in either case the envelope invariant
+				// (len(runs)==summary.hosts-summary.policy_denied) cannot hold,
+				// so no envelope is emitted and we exit exitUsage. runHost
+				// wrote only a stderr diagnostic on these paths (no stdout
+				// passport), so the human buffer is empty — we replicate the
+				// pre-existing human behavior exactly (stderr already carries
+				// the diagnostic from runHost).
 				stdout.Write(human.Bytes())
 				maybeGC(deps.Store, cfg, stderr, protectSet(""))
-				return rc
+				return exitUsage
 			}
 			summary, metas := singleHostSummaryAndRuns(m, rc)
 			env := artifact.RenderResult(cfg.Root, metas, summary, newBatchID())
