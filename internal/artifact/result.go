@@ -66,7 +66,7 @@ func RenderResult(root string, metas []Meta, summary Summary, batchID string) []
 			Lines:          m.Lines,
 			SHA256:         m.SHA256,
 			DurationMs:     m.DurationMs,
-			Ts:             m.Ts.Format(time.RFC3339Nano),
+			Ts:             m.Ts.UTC().Format(time.RFC3339Nano),
 			Truncated:      m.Truncated,
 			Binary:         m.Binary,
 			DeltaBase:      m.DeltaBase,

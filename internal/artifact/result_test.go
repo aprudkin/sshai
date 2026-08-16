@@ -11,7 +11,9 @@ import (
 // invariants, and the empty-string-not-omitted contract. A consumer decodes
 // straight into typed structs, so any drift here is a breaking change.
 func TestRenderResultSchemaShape(t *testing.T) {
-	ts := time.Date(2026, 8, 16, 12, 34, 56, 789000000, time.UTC)
+	// A non-UTC zone on purpose: the design mandates ts in UTC, so the
+	// fixture must catch a missing .UTC() normalization.
+	ts := time.Date(2026, 8, 16, 12, 34, 56, 789000000, time.FixedZone("CEST", 2*3600))
 	metas := []Meta{
 		{
 			ID: "a17", Host: "pg-prod-01", Ctx: "default", Command: "df -h",
@@ -61,9 +63,10 @@ func TestRenderResultSchemaShape(t *testing.T) {
 	if r1["exit"].(float64) != 0 {
 		t.Fatalf("runs[1] exit must be 0 when transport_error set, got %v", r1["exit"])
 	}
-	// ts must be RFC3339Nano.
-	if r0["ts"] != "2026-08-16T12:34:56.789Z" {
-		t.Fatalf("ts=%v, want RFC3339Nano", r0["ts"])
+	// ts must be RFC3339Nano, normalized to UTC: 12:34:56.789 +0200
+	// normalizes to 10:34:56.789Z.
+	if r0["ts"] != "2026-08-16T10:34:56.789Z" {
+		t.Fatalf("ts=%v, want RFC3339Nano in UTC", r0["ts"])
 	}
 }
 
