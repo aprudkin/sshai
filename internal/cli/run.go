@@ -3,7 +3,6 @@ package cli
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -13,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,16 +47,14 @@ type Deps struct {
 // Opts holds one host's resolved run parameters, after flag parsing and
 // ctx/host validation.
 type Opts struct {
-	Host         string
-	Ctx          string
-	Command      string // the actual body run on the host (bash or pwsh)
-	FromFile     bool   // true when Command came from --body-file/stdin rather than "-- words"
-	Readonly     bool
-	Delta        bool // --delta: diff against the previous run of the same (host, ctx, command) key
-	Budget       int
-	Timeout      time.Duration
-	RenderFormat string // "human" or "json" (default "human")
-	ResultOut    string // path for the JSON envelope side-file; "" = none
+	Host     string
+	Ctx      string
+	Command  string // the actual body run on the host (bash or pwsh)
+	FromFile bool   // true when Command came from --body-file/stdin rather than "-- words"
+	Readonly bool
+	Delta    bool // --delta: diff against the previous run of the same (host, ctx, command) key
+	Budget   int
+	Timeout  time.Duration
 }
 
 // ctxRe is the safe charset for --ctx: no "/" (so a ctx value can never
@@ -246,102 +242,30 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 
 	deps := Deps{Tr: tr, Store: store}
 
-	// Single-host path: JSON-aware (Task 4 of aimem#767). On `--result-format=json`
-	// we render the v1 envelope to stdout (and --result-out) and discard the
-	// human passport runHost produced; a Save failure (runHost's m == nil
-	// with rc == exitUsage) is the one case where the envelope invariant
-	// can't hold, so we fall back to the human output. A non-JSON
-	// RenderFormat, including "" (existing tests build Opts without
-	// RenderFormat), keeps the previous human path.
-	if len(hosts) == 1 {
-		host := hosts[0]
-		opts := Opts{
-			Host:         host,
-			Ctx:          ctx,
-			Command:      command,
-			FromFile:     fromFile,
-			Readonly:     cfg.Hosts[host].Readonly,
-			Delta:        *wantDelta,
-			Budget:       budgetTokens,
-			Timeout:      timeout,
-			RenderFormat: *resultFormat,
-			ResultOut:    *resultOut,
-		}
-
-		if opts.RenderFormat == "json" {
-			// Capture the human passport (and any policy-denied line) into a
-			// buffer so we can either fall back to it (save-failure) or discard
-			// it (normal JSON success).
-			var human bytes.Buffer
-			rc, m := runHost(deps, opts, &human, stderr)
-			if m == nil && rc != exitPolicy {
-				// No saved Meta and not a policy denial: a Store.Save failure
-				// (exitUsage) or a transport error whose own Save failed
-				// (exitTransport) — in either case the envelope invariant
-				// (len(runs)==summary.hosts-summary.policy_denied) cannot hold,
-				// so no envelope is emitted and we exit exitUsage. runHost
-				// wrote only a stderr diagnostic on these paths (no stdout
-				// passport), so the human buffer is empty — we replicate the
-				// pre-existing human behavior exactly (stderr already carries
-				// the diagnostic from runHost).
-				stdout.Write(human.Bytes())
-				maybeGC(deps.Store, cfg, stderr, protectSet(""))
-				return exitUsage
-			}
-			summary, metas := singleHostSummaryAndRuns(m, rc)
-			env := artifact.RenderResult(cfg.Root, metas, summary, newBatchID())
-			// Write the envelope to stdout BEFORE attempting --result-out:
-			// a successful run's envelope must reach stdout even if the
-			// side-file write later fails (otherwise a bad --result-out
-			// path would discard a perfectly good result). The envelope
-			// was already written to stdout by the caller (writeResultOut's
-			// own contract).
-			stdout.Write(env)
-			stdout.Write([]byte("\n"))
-			if code := writeResultOut(opts.ResultOut, env, stderr); code != 0 {
-				return code
-			}
-
-			id := ""
-			if m != nil {
-				id = m.ID
-			}
-			maybeGC(deps.Store, cfg, stderr, protectSet(id))
-			return rc
-		}
-
-		// Human mode: unchanged.
-		rc, m := runHost(deps, opts, stdout, stderr)
-		id := ""
-		if m != nil {
-			id = m.ID
-		}
-		maybeGC(deps.Store, cfg, stderr, protectSet(id))
-		return rc
+	perHostBudget := budgetTokens
+	if len(hosts) > 1 {
+		perHostBudget = fanoutBudget(budgetTokens, len(hosts))
 	}
-
-	perHostBudget := fanoutBudget(budgetTokens, len(hosts))
 	hostOpts := make([]Opts, len(hosts))
 	for i, host := range hosts {
 		hostOpts[i] = Opts{
-			Host:         host,
-			Ctx:          ctx,
-			Command:      command,
-			FromFile:     fromFile,
-			Readonly:     cfg.Hosts[host].Readonly,
-			Delta:        *wantDelta,
-			Budget:       perHostBudget,
-			Timeout:      timeout,
-			RenderFormat: *resultFormat,
-			ResultOut:    *resultOut,
+			Host:     host,
+			Ctx:      ctx,
+			Command:  command,
+			FromFile: fromFile,
+			Readonly: cfg.Hosts[host].Readonly,
+			Delta:    *wantDelta,
+			Budget:   perHostBudget,
+			Timeout:  timeout,
 		}
 	}
-	rc, metas := runFanout(deps, hostOpts, stdout, stderr)
-	ids := make([]string, len(metas))
-	for i, m := range metas {
-		if m != nil {
-			ids[i] = m.ID
-		}
+	rc, outcomes := runInvocation(deps, hostOpts, resultModeOptions{
+		format:    *resultFormat,
+		resultOut: *resultOut,
+	}, stdout, stderr)
+	ids := make([]string, len(outcomes))
+	for i, outcome := range outcomes {
+		ids[i] = outcome.ArtifactID()
 	}
 	maybeGC(deps.Store, cfg, stderr, protectSet(ids...))
 	return rc
@@ -362,131 +286,9 @@ func protectSet(ids ...string) map[string]bool {
 	return protect
 }
 
-// singleHostSummaryAndRuns maps one runHost outcome to the v1 summary and
-// runs slice. m is nil for a policy-denied host (no Save happened) — that
-// host is surfaced only via summary.policy_denied, absent from runs.
-func singleHostSummaryAndRuns(m *artifact.Meta, rc int) (artifact.Summary, []artifact.Meta) {
-	summary := artifact.Summary{Hosts: 1}
-	if m == nil {
-		if rc == exitPolicy {
-			summary.PolicyDenied = 1
-		}
-		return summary, nil
-	}
-	switch {
-	case m.TransportErr != "":
-		summary.TransportErrors = 1
-	case m.Exit != 0:
-		summary.Failed = 1
-		summary.WorstExit = m.Exit
-	default:
-		summary.OK = 1
-	}
-	return summary, []artifact.Meta{*m}
-}
-
-// fanoutSummaryAndRuns builds the v1 summary and runs slice from the
-// per-host outcomes. A policy-denied host (m==nil, rc==exitPolicy) is
-// counted in PolicyDenied and absent from runs. A save-failure host
-// (m==nil, rc==exitUsage) must have been caught by the caller's saveFailed
-// branch before this is reached.
-func fanoutSummaryAndRuns(metas []*artifact.Meta, rcs []int) (artifact.Summary, []artifact.Meta) {
-	summary := artifact.Summary{Hosts: len(metas)}
-	saved := make([]artifact.Meta, 0, len(metas))
-	for i, m := range metas {
-		if m == nil {
-			if rcs[i] == exitPolicy {
-				summary.PolicyDenied++
-			}
-			continue
-		}
-		saved = append(saved, *m)
-		switch {
-		case m.TransportErr != "":
-			summary.TransportErrors++
-		case m.Exit != 0:
-			summary.Failed++
-			if m.Exit > summary.WorstExit {
-				summary.WorstExit = m.Exit
-			}
-		default:
-			summary.OK++
-		}
-	}
-	return summary, saved
-}
-
-// newBatchID returns a crypto-random "a"+32-hex-chars correlation id, the
-// same shape as artifact ids so a consumer can treat batch_id uniformly.
-func newBatchID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		// crypto/rand cannot fail on supported platforms; degenerate to a
-		// time-based id rather than block.
-		return "a" + strconv.FormatInt(time.Now().UnixNano(), 16)
-	}
-	return "a" + hex.EncodeToString(b)
-}
-
-// writeResultOut writes the envelope bytes to path (0o600, O_APPEND) when
-// ResultOut is non-empty. Returns 0 on success/empty, exitUsage on a
-// non-regular-file path or write failure. The envelope was already written
-// to stdout by the caller; this is a best-effort side-file, so a write
-// failure is a hard usage error (surprising state otherwise).
-func writeResultOut(path string, env []byte, stderr io.Writer) int {
-	if path == "" {
-		return 0
-	}
-	if fi, err := os.Lstat(path); err == nil {
-		if !fi.Mode().IsRegular() {
-			fmt.Fprintf(stderr, "run: --result-out: %s is not a regular file\n", path)
-			return exitUsage
-		}
-	} else if !os.IsNotExist(err) {
-		fmt.Fprintf(stderr, "run: --result-out: %v\n", err)
-		return exitUsage
-	}
-	f, err := openResultOut(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		fmt.Fprintf(stderr, "run: --result-out: %v\n", err)
-		return exitUsage
-	}
-	if fi, err := os.Lstat(path); err != nil || !fi.Mode().IsRegular() {
-		if err == nil {
-			err = fmt.Errorf("%s is not a regular file", path)
-		}
-		fmt.Fprintf(stderr, "run: --result-out: %v\n", err)
-		_ = f.Close()
-		return exitUsage
-	} else if opened, err := f.Stat(); err != nil || !os.SameFile(fi, opened) {
-		if err == nil {
-			err = fmt.Errorf("%s changed while opening", path)
-		}
-		fmt.Fprintf(stderr, "run: --result-out: %v\n", err)
-		_ = f.Close()
-		return exitUsage
-	}
-	if err := f.Chmod(0o600); err != nil {
-		fmt.Fprintf(stderr, "run: --result-out: %v\n", err)
-		_ = f.Close()
-		return exitUsage
-	}
-	if _, err := f.Write(append(env, '\n')); err != nil {
-		fmt.Fprintf(stderr, "run: --result-out: %v\n", err)
-		_ = f.Close()
-		return exitUsage
-	}
-	if err := f.Close(); err != nil {
-		fmt.Fprintf(stderr, "run: --result-out: %v\n", err)
-		return exitUsage
-	}
-	return 0
-
-}
-
 // maybeGC runs gc opportunistically, at most once per `run` invocation —
 // called here once after every host in this invocation has already run
-// (never per host inside runFanout's loop) — when the artifact store's
+// (never per host inside runInvocation) — when the artifact store's
 // total non-pruned size has grown past cfg.RetentionMaxBytes. The size
 // check itself is a single SUM(bytes) query rather than a filesystem walk:
 // the "cheap check" the task brief calls for. Pruning itself goes through
@@ -500,7 +302,7 @@ func writeResultOut(path string, env []byte, stderr io.Writer) int {
 // the return value.
 //
 // protect carries every artifact id this very invocation of `run` just
-// wrote (built by protectSet, above, from runHost's or runFanout's
+// wrote (built by protectSet, above, from runInvocation's
 // return values) — one id for the single-host path, up to N for
 // fan-out. This call runs immediately after those Save(s), so every id
 // in protect is always among the newest live rows in the store at this
@@ -541,14 +343,10 @@ func fanoutBudget(total, n int) int {
 	return per
 }
 
-// runFanout runs hostOpts (one Opts per host, already in argv order)
-// concurrently against the shared deps and returns the worst-outcome
-// process exit, plus each host's saved artifact Meta (nil for a host
-// that never reached Save, e.g. policy-denied) — the second return
-// value exists solely so runArgs can build maybeGC's protect set from
-// every artifact this fan-out invocation just wrote, not just one.
-// Callers use m.ID ("" when m == nil) where they previously used the
-// returned string id.
+// runInvocation runs hostOpts (already in argv order) concurrently against the
+// shared deps, then hands every buffered host result to the single invocation
+// output controller. The same path handles one host and fan-out; only the
+// human renderer decides whether an aggregate line is needed.
 //
 // Concurrency shape, per the task brief's verified facts:
 //   - deps.Tr (transport.OpenSSH in production) is documented safe for
@@ -572,159 +370,23 @@ func fanoutBudget(total, n int) int {
 // the "results collected by index — deterministic print order = argv
 // order" requirement. The controller writes every buffer to the real
 // stdout/stderr only after WaitGroup.Wait, strictly in argv order.
-func runFanout(deps Deps, hostOpts []Opts, stdout, stderr io.Writer) (int, []*artifact.Meta) {
+func runInvocation(deps Deps, hostOpts []Opts, mode resultModeOptions, stdout, stderr io.Writer) (int, []RunOutcome) {
 	n := len(hostOpts)
-	outs := make([]bytes.Buffer, n)
-	errs := make([]bytes.Buffer, n)
-	rcs := make([]int, n)
-	metas := make([]*artifact.Meta, n)
+	runs := make([]hostRunResult, n)
 
 	var wg sync.WaitGroup
 	for i, opts := range hostOpts {
 		wg.Go(func() {
-			rcs[i], metas[i] = runHost(deps, opts, &outs[i], &errs[i])
+			runs[i].outcome = runHost(deps, opts, &runs[i].stdout, &runs[i].stderr)
 		})
 	}
 	wg.Wait()
 
-	// JSON mode: render one envelope from the collected Metas, in argv order.
-	// A policy-denied host (m==nil && rc==exitPolicy) has no saved Meta and is
-	// counted in summary.policy_denied only. A save-failure (m==nil && rc==
-	// exitUsage) aborts the envelope for the whole invocation and falls back to
-	// the human output already rendered in the per-host buffers (exit 96).
-	if hostOpts[0].RenderFormat == "json" {
-		saveFailed := false
-		for i := range hostOpts {
-			if metas[i] == nil && rcs[i] != exitPolicy {
-				// Any nil-meta outcome that is not a policy denial — a
-				// Store.Save failure (exitUsage) or a transport error whose own
-				// Save failed (exitTransport) — aborts the envelope for the
-				// whole invocation (the invariant cannot hold).
-				saveFailed = true
-			}
-		}
-		if saveFailed {
-			// Flush the human passports runHost already rendered into the
-			// per-host buffers, plus a human-style aggregate computed from
-			// metas/rcs (NOT from the human-loop counters, which are computed
-			// later and are not in scope here). Mirrors the human loop's
-			// classification: policy-denied and save-failure both count as
-			// failed; transport-error counts separately.
-			for i := range hostOpts {
-				if i > 0 {
-					fmt.Fprintln(stdout)
-				}
-				stdout.Write(outs[i].Bytes())
-				stderr.Write(errs[i].Bytes())
-			}
-			var okC, failC, teC int
-			for _, m := range metas {
-				switch {
-				case m == nil:
-					failC++ // policy-denied or save-failure
-				case m.TransportErr != "":
-					teC++
-				case m.Exit != 0:
-					failC++
-				default:
-					okC++
-				}
-			}
-			fmt.Fprintf(stdout, "hosts=%d ok=%d failed=%d transport-errors=%d\n", n, okC, failC, teC)
-			return exitUsage, metas
-		}
-		summary, saved := fanoutSummaryAndRuns(metas, rcs)
-		env := artifact.RenderResult(deps.Store.Root, saved, summary, newBatchID())
-		// Flush each host's stderr buffer in argv order. Stderr is unchanged
-		// in either mode — diagnostics only — and runHost wrote into the
-		// per-host buffers concurrently; without this flush the human loop
-		// below would still see those diagnostics, but the JSON success
-		// branch is the only branch that bypasses the human-loop flush,
-		// so it must do its own (mirroring saveFailed above).
-		for i := range hostOpts {
-			stderr.Write(errs[i].Bytes())
-		}
-		// Write the envelope to stdout BEFORE attempting --result-out: a
-		// successful fan-out's envelope must reach stdout even if the
-		// side-file write later fails (otherwise a bad --result-out path
-		// would discard a perfectly good result). writeResultOut's own
-		// contract assumes the envelope has already reached stdout.
-		stdout.Write(env)
-		stdout.Write([]byte("\n"))
-		if code := writeResultOut(hostOpts[0].ResultOut, env, stderr); code != 0 {
-			return code, metas
-		}
-		switch {
-
-		case summary.TransportErrors > 0:
-			return exitTransport, metas
-		case summary.PolicyDenied > 0:
-			return exitPolicy, metas
-		default:
-			return summary.WorstExit, metas
-		}
+	outcomes := make([]RunOutcome, n)
+	for i := range runs {
+		outcomes[i] = runs[i].outcome
 	}
-
-	var okCount, failedCount, transportErrCount int
-	sawTransportErr := false
-	sawPolicyDenied := false
-	maxRemoteExit := 0
-
-	for i := range hostOpts {
-		if i > 0 {
-			fmt.Fprintln(stdout)
-		}
-		stdout.Write(outs[i].Bytes())
-		stderr.Write(errs[i].Bytes())
-
-		// The passport status line is the source of truth for
-		// classification, not rcs[i] alone: a genuine remote exit of 97
-		// or 98 is numerically indistinguishable from the reserved
-		// policy/transport codes without it (see the design doc's "own
-		// process exit code ... disambiguated by the status line").
-		//
-		// Only the first line is inspected — RenderPassport always
-		// writes the status line first (StatusLine, then "\nfile=..."),
-		// and the policy path writes exactly "<host> policy-denied\n" —
-		// so line 1 is the status line on every path, always. Any line
-		// after it is the command's own output, which a host is free to
-		// fill with arbitrary text (e.g. `grep transport-error=
-		// audit.jsonl`); scanning the whole buffer would let that text
-		// be mistaken for this host's own status (regression test:
-		// TestRunFanoutIgnoresStatusLookingTextInRemoteOutput).
-		first := outs[i].String()
-		if j := strings.IndexByte(first, '\n'); j >= 0 {
-			first = first[:j]
-		}
-		switch {
-		case strings.Contains(first, " transport-error="):
-			transportErrCount++
-			sawTransportErr = true
-		case first == hostOpts[i].Host+" policy-denied":
-			failedCount++
-			sawPolicyDenied = true
-		default:
-			if rcs[i] == 0 {
-				okCount++
-			} else {
-				failedCount++
-			}
-			if rcs[i] > maxRemoteExit {
-				maxRemoteExit = rcs[i]
-			}
-		}
-	}
-
-	fmt.Fprintf(stdout, "hosts=%d ok=%d failed=%d transport-errors=%d\n", n, okCount, failedCount, transportErrCount)
-
-	switch {
-	case sawTransportErr:
-		return exitTransport, metas
-	case sawPolicyDenied:
-		return exitPolicy, metas
-	default:
-		return maxRemoteExit, metas
-	}
+	return writeRunResults(deps.Store.Root, runs, mode, stdout, stderr), outcomes
 }
 
 // loadBody reads the command body from path — "-" means stdin, matching
@@ -757,8 +419,8 @@ func splitAtDashDash(args []string) (before, after []string, found bool) {
 }
 
 // deltaKeyCommand returns the string passed as delta.Key's third argument
-// (and, for a --body-file/stdin run, doubles as the hash prefix of
-// metaCommand below): for an inline "-- words" command it is the command
+// (and, for a --body-file/stdin run, doubles as the persisted artifact
+// command metadata): for an inline "-- words" command it is the command
 // itself, but for a body — which can be arbitrarily large — it is
 // "body:"+sha256hex(body)[:16], exactly the convention delta.Key's own doc
 // comment specifies for its callers, and matching the design doc's Deltas
@@ -770,21 +432,8 @@ func deltaKeyCommand(opts Opts) string {
 	return "body:" + sha256Hex(opts.Command)[:16]
 }
 
-// metaCommand returns the string stored in artifact.Meta.Command, the
-// long-lived SQLite "command" column. Inline commands remain searchable
-// text. A --body-file/stdin body is represented by its hash only: an
-// arbitrary script can contain values no heuristic redactor recognizes,
-// so persisting even a short preview would violate the body-file safety
-// boundary.
-func metaCommand(opts Opts) string {
-	key := deltaKeyCommand(opts)
-	if opts.FromFile {
-		return key
-	}
-	return key
-}
-
-// auditCommandPreview follows the same body-file boundary as metaCommand:
+// auditCommandPreview follows the same body-file boundary as the artifact
+// command metadata:
 // body text is hash-only, while inline commands keep the existing redacted
 // and clipped preview used by audit readers and readonly denials.
 func auditCommandPreview(opts Opts) string {
@@ -808,19 +457,12 @@ func asTransportError(err error) (*transport.TransportError, bool) {
 	return te, ok
 }
 
-// runHost runs one host's command end to end: policy check, facts
-// (cached or freshly probed), state+baseline load, wrap, exec, parse,
-// state/baseline save, artifact store, passport render, audit, and the
-// exit code to return (mirroring the remote exit, except for the
-// reserved policy/transport codes — see the package doc in
-// cmd/sshai/main.go). The second return value is the artifact Meta this
-// call saved, if any (nil on every early-return path that never reaches
-// Store.Save, e.g. policy-denied) — runArgs threads it (or, in fan-out,
-// all N hosts' metas via runFanout) into maybeGC's protect set, so
-// opportunistic gc can never prune the very artifact(s) this invocation
-// just wrote (see maybeGC's doc comment). Callers use m.ID ("" when
-// m == nil) where they previously used the returned string id.
-func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, *artifact.Meta) {
+// runHost runs one host's command end to end: policy check, facts (cached or
+// freshly probed), state+baseline load, wrap, exec, parse, state/baseline save,
+// artifact store, passport render, and audit. Its RunOutcome explicitly
+// distinguishes saved success/remote/transport results from policy denial and
+// unsaved internal failure.
+func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 	root := deps.Store.Root
 
 	if err := policy.CheckReadonly(opts.Command, opts.Readonly); err != nil {
@@ -832,13 +474,13 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, *artifact.Met
 		}); auditErr != nil {
 			fmt.Fprintf(stderr, "run: append audit: %v\n", auditErr)
 		}
-		return exitPolicy, nil
+		return newPolicyDeniedOutcome()
 	}
 
 	facts, ok, err := session.LoadFacts(root, opts.Host)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: load facts for %s: %v\n", opts.Host, err)
-		return exitUsage, nil
+		return newInternalFailureOutcome(exitUsage)
 	}
 	if !ok {
 		facts, err = session.Probe(deps.Tr, opts.Host, shell.PwshDefaultShell, opts.Timeout)
@@ -847,23 +489,23 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, *artifact.Met
 				return handleTransportError(deps, opts, te, stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: probe %s: %v\n", opts.Host, err)
-			return exitUsage, nil
+			return newInternalFailureOutcome(exitUsage)
 		}
 		if err := session.SaveFacts(root, opts.Host, facts); err != nil {
 			fmt.Fprintf(stderr, "run: save facts for %s: %v\n", opts.Host, err)
-			return exitUsage, nil
+			return newInternalFailureOutcome(exitUsage)
 		}
 	}
 
 	st, _, err := session.LoadState(root, opts.Host, opts.Ctx)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: load state for %s/%s: %v\n", opts.Host, opts.Ctx, err)
-		return exitUsage, nil
+		return newInternalFailureOutcome(exitUsage)
 	}
 	baseline, baseOK, err := session.LoadBaseline(root, opts.Host)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: load baseline for %s: %v\n", opts.Host, err)
-		return exitUsage, nil
+		return newInternalFailureOutcome(exitUsage)
 	}
 	restore := shell.EnvRestoreSet(baseline, st.Env)
 	sentinel := shell.NewSentinel()
@@ -884,17 +526,17 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, *artifact.Met
 		tmp, err := os.CreateTemp("", "sshai-*.ps1")
 		if err != nil {
 			fmt.Fprintf(stderr, "run: create temp script: %v\n", err)
-			return exitUsage, nil
+			return newInternalFailureOutcome(exitUsage)
 		}
 		defer os.Remove(tmp.Name())
 		if _, err := tmp.Write(script); err != nil {
 			tmp.Close()
 			fmt.Fprintf(stderr, "run: write temp script: %v\n", err)
-			return exitUsage, nil
+			return newInternalFailureOutcome(exitUsage)
 		}
 		if err := tmp.Close(); err != nil {
 			fmt.Fprintf(stderr, "run: close temp script: %v\n", err)
-			return exitUsage, nil
+			return newInternalFailureOutcome(exitUsage)
 		}
 
 		// Slug the raw command, not the wrapped script: the wrapper embeds
@@ -910,7 +552,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, *artifact.Met
 				return handleTransportError(deps, opts, te, stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: put script to %s: %v\n", opts.Host, err)
-			return exitUsage, nil
+			return newInternalFailureOutcome(exitUsage)
 		}
 
 		invocation := shell.PwshInvocation(facts.Form, facts.Shell, "-NoProfile -ExecutionPolicy Bypass -File "+remotePath)
@@ -920,7 +562,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, *artifact.Met
 				return handleTransportError(deps, opts, te, stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: exec on %s: %v\n", opts.Host, err)
-			return exitUsage, nil
+			return newInternalFailureOutcome(exitUsage)
 		}
 		remoteExit, truncated = res.ExitCode, res.Truncated
 		out, parsedSt, parseOK = shell.PwshParse(res.Output, sentinel)
@@ -932,7 +574,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, *artifact.Met
 				return handleTransportError(deps, opts, te, stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: exec on %s: %v\n", opts.Host, err)
-			return exitUsage, nil
+			return newInternalFailureOutcome(exitUsage)
 		}
 		remoteExit, truncated = res.ExitCode, res.Truncated
 		out, parsedSt, parseOK = shell.BashParse(res.Output, sentinel)
@@ -974,7 +616,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, *artifact.Met
 	binary := bytes.IndexByte(out[:min(8192, len(out))], 0) >= 0
 
 	meta := artifact.Meta{
-		Host: opts.Host, Ctx: opts.Ctx, Command: metaCommand(opts),
+		Host: opts.Host, Ctx: opts.Ctx, Command: deltaKeyCommand(opts),
 		Exit: remoteExit, DurationMs: durationMs, Truncated: truncated, Binary: binary,
 		Ts: time.Now(),
 	}
@@ -1011,7 +653,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, *artifact.Met
 	savedMeta, err := deps.Store.Save(meta, key, out)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: save artifact: %v\n", err)
-		return exitUsage, nil
+		return newInternalFailureOutcome(exitUsage)
 	}
 
 	artPath := filepath.Join(deps.Store.Root, "art", savedMeta.ID)
@@ -1067,7 +709,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, *artifact.Met
 		fmt.Fprintf(stderr, "run: append audit: %v\n", auditErr)
 	}
 
-	return remoteExit, &savedMeta
+	return newSavedRunOutcome(savedMeta)
 }
 
 // handleTransportError records a failed delivery (the body may not have
@@ -1076,24 +718,20 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) (int, *artifact.Met
 // by TransportErr being non-empty — the Store/Meta contract laid out in
 // artifact/passport.go's StatusLine. The artifact is empty; the passport
 // and audit entry are still written so the failure itself is traceable.
-// The second return value is the saved artifact's Meta (nil if Save
-// itself failed, in which case there is nothing for a caller to protect
-// from gc) — same two-value shape as runHost, for the same reason (see
-// runHost's own doc comment): maybeGC needs it to build its protect set.
-// Callers use m.ID ("" when m == nil) where they previously used the
-// returned string id.
-func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, stdout, stderr io.Writer) (int, *artifact.Meta) {
+// A Save failure becomes an explicit internal failure while retaining the
+// transport process exit used by the existing human-mode path.
+func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, stdout, stderr io.Writer) RunOutcome {
 	root := deps.Store.Root
 
 	meta := artifact.Meta{
-		Host: opts.Host, Ctx: opts.Ctx, Command: metaCommand(opts),
+		Host: opts.Host, Ctx: opts.Ctx, Command: deltaKeyCommand(opts),
 		TransportErr: te.Reason, Ts: time.Now(),
 	}
 	key := delta.Key(opts.Host, opts.Ctx, deltaKeyCommand(opts))
 	savedMeta, err := deps.Store.Save(meta, key, nil)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: save artifact after transport error: %v\n", err)
-		return exitTransport, nil
+		return newInternalFailureOutcome(exitTransport)
 	}
 
 	artPath := filepath.Join(deps.Store.Root, "art", savedMeta.ID)
@@ -1109,5 +747,5 @@ func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, st
 		fmt.Fprintf(stderr, "run: append audit: %v\n", auditErr)
 	}
 
-	return exitTransport, &savedMeta
+	return newSavedRunOutcome(savedMeta)
 }

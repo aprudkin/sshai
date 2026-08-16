@@ -49,6 +49,10 @@ The body stays out of argv and out of the envelope: the envelope's
 `runs[]` entry has a real saved artifact; a host denied by the readonly
 policy is counted in `summary.policy_denied` and absent from `runs[]`.
 
+`--result-out <file>` atomically replaces one regular destination with the
+same envelope bytes plus its trailing newline. The destination is mode
+`0600`; symlinks, directories, and other non-regular paths are refused.
+
 
 ## Explicit fallbacks
 

@@ -77,9 +77,10 @@ Flags:
                           host, exit, artifact path, byte/line counts,
                           duration, sha256 — with no human tail/preview
                           text. Default "human" is unchanged.
-  --result-out FILE       only with --result-format=json: also write the
-                          envelope bytes to FILE (mode 0600, append).
-                          Use a fresh path per invocation.
+  --result-out FILE       only with --result-format=json: atomically replace
+                          FILE with one private envelope (mode 0600).
+                          Existing regular files are replaced; symlinks and
+                          other non-regular paths are refused.
 
 
 sshai's own process exit mirrors the remote command's exit code.
