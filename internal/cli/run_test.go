@@ -1206,11 +1206,66 @@ func TestRunResultFormatJSONResultOutToFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read result-out: %v", err)
 	}
-	if string(data) != strings.TrimSuffix(out.String(), "\n") {
+	if string(data) != out.String() {
 		t.Fatalf("result-out != stdout\nstdout: %s\nfile: %s", out.String(), data)
 	}
 	if fi, _ := os.Stat(outFile); fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode=%o, want 600", fi.Mode().Perm())
+	}
+}
+
+// Existing --result-out files are tightened to the documented private mode
+// before the envelope is appended.
+func TestRunResultFormatJSONResultOutExistingFileMode(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	seedLinuxFacts(t, root, "web01")
+	outFile := filepath.Join(t.TempDir(), "result.json")
+	if err := os.WriteFile(outFile, []byte("existing\n"), 0o644); err != nil {
+		t.Fatalf("seed result-out: %v", err)
+	}
+	if err := os.Chmod(outFile, 0o644); err != nil {
+		t.Fatalf("chmod result-out: %v", err)
+	}
+
+	var out, errB bytes.Buffer
+	rc := runWith(&fakeTr{rc: 0}, []string{"--result-format=json", "--result-out", outFile, "web01", "--", "true"}, &out, &errB)
+	if rc != 0 {
+		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
+	}
+	fi, err := os.Stat(outFile)
+	if err != nil {
+		t.Fatalf("stat result-out: %v", err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode=%o, want 600", fi.Mode().Perm())
+	}
+}
+
+// Symlink result-out targets are refused rather than followed.
+func TestRunResultFormatJSONResultOutSymlinkRefused(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	seedLinuxFacts(t, root, "web01")
+	target := filepath.Join(t.TempDir(), "target.json")
+	link := filepath.Join(t.TempDir(), "result.json")
+	if err := os.WriteFile(target, []byte("untouched\n"), 0o600); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink result-out: %v", err)
+	}
+	var out, errB bytes.Buffer
+	rc := runWith(&fakeTr{rc: 0}, []string{"--result-format=json", "--result-out", link, "web01", "--", "true"}, &out, &errB)
+	if rc != exitUsage {
+		t.Fatalf("rc=%d, want %d", rc, exitUsage)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read target: %v", err)
+	}
+	if string(data) != "untouched\n" {
+		t.Fatalf("symlink target modified: %q", data)
 	}
 }
 

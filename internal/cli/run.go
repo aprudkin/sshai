@@ -446,17 +446,42 @@ func writeResultOut(path string, env []byte, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "run: --result-out: %v\n", err)
 		return exitUsage
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := openResultOut(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: --result-out: %v\n", err)
 		return exitUsage
 	}
-	defer f.Close()
-	if _, err := f.Write(env); err != nil {
+	if fi, err := os.Lstat(path); err != nil || !fi.Mode().IsRegular() {
+		if err == nil {
+			err = fmt.Errorf("%s is not a regular file", path)
+		}
+		fmt.Fprintf(stderr, "run: --result-out: %v\n", err)
+		_ = f.Close()
+		return exitUsage
+	} else if opened, err := f.Stat(); err != nil || !os.SameFile(fi, opened) {
+		if err == nil {
+			err = fmt.Errorf("%s changed while opening", path)
+		}
+		fmt.Fprintf(stderr, "run: --result-out: %v\n", err)
+		_ = f.Close()
+		return exitUsage
+	}
+	if err := f.Chmod(0o600); err != nil {
+		fmt.Fprintf(stderr, "run: --result-out: %v\n", err)
+		_ = f.Close()
+		return exitUsage
+	}
+	if _, err := f.Write(append(env, '\n')); err != nil {
+		fmt.Fprintf(stderr, "run: --result-out: %v\n", err)
+		_ = f.Close()
+		return exitUsage
+	}
+	if err := f.Close(); err != nil {
 		fmt.Fprintf(stderr, "run: --result-out: %v\n", err)
 		return exitUsage
 	}
 	return 0
+
 }
 
 // maybeGC runs gc opportunistically, at most once per `run` invocation —
