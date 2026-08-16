@@ -274,3 +274,10 @@ Landscape check before writing this spec; searches over GitHub/web via Exa.
 2. **Language:** resolved — Go. The follow-ups owed on that decision (CLAUDE.md commands section,
    layout, `/sshai` in `.gitignore`) are applied.
 3. **Repo language:** English everywhere; the tool is intended to be open-sourced.
+
+### Result formats
+
+`run` gained a machine-readable mode in `2026-08-16`: `--result-format=json`
+emits one versioned envelope (schema_version=v1) with per-host run metadata
+and a summary; the default human passport is unchanged. Schema, flag
+semantics, and error handling: `docs/superpowers/specs/2026-08-16-machine-readable-result-contract-design.md`.

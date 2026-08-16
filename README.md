@@ -95,6 +95,10 @@ sshai gc                                     # prune artifacts per retention pol
 sshai help [command]                         # this list, or the full reference for one command
 ```
 
+Add `--result-format=json` to `sshai run` for a versioned machine-readable
+result envelope (`schema_version: "v1"`) instead of the human passport — see
+`sshai help run` and `docs/agent-usage.md`.
+
 The agent-facing quick-start (what an operator pastes into their agent's instructions):
 `docs/agent-usage.md`.
 

@@ -31,6 +31,26 @@ stores only the body hash in run metadata and audit records, but the remote stag
 captured output can still contain body-derived data; never embed passwords, tokens, keys, or other
 secret values in a body.
 
+## Machine-readable mode
+
+`sshai run --result-format=json` emits exactly one versioned envelope
+(`schema_version: "v1"`) on stdout — run id, host, remote exit, artifact
+path, byte/line counts, sha256, duration — with no human tail/preview text.
+Use it when a consumer must parse the result without regexing the human
+passport:
+
+```bash
+sshai run --result-format=json --body-file - pg-prod-01 <<<'Get-Date'
+jq '.runs[0].exit'     # remote exit code
+jq '.runs[0].artifact_path'  # the exact stored result on disk
+```
+
+The body stays out of argv and out of the envelope: the envelope's
+`runs[].command` holds `body:<sha256>[:16]` for stdin/file bodies. Every
+`runs[]` entry has a real saved artifact; a host denied by the readonly
+policy is counted in `summary.policy_denied` and absent from `runs[]`.
+
+
 ## Explicit fallbacks
 
 Use an explicit purpose-built workflow instead of `sshai` when the task needs any of the following:
