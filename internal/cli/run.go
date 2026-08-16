@@ -343,6 +343,37 @@ func singleHostSummaryAndRuns(m *artifact.Meta, rc int) (artifact.Summary, []art
 	return summary, []artifact.Meta{*m}
 }
 
+// fanoutSummaryAndRuns builds the v1 summary and runs slice from the
+// per-host outcomes. A policy-denied host (m==nil, rc==exitPolicy) is
+// counted in PolicyDenied and absent from runs. A save-failure host
+// (m==nil, rc==exitUsage) must have been caught by the caller's saveFailed
+// branch before this is reached.
+func fanoutSummaryAndRuns(metas []*artifact.Meta, rcs []int) (artifact.Summary, []artifact.Meta) {
+	summary := artifact.Summary{Hosts: len(metas)}
+	saved := make([]artifact.Meta, 0, len(metas))
+	for i, m := range metas {
+		if m == nil {
+			if rcs[i] == exitPolicy {
+				summary.PolicyDenied++
+			}
+			continue
+		}
+		saved = append(saved, *m)
+		switch {
+		case m.TransportErr != "":
+			summary.TransportErrors++
+		case m.Exit != 0:
+			summary.Failed++
+			if m.Exit > summary.WorstExit {
+				summary.WorstExit = m.Exit
+			}
+		default:
+			summary.OK++
+		}
+	}
+	return summary, saved
+}
+
 // newBatchID returns a crypto-random "a"+32-hex-chars correlation id, the
 // same shape as artifact ids so a consumer can treat batch_id uniformly.
 func newBatchID() string {
@@ -490,6 +521,69 @@ func runFanout(deps Deps, hostOpts []Opts, stdout, stderr io.Writer) (int, []*ar
 		}(i, opts)
 	}
 	wg.Wait()
+
+	// JSON mode: render one envelope from the collected Metas, in argv order.
+	// A policy-denied host (m==nil && rc==exitPolicy) has no saved Meta and is
+	// counted in summary.policy_denied only. A save-failure (m==nil && rc==
+	// exitUsage) aborts the envelope for the whole invocation and falls back to
+	// the human output already rendered in the per-host buffers (exit 96).
+	if hostOpts[0].RenderFormat == "json" {
+		saveFailed := false
+		for i := range hostOpts {
+			if metas[i] == nil && rcs[i] != exitPolicy {
+				// Any nil-meta outcome that is not a policy denial — a
+				// Store.Save failure (exitUsage) or a transport error whose own
+				// Save failed (exitTransport) — aborts the envelope for the
+				// whole invocation (the invariant cannot hold).
+				saveFailed = true
+			}
+		}
+		if saveFailed {
+			// Flush the human passports runHost already rendered into the
+			// per-host buffers, plus a human-style aggregate computed from
+			// metas/rcs (NOT from the human-loop counters, which are computed
+			// later and are not in scope here). Mirrors the human loop's
+			// classification: policy-denied and save-failure both count as
+			// failed; transport-error counts separately.
+			for i := range hostOpts {
+				if i > 0 {
+					fmt.Fprintln(stdout)
+				}
+				stdout.Write(outs[i].Bytes())
+				stderr.Write(errs[i].Bytes())
+			}
+			var okC, failC, teC int
+			for _, m := range metas {
+				switch {
+				case m == nil:
+					failC++ // policy-denied or save-failure
+				case m.TransportErr != "":
+					teC++
+				case m.Exit != 0:
+					failC++
+				default:
+					okC++
+				}
+			}
+			fmt.Fprintf(stdout, "hosts=%d ok=%d failed=%d transport-errors=%d\n", n, okC, failC, teC)
+			return exitUsage, metas
+		}
+		summary, saved := fanoutSummaryAndRuns(metas, rcs)
+		env := artifact.RenderResult(deps.Store.Root, saved, summary, newBatchID())
+		if code := writeResultOut(hostOpts[0].ResultOut, env, stderr); code != 0 {
+			return code, metas
+		}
+		stdout.Write(env)
+		stdout.Write([]byte("\n"))
+		switch {
+		case summary.TransportErrors > 0:
+			return exitTransport, metas
+		case summary.PolicyDenied > 0:
+			return exitPolicy, metas
+		default:
+			return summary.WorstExit, metas
+		}
+	}
 
 	var okCount, failedCount, transportErrCount int
 	sawTransportErr := false

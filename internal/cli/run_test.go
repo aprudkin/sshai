@@ -997,3 +997,49 @@ func TestRunResultFormatJSONSuccess(t *testing.T) {
 		t.Fatal("sha256 empty on a successful run")
 	}
 }
+
+// TestRunResultFormatJSONFanOutMixed covers the fan-out --result-format=json
+// envelope rendering (Task 5 of aimem#767): three hosts producing one ok,
+// one non-zero exit, and one transport error all land in a single envelope
+// whose summary, runs[] (in argv order), and exit code are derived from
+// the per-host Metas alone, with no human passport/aggregate lines leaking
+// into stdout.
+func TestRunResultFormatJSONFanOutMixed(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	seedLinuxFacts(t, root, "h1", "h2", "h3")
+
+	f := &multiHostTr{
+		rcs:          map[string]int{"h1": 0, "h2": 1},
+		transportErr: map[string]string{"h3": "ssh"},
+	}
+	var out, errB bytes.Buffer
+	rc := runWith(f, []string{"--result-format=json", "h1", "h2", "h3", "--", "true"}, &out, &errB)
+	if rc != exitTransport {
+		t.Fatalf("rc=%d, want %d; stderr=%s", rc, exitTransport, errB.String())
+	}
+	var env map[string]any
+	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
+		t.Fatalf("stdout not one JSON object: %v", err)
+	}
+	sum, _ := env["summary"].(map[string]any)
+	if sum["hosts"].(float64) != 3 || sum["ok"].(float64) != 1 ||
+		sum["failed"].(float64) != 1 || sum["transport_errors"].(float64) != 1 ||
+		sum["policy_denied"].(float64) != 0 || sum["worst_exit"].(float64) != 1 {
+		t.Fatalf("summary=%v", sum)
+	}
+	runs, _ := env["runs"].([]any)
+	if len(runs) != 3 {
+		t.Fatalf("len(runs)=%d, want 3", len(runs))
+	}
+	// runs[] must be in argv order.
+	for i, host := range []string{"h1", "h2", "h3"} {
+		r, _ := runs[i].(map[string]any)
+		if r["host"] != host {
+			t.Fatalf("runs[%d] host=%v, want %s (argv order)", i, r["host"], host)
+		}
+	}
+	if strings.Contains(out.String(), "hosts=3") {
+		t.Fatalf("human aggregate line leaked into JSON: %s", out.String())
+	}
+}
