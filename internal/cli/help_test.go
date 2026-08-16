@@ -50,7 +50,7 @@ func TestHelpRunShowsFullFlagReference(t *testing.T) {
 		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
 	}
 	s := out.String()
-	for _, flag := range []string{"--delta", "--budget", "--ctx", "--body-file", "--timeout"} {
+	for _, flag := range []string{"--body-file", "--delta", "--budget", "--timeout", "--ctx", "--result-format", "--result-out"} {
 		if !strings.Contains(s, flag) {
 			t.Fatalf("help run missing flag %q: %q", flag, s)
 		}

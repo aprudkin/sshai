@@ -47,14 +47,16 @@ type Deps struct {
 // Opts holds one host's resolved run parameters, after flag parsing and
 // ctx/host validation.
 type Opts struct {
-	Host     string
-	Ctx      string
-	Command  string // the actual body run on the host (bash or pwsh)
-	FromFile bool   // true when Command came from --body-file/stdin rather than "-- words"
-	Readonly bool
-	Delta    bool // --delta: diff against the previous run of the same (host, ctx, command) key
-	Budget   int
-	Timeout  time.Duration
+	Host         string
+	Ctx          string
+	Command      string // the actual body run on the host (bash or pwsh)
+	FromFile     bool   // true when Command came from --body-file/stdin rather than "-- words"
+	Readonly     bool
+	Delta        bool // --delta: diff against the previous run of the same (host, ctx, command) key
+	Budget       int
+	Timeout      time.Duration
+	RenderFormat string // "human" or "json" (default "human")
+	ResultOut    string // path for the JSON envelope side-file; "" = none
 }
 
 // ctxRe is the safe charset for --ctx: no "/" (so a ctx value can never
@@ -110,8 +112,19 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 	budget := fs.Int("budget", 0, "output budget in tokens (~bytes/4); default from config")
 	timeoutFlag := fs.Int("timeout", 0, "timeout in seconds; default from config")
 	ctxFlag := fs.String("ctx", "", `named state context; default $SSHAI_CTX or "default"`)
+	resultFormat := fs.String("result-format", "human", `output format: "human" (default) or "json"`)
+	resultOut := fs.String("result-out", "", `write the JSON envelope to FILE (requires --result-format=json)`)
 
 	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+
+	if *resultFormat != "human" && *resultFormat != "json" {
+		fmt.Fprintf(stderr, "run: invalid --result-format=%q (want human or json)\n", *resultFormat)
+		return exitUsage
+	}
+	if *resultOut != "" && *resultFormat != "json" {
+		fmt.Fprintln(stderr, "run: --result-out requires --result-format=json")
 		return exitUsage
 	}
 
@@ -202,14 +215,16 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 	if len(hosts) == 1 {
 		host := hosts[0]
 		opts := Opts{
-			Host:     host,
-			Ctx:      ctx,
-			Command:  command,
-			FromFile: fromFile,
-			Readonly: cfg.Hosts[host].Readonly,
-			Delta:    *wantDelta,
-			Budget:   budgetTokens,
-			Timeout:  timeout,
+			Host:         host,
+			Ctx:          ctx,
+			Command:      command,
+			FromFile:     fromFile,
+			Readonly:     cfg.Hosts[host].Readonly,
+			Delta:        *wantDelta,
+			Budget:       budgetTokens,
+			Timeout:      timeout,
+			RenderFormat: *resultFormat,
+			ResultOut:    *resultOut,
 		}
 		rc, m := runHost(deps, opts, stdout, stderr)
 		id := ""
@@ -224,14 +239,16 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 	hostOpts := make([]Opts, len(hosts))
 	for i, host := range hosts {
 		hostOpts[i] = Opts{
-			Host:     host,
-			Ctx:      ctx,
-			Command:  command,
-			FromFile: fromFile,
-			Readonly: cfg.Hosts[host].Readonly,
-			Delta:    *wantDelta,
-			Budget:   perHostBudget,
-			Timeout:  timeout,
+			Host:         host,
+			Ctx:          ctx,
+			Command:      command,
+			FromFile:     fromFile,
+			Readonly:     cfg.Hosts[host].Readonly,
+			Delta:        *wantDelta,
+			Budget:       perHostBudget,
+			Timeout:      timeout,
+			RenderFormat: *resultFormat,
+			ResultOut:    *resultOut,
 		}
 	}
 	rc, metas := runFanout(deps, hostOpts, stdout, stderr)

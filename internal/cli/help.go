@@ -71,6 +71,16 @@ Flags:
   --ctx NAME          named state context: cwd and env persist per
                       (host, ctx) between calls; default $SSHAI_CTX or
                       "default"
+  --result-format FORMAT  output format: "human" (default) or "json".
+                          "json" emits one versioned (schema_version=v1)
+                          machine-readable envelope on stdout — run id,
+                          host, exit, artifact path, byte/line counts,
+                          duration, sha256 — with no human tail/preview
+                          text. Default "human" is unchanged.
+  --result-out FILE       only with --result-format=json: also write the
+                          envelope bytes to FILE (mode 0600, append).
+                          Use a fresh path per invocation.
+
 
 sshai's own process exit mirrors the remote command's exit code.
 Reserved: 96 usage error, 97 policy denied (host marked readonly,
