@@ -4,6 +4,7 @@ package cli
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -956,5 +957,43 @@ func TestRunFanoutOpportunisticGCProtectsAllJustWrittenArtifacts(t *testing.T) {
 		if _, path, err := store.Get(id); err != nil || path == "" {
 			t.Fatalf("artifact %s (one of this invocation's own N just-written artifacts) must survive opportunistic gc: path=%q err=%v", id, path, err)
 		}
+	}
+}
+
+// TestRunResultFormatJSONSuccess covers the single-host --result-format=json
+// success path (Task 4 of aimem#767): stdout is exactly one JSON object
+// matching the v1 envelope, no human passport lines leak through, and the
+// run was actually saved (sha256 is non-empty).
+func TestRunResultFormatJSONSuccess(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	seedLinuxFacts(t, root, "web01")
+
+	f := &fakeTr{rc: 0}
+	var out, errB bytes.Buffer
+	rc := runWith(f, []string{"--result-format=json", "web01", "--", "true"}, &out, &errB)
+	if rc != 0 {
+		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
+	}
+	var env map[string]any
+	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
+		t.Fatalf("stdout is not one JSON object: %v\n%s", err, out.String())
+	}
+	if env["schema_version"] != "v1" {
+		t.Fatalf("schema_version=%v", env["schema_version"])
+	}
+	runs, _ := env["runs"].([]any)
+	if len(runs) != 1 {
+		t.Fatalf("len(runs)=%d", len(runs))
+	}
+	r0, _ := runs[0].(map[string]any)
+	if r0["host"] != "web01" || r0["exit"].(float64) != 0 {
+		t.Fatalf("runs[0]=%v", r0)
+	}
+	if strings.Contains(out.String(), "tail3:") {
+		t.Fatalf("human tail3 leaked into JSON: %s", out.String())
+	}
+	if r0["sha256"] == "" {
+		t.Fatal("sha256 empty on a successful run")
 	}
 }

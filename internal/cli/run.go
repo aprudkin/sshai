@@ -3,6 +3,7 @@ package cli
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -209,9 +211,13 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 
 	deps := Deps{Tr: tr, Store: store}
 
-	// Single-host path: unchanged from Task 11, byte-for-byte — no
-	// aggregate line, no goroutine, no budget division. Fan-out (Task 12)
-	// only engages once there is more than one host to reconcile.
+	// Single-host path: JSON-aware (Task 4 of aimem#767). On `--result-format=json`
+	// we render the v1 envelope to stdout (and --result-out) and discard the
+	// human passport runHost produced; a Save failure (runHost's m == nil
+	// with rc == exitUsage) is the one case where the envelope invariant
+	// can't hold, so we fall back to the human output. A non-JSON
+	// RenderFormat, including "" (existing tests build Opts without
+	// RenderFormat), keeps the previous human path.
 	if len(hosts) == 1 {
 		host := hosts[0]
 		opts := Opts{
@@ -226,6 +232,37 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 			RenderFormat: *resultFormat,
 			ResultOut:    *resultOut,
 		}
+
+		if opts.RenderFormat == "json" {
+			// Capture the human passport (and any policy-denied line) into a
+			// buffer so we can either fall back to it (save-failure) or discard
+			// it (normal JSON success).
+			var human bytes.Buffer
+			rc, m := runHost(deps, opts, &human, stderr)
+			if m == nil && rc == exitUsage {
+				// Save failed: the envelope invariant (len(runs)==summary.hosts-
+				// summary.policy_denied) cannot hold, so fall back to the human
+				// output runHost already rendered.
+				stdout.Write(human.Bytes())
+				maybeGC(deps.Store, cfg, stderr, protectSet(""))
+				return rc
+			}
+			summary, metas := singleHostSummaryAndRuns(m, rc)
+			env := artifact.RenderResult(cfg.Root, metas, summary, newBatchID())
+			if code := writeResultOut(opts.ResultOut, env, stderr); code != 0 {
+				return code
+			}
+			stdout.Write(env)
+			stdout.Write([]byte("\n"))
+			id := ""
+			if m != nil {
+				id = m.ID
+			}
+			maybeGC(deps.Store, cfg, stderr, protectSet(id))
+			return rc
+		}
+
+		// Human mode: unchanged.
 		rc, m := runHost(deps, opts, stdout, stderr)
 		id := ""
 		if m != nil {
@@ -275,6 +312,72 @@ func protectSet(ids ...string) map[string]bool {
 		}
 	}
 	return protect
+}
+
+// singleHostSummaryAndRuns maps one runHost outcome to the v1 summary and
+// runs slice. m is nil for a policy-denied host (no Save happened) — that
+// host is surfaced only via summary.policy_denied, absent from runs.
+func singleHostSummaryAndRuns(m *artifact.Meta, rc int) (artifact.Summary, []artifact.Meta) {
+	summary := artifact.Summary{Hosts: 1}
+	if m == nil {
+		if rc == exitPolicy {
+			summary.PolicyDenied = 1
+		}
+		return summary, nil
+	}
+	switch {
+	case m.TransportErr != "":
+		summary.TransportErrors = 1
+	case m.Exit != 0:
+		summary.Failed = 1
+		summary.WorstExit = m.Exit
+	default:
+		summary.OK = 1
+	}
+	return summary, []artifact.Meta{*m}
+}
+
+// newBatchID returns a crypto-random "a"+32-hex-chars correlation id, the
+// same shape as artifact ids so a consumer can treat batch_id uniformly.
+func newBatchID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand cannot fail on supported platforms; degenerate to a
+		// time-based id rather than block.
+		return "a" + strconv.FormatInt(time.Now().UnixNano(), 16)
+	}
+	return "a" + hex.EncodeToString(b)
+}
+
+// writeResultOut writes the envelope bytes to path (0o600, O_APPEND) when
+// ResultOut is non-empty. Returns 0 on success/empty, exitUsage on a
+// non-regular-file path or write failure. The envelope was already written
+// to stdout by the caller; this is a best-effort side-file, so a write
+// failure is a hard usage error (surprising state otherwise).
+func writeResultOut(path string, env []byte, stderr io.Writer) int {
+	if path == "" {
+		return 0
+	}
+	if fi, err := os.Lstat(path); err == nil {
+		if !fi.Mode().IsRegular() {
+			fmt.Fprintf(stderr, "run: --result-out: %s is not a regular file\n", path)
+			return exitUsage
+		}
+	} else if !os.IsNotExist(err) {
+		fmt.Fprintf(stderr, "run: --result-out: %v\n", err)
+		return exitUsage
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		fmt.Fprintf(stderr, "run: --result-out: %v\n", err)
+		return exitUsage
+	}
+	defer f.Close()
+	if _, err := f.Write(env); err != nil {
+		fmt.Fprintf(stderr, "run: --result-out: %v\n", err)
+		return exitUsage
+	}
+	return 0
 }
 
 // maybeGC runs gc opportunistically, at most once per `run` invocation —
