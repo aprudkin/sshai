@@ -513,12 +513,10 @@ func runFanout(deps Deps, hostOpts []Opts, stdout, stderr io.Writer) (int, []*ar
 	metas := make([]*artifact.Meta, n)
 
 	var wg sync.WaitGroup
-	wg.Add(n)
 	for i, opts := range hostOpts {
-		go func(i int, opts Opts) {
-			defer wg.Done()
+		wg.Go(func() {
 			rcs[i], metas[i] = runHost(deps, opts, &outs[i], &errs[i])
-		}(i, opts)
+		})
 	}
 	wg.Wait()
 
@@ -570,6 +568,15 @@ func runFanout(deps Deps, hostOpts []Opts, stdout, stderr io.Writer) (int, []*ar
 		}
 		summary, saved := fanoutSummaryAndRuns(metas, rcs)
 		env := artifact.RenderResult(deps.Store.Root, saved, summary, newBatchID())
+		// Flush each host's stderr buffer in argv order. Stderr is unchanged
+		// in either mode — diagnostics only — and runHost wrote into the
+		// per-host buffers concurrently; without this flush the human loop
+		// below would still see those diagnostics, but the JSON success
+		// branch is the only branch that bypasses the human-loop flush,
+		// so it must do its own (mirroring saveFailed above).
+		for i := range hostOpts {
+			stderr.Write(errs[i].Bytes())
+		}
 		if code := writeResultOut(hostOpts[0].ResultOut, env, stderr); code != 0 {
 			return code, metas
 		}
