@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -1248,6 +1249,7 @@ func TestRunResultFormatHumanModeByteEquivalent(t *testing.T) {
 		}
 		return out.String()
 	}
+	timeRe := regexp.MustCompile(`time=[0-9.]+(?:ms|s)`)
 	normalize := func(s string) string {
 		lines := strings.Split(s, "\n")
 		for i, line := range lines {
@@ -1268,7 +1270,11 @@ func TestRunResultFormatHumanModeByteEquivalent(t *testing.T) {
 				}
 			}
 			if allDigits {
-				lines[i] = "aN" + line[idx:]
+				// Also mask wall-clock duration ("time=12ms", "time=1.8s") — the
+				// same command can report different durations across runs, which
+				// would otherwise flake this byte-equivalence check. Matches the
+				// exact shapes artifact.HumanDuration emits.
+				lines[i] = timeRe.ReplaceAllString("aN"+line[idx:], "time=X")
 			}
 		}
 		return strings.Join(lines, "\n")
