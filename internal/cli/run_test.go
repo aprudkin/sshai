@@ -1284,18 +1284,96 @@ func TestRunResultFormatHumanModeByteEquivalent(t *testing.T) {
 	}
 }
 
-// Note on the save-failure and malformed-artifact coverage: the exact
-// Store.Save error path (m==nil && rc==exitUsage -> human fallback) is
-// not directly injectable because runArgs builds its own Store and the
-// existing fakeTr never fails Save. The Task 4 Step 1 test
-// (TestRunResultFormatJSONSuccess) plus the explicit m==nil && rc==exitUsage
-// branch already cover the decision logic structurally. If true failure
-// injection is wanted, add a deps-level seam (e.g. runArgsWith(deps, ...))
-// in a follow-up — but per the design's acceptance criteria the
-// malformed/unavailable-artifact case maps to the save-failure fallback,
-// which the m==nil && rc!=exitPolicy branch in runArgs handles; this test
-// asserts the structural invariant for the policy-denied sibling (runs[] is
-// shrunk by policy_denied, never empty for non-policy reasons).
+// TestRunResultFormatJSONSaveFailure covers the single-host Save-failure
+// fallback (Task 4 of aimem#767, acceptance criterion "malformed/unavailable
+// artifact"): when Store.Save cannot write its artifact file, runArgs must
+// not emit any JSON envelope (the run-count-vs-hosts invariant cannot hold
+// for a save-failed host), must surface the Save error on stderr with the
+// existing "run: save artifact:" prefix runHost already prints, and must
+// exit exitUsage (96). The fallback is injected by opening a real Store on
+// a t.TempDir() root and then chmod 0o500 on <root>/art so any
+// artifact-file write inside it fails with EACCES — the same EACCES Save
+// would see in production if <root>/art were unwritable. runArgs's own
+// Store injection point is runWithStore, which mirrors the existing
+// runWith transport seam; with store != nil, runArgsWithStore skips its
+// own OpenStore / Close so the test holds the lifetime.
+func TestRunResultFormatJSONSaveFailure(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	seedLinuxFacts(t, root, "web01")
+
+	store, err := artifact.OpenStore(root)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	t.Cleanup(func() {
+		// Restore write permission so t.TempDir's automatic cleanup can
+		// remove <root>/art; without this the dir is left behind on some
+		// filesystems (and any post-test debugging is harder).
+		_ = os.Chmod(filepath.Join(root, "art"), 0o700)
+		store.Close()
+	})
+	if err := os.Chmod(filepath.Join(root, "art"), 0o500); err != nil {
+		t.Fatalf("chmod art: %v", err)
+	}
+
+	f := &fakeTr{rc: 0}
+	var out, errB bytes.Buffer
+	rc := runWithStore(f, store, []string{"--result-format=json", "web01", "--", "true"}, &out, &errB)
+	if rc != exitUsage {
+		t.Fatalf("rc=%d, want %d; stdout=%q stderr=%q", rc, exitUsage, out.String(), errB.String())
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), new(map[string]any)); err == nil {
+		t.Fatalf("expected no JSON envelope on stdout, got %q", out.String())
+	}
+	if !strings.Contains(errB.String(), "run: save artifact:") {
+		t.Fatalf("stderr missing the save-artifact diagnostic: %q", errB.String())
+	}
+}
+
+// TestRunResultFormatJSONFanOutSaveFailure covers the fan-out Save-failure
+// branch in runFanout: any host whose Store.Save fails trips the
+// saveFailed flag for the whole invocation (the envelope's run-count
+// invariant cannot hold), runFanout flushes the per-host human passports
+// and prints the human aggregate line in place of the envelope, and the
+// process exits exitUsage (96). Since runFanout shares one Store across
+// every goroutine, chmod 0o500 on <root>/art fails Save for every host;
+// that is sufficient to exercise the branch — the same code path also
+// covers the "only one host's Save failed" shape (the flag is a single
+// OR over all hosts, not per-host), so this test asserts that fan-out
+// save-failure path end to end.
+func TestRunResultFormatJSONFanOutSaveFailure(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	seedLinuxFacts(t, root, "h1", "h2")
+
+	store, err := artifact.OpenStore(root)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(filepath.Join(root, "art"), 0o700)
+		store.Close()
+	})
+	if err := os.Chmod(filepath.Join(root, "art"), 0o500); err != nil {
+		t.Fatalf("chmod art: %v", err)
+	}
+
+	f := &multiHostTr{rcs: map[string]int{"h1": 0, "h2": 0}}
+	var out, errB bytes.Buffer
+	rc := runWithStore(f, store, []string{"--result-format=json", "h1", "h2", "--", "true"}, &out, &errB)
+	if rc != exitUsage {
+		t.Fatalf("rc=%d, want %d; stdout=%q stderr=%q", rc, exitUsage, out.String(), errB.String())
+	}
+	s := out.String()
+	if !strings.Contains(s, "hosts=2 ok=0 failed=2 transport-errors=0") {
+		t.Fatalf("human aggregate line missing or wrong: %q", s)
+	}
+	if !strings.Contains(errB.String(), "run: save artifact:") {
+		t.Fatalf("stderr missing the save-artifact diagnostic: %q", errB.String())
+	}
+}
+
 func TestRunResultFormatJSONFanoutInvariant(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("SSHAI_ROOT", root)

@@ -102,11 +102,35 @@ func runWith(tr transport.Transport, args []string, stdout, stderr io.Writer) in
 	return runArgs(args, stdout, stderr, tr)
 }
 
+// runWithStore mirrors runWith but additionally accepts an already-open
+// *artifact.Store. It exists so tests can drive runArgs's Save-failure
+// fallback without any in-memory mocking: pass a real Store whose
+// artifact directory has been poisoned beforehand (e.g. chmod 0o500 on
+// <root>/art, or replaced with a regular file), and the caller's
+// Store.Save returns a real error at the same call site production hits.
+// store may be nil — runArgsWithStore then opens one from config and
+// closes it on return, exactly like runArgs today.
+func runWithStore(tr transport.Transport, store *artifact.Store, args []string, stdout, stderr io.Writer) int {
+	return runArgsWithStore(args, stdout, stderr, tr, store)
+}
+
 // runArgs is the thin flag-parsing shell: it resolves flags, config,
 // exactly one host, and the command body, then hands off to runHost for
 // the actual per-host flow. tr is nil in production (Run), in which case
 // a real OpenSSH transport is built from config; runWith passes a fake.
+// The artifact.Store is built from config here; runArgsWithStore is the
+// form that lets a caller inject one (used by runWithStore and any future
+// test that needs to exercise Store.Save's failure modes).
 func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) int {
+	return runArgsWithStore(args, stdout, stderr, tr, nil)
+}
+
+// runArgsWithStore is runArgs with an optional pre-built *artifact.Store.
+// When store is nil, runArgsWithStore opens one from cfg.Root and defers
+// Close — the original runArgs behavior, preserved verbatim. When store
+// is non-nil, runArgsWithStore uses it directly and never calls Close;
+// the caller (typically a test) owns its lifetime.
+func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Transport, store *artifact.Store) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	bodyFile := fs.String("body-file", "", `read the command body from a file ("-" for stdin) instead of the "-- command" form`)
@@ -186,12 +210,23 @@ func runArgs(args []string, stdout, stderr io.Writer, tr transport.Transport) in
 		return exitUsage
 	}
 
-	store, err := artifact.OpenStore(cfg.Root)
-	if err != nil {
-		fmt.Fprintf(stderr, "run: open store: %v\n", err)
-		return exitUsage
+	// Resolve the artifact store: a caller-injected one (runWithStore)
+	// is used as-is and never closed here — the caller owns its lifetime.
+	// The nil path reproduces runArgs's prior behavior (OpenStore +
+	// defer Close) verbatim.
+	storeOwns := false
+	if store == nil {
+		s, err := artifact.OpenStore(cfg.Root)
+		if err != nil {
+			fmt.Fprintf(stderr, "run: open store: %v\n", err)
+			return exitUsage
+		}
+		store = s
+		storeOwns = true
 	}
-	defer store.Close()
+	if storeOwns {
+		defer store.Close()
+	}
 
 	if tr == nil {
 		// ssh refuses to bind its ControlMaster socket under a directory
