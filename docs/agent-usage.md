@@ -40,9 +40,8 @@ Use it when a consumer must parse the result without regexing the human
 passport:
 
 ```bash
-sshai run --result-format=json --body-file - pg-prod-01 <<<'Get-Date'
-jq '.runs[0].exit'     # remote exit code
-jq '.runs[0].artifact_path'  # the exact stored result on disk
+sshai run --result-format=json --body-file - pg-prod-01 <<<'Get-Date' | jq '.runs[0].exit'      # remote exit code
+sshai run --result-format=json --body-file - pg-prod-01 <<<'Get-Date' | jq '.runs[0].artifact_path' # the exact stored result on disk
 ```
 
 The body stays out of argv and out of the envelope: the envelope's
