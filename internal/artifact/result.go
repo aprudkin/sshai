@@ -1,0 +1,87 @@
+package artifact
+
+import (
+	"encoding/json"
+	"path/filepath"
+	"time"
+)
+
+// Summary is the top-level aggregate of a run invocation's machine-readable
+// envelope. Counts are computed by the CLI layer (cli/run.go); RenderResult
+// only serializes them. The json tags are the frozen v1 field names.
+type Summary struct {
+	Hosts           int `json:"hosts"`
+	OK              int `json:"ok"`
+	Failed          int `json:"failed"`
+	TransportErrors int `json:"transport_errors"`
+	PolicyDenied    int `json:"policy_denied"`
+	WorstExit       int `json:"worst_exit"`
+}
+
+// runEntry is one host's result inside the envelope's runs[] array. Field
+// names are the frozen v1 contract (see the machine-readable-result-contract
+// design doc). Empty strings are kept, never omitted.
+type runEntry struct {
+	ID             string `json:"id"`
+	Host           string `json:"host"`
+	Ctx            string `json:"ctx"`
+	Command        string `json:"command"`
+	Exit           int    `json:"exit"`
+	TransportError string `json:"transport_error"`
+	ArtifactPath   string `json:"artifact_path"`
+	Bytes          int64  `json:"bytes"`
+	Lines          int64  `json:"lines"`
+	SHA256         string `json:"sha256"`
+	DurationMs     int64  `json:"duration_ms"`
+	Ts             string `json:"ts"`
+	Truncated      bool   `json:"truncated"`
+	Binary         bool   `json:"binary"`
+	DeltaBase      string `json:"delta_base"`
+}
+
+type envelope struct {
+	SchemaVersion string     `json:"schema_version"`
+	BatchID       string     `json:"batch_id"`
+	Summary       Summary    `json:"summary"`
+	Runs          []runEntry `json:"runs"`
+}
+
+// RenderResult builds the v1 machine-readable envelope as a single JSON
+// object (no trailing newline). artifact_path is derived from root + each
+// Meta.ID (the "<root>/art/<id>" convention). Marshalling cannot fail: every
+// field is a JSON-serializable scalar, so the error is swallowed defensively
+// rather than returned.
+func RenderResult(root string, metas []Meta, summary Summary, batchID string) []byte {
+	runs := make([]runEntry, 0, len(metas))
+	for _, m := range metas {
+		runs = append(runs, runEntry{
+			ID:             m.ID,
+			Host:           m.Host,
+			Ctx:            m.Ctx,
+			Command:        m.Command,
+			Exit:           m.Exit,
+			TransportError: m.TransportErr,
+			ArtifactPath:   filepath.Join(root, "art", m.ID),
+			Bytes:          m.Bytes,
+			Lines:          m.Lines,
+			SHA256:         m.SHA256,
+			DurationMs:     m.DurationMs,
+			Ts:             m.Ts.Format(time.RFC3339Nano),
+			Truncated:      m.Truncated,
+			Binary:         m.Binary,
+			DeltaBase:      m.DeltaBase,
+		})
+	}
+	env := envelope{
+		SchemaVersion: "v1",
+		BatchID:       batchID,
+		Summary:       summary,
+		Runs:          runs,
+	}
+	b, err := json.Marshal(env)
+	if err != nil {
+		// Unreachable: all fields are scalars. Never emit a partial doc.
+		return []byte(`{"schema_version":"v1","batch_id":"","summary":{},"runs":[]}`)
+	}
+	return b
+}
