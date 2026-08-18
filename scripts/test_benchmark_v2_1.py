@@ -399,7 +399,7 @@ def test_rendered_prompts_have_exact_maps_and_control_boundaries() -> None:
             for branch in manifest["branch_order"]
         }
         for branch, expected in BENCH.EXPECTED_CALL_COUNTS.items():
-            marker = f"# BENCH_V21_CALL={branch}:"
+            marker = f"BENCH_V21_CALL={branch}:"
             assert prompts[branch].count(marker) == expected
         assert all("<<'SSHAI_BENCH_V21_" not in prompt for prompt in prompts.values())
         assert "/usr/bin/ssh" not in prompts["raw-control"]
@@ -426,6 +426,25 @@ def test_rendered_prompts_have_exact_maps_and_control_boundaries() -> None:
         assert "--ctx benchmark-v2.1-linux" in repeated
         assert "--delta" not in repeated
         assert "--ctx benchmark-v2.1-linux --delta" in delta
+
+
+def test_call_identity_survives_shell_comment_elision() -> None:
+    """A Codex shell invocation must not lose identity when comments are omitted."""
+    with tempfile.TemporaryDirectory() as directory:
+        manifest = manifest_fixture(Path(directory))
+        call = BENCH.build_branch_calls(manifest, "fanout-control")[0]
+        rendered = BENCH.render_call(manifest, call)
+        submitted = "\n".join(
+            line for line in rendered.splitlines() if not line.startswith("#")
+        )
+        envelope = f"/bin/zsh -lc {shlex.quote(submitted)}"
+        population = BENCH.analyze_command_population(
+            [completed_command(envelope, "ok")],
+            "fanout-control",
+            {"linux-01": ("L01", "L13")},
+        )
+        assert population["marked_calls"] == 1
+        assert population["observations"] == ["L01", "L13"]
 
 
 def test_run_branch_writes_immutable_prompt_result_and_metadata() -> None:
@@ -551,7 +570,7 @@ def test_fanout_evidence_requires_every_declared_host_result() -> None:
         "expected_exits": (0, 0),
     }
     incomplete = completed_command(
-        "# BENCH_V21_CALL=fanout:linux-01 BENCH_V21_OBS=L01,L13\nprintf ok",
+        "BENCH_V21_CALL=fanout:linux-01 BENCH_V21_OBS=L01,L13 printf ok",
         json.dumps({
             "schema_version": "v1",
             "batch_id": "a123",
@@ -922,13 +941,14 @@ def main() -> None:
     test_exact_branch_call_maps()
     test_noop_helper_is_deterministic_and_network_free()
     test_rendered_prompts_have_exact_maps_and_control_boundaries()
+    test_call_identity_survives_shell_comment_elision()
     test_run_branch_writes_immutable_prompt_result_and_metadata()
     test_fanout_evidence_requires_every_declared_host_result()
     test_complete_branch_gate_cross_checks_thread_lifecycle_and_evidence()
     test_frozen_provenance_detects_helper_and_prompt_drift()
     test_three_replicate_decision_uses_paired_controls_and_control_floor()
     test_invalid_analysis_retains_all_branch_reasons_and_file_evidence()
-    marker = "# BENCH_V21_CALL=fanout:linux-01 BENCH_V21_OBS=L01,L13\nprintf ok"
+    marker = "BENCH_V21_CALL=fanout:linux-01 BENCH_V21_OBS=L01,L13 printf ok"
     events = [
         completed_command(marker, "x" * 400),
         completed_command("printf setup", "BENCH_V21_CALL=fanout:fake " + "s" * 40_000),
@@ -951,19 +971,19 @@ def main() -> None:
     assert_invalid([completed_command(marker, "ok"), completed_command(marker, "ok")], "duplicate")
     assert_invalid([], "missing")
     assert_invalid(
-        [completed_command("# BENCH_V21_CALL=fanout:linux-01\nprintf ok", "ok")],
+        [completed_command("BENCH_V21_CALL=fanout:linux-01 printf ok", "ok")],
         "malformed",
     )
     assert_invalid(
         [completed_command(
-            "# BENCH_V21_CALL=fanout:linux-01 BENCH_V21_OBS=L01,W01\nprintf ok",
+            "BENCH_V21_CALL=fanout:linux-01 BENCH_V21_OBS=L01,W01 printf ok",
             "ok",
         )],
         "observations",
     )
     assert_invalid(
         [completed_command(
-            "# BENCH_V21_CALL=fanout:unexpected BENCH_V21_OBS=L01,L13\nprintf ok",
+            "BENCH_V21_CALL=fanout:unexpected BENCH_V21_OBS=L01,L13 printf ok",
             "ok",
         )],
         "unexpected",

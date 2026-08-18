@@ -33,9 +33,9 @@ EXPECTED_CALL_COUNTS = {
 
 
 MARKER_RE = re.compile(
-    r"^# BENCH_V21_CALL=(raw-control|raw|fanout-control|fanout):"
+    r"^BENCH_V21_CALL=(raw-control|raw|fanout-control|fanout):"
     r"([A-Za-z0-9][A-Za-z0-9._-]*) BENCH_V21_OBS="
-    r"([LW][0-9]{2}(?:,[LW][0-9]{2})*)$",
+    r"([LW][0-9]{2}(?:,[LW][0-9]{2})*)(?=\s)",
     re.MULTILINE,
 )
 
@@ -180,7 +180,7 @@ def _observation_by_id(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 def _marker(call: dict[str, Any]) -> str:
     observations = ",".join(call["observations"])
-    return f"# BENCH_V21_CALL={call['branch']}:{call['id']} BENCH_V21_OBS={observations}"
+    return f"BENCH_V21_CALL={call['branch']}:{call['id']} BENCH_V21_OBS={observations}"
 
 
 def body_input_path(manifest: dict[str, Any], observation_id: str) -> Path:
@@ -300,7 +300,7 @@ def _workload_command(manifest: dict[str, Any], call: dict[str, Any]) -> str:
 def render_call(manifest: dict[str, Any], call: dict[str, Any]) -> str:
     control = str(call["branch"]).endswith("-control")
     command = _control_command(manifest, call) if control else _workload_command(manifest, call)
-    return f"{_marker(call)}\n{command}"
+    return f"{_marker(call)} {command}"
 
 
 def render_prompt(manifest: dict[str, Any], branch: str) -> str:
