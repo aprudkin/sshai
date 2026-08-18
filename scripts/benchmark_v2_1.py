@@ -20,8 +20,13 @@ from typing import Any
 
 
 BRANCHES = ("raw-control", "raw", "fanout-control", "fanout")
-AMENDMENT_SCHEMA = "sshai-benchmark/v2.1-amendment-1"
-AMENDMENT_ANALYSIS_SCHEMA = "sshai-benchmark-analysis/v2.1-amendment-1"
+AMENDMENT_1_SCHEMA = "sshai-benchmark/v2.1-amendment-1"
+AMENDMENT_2_SCHEMA = "sshai-benchmark/v2.1-amendment-2"
+AMENDMENT_SCHEMAS = {AMENDMENT_1_SCHEMA, AMENDMENT_2_SCHEMA}
+AMENDMENT_ANALYSIS_SCHEMAS = {
+    AMENDMENT_1_SCHEMA: "sshai-benchmark-analysis/v2.1-amendment-1",
+    AMENDMENT_2_SCHEMA: "sshai-benchmark-analysis/v2.1-amendment-2",
+}
 AMENDMENT_BRANCH_SCHEDULE = (
     ("raw-control", "raw", "fanout-control", "fanout"),
     ("raw", "raw-control", "fanout", "fanout-control"),
@@ -61,15 +66,16 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     """Validate the structural population contract needed to render branches."""
     schema = manifest.get("schema")
     if (
-        schema not in {"sshai-benchmark/v2.1", AMENDMENT_SCHEMA}
+        schema not in {"sshai-benchmark/v2.1", *AMENDMENT_SCHEMAS}
         or manifest.get("frozen") is not True
     ):
         raise AnalysisInvalid(
-            "manifest must be frozen sshai-benchmark/v2.1 or v2.1-amendment-1"
+            "manifest must be frozen sshai-benchmark/v2.1, "
+            "v2.1-amendment-1, or v2.1-amendment-2"
         )
     if manifest.get("branch_order") != list(BRANCHES):
         raise AnalysisInvalid(f"branch_order must be {list(BRANCHES)!r}")
-    if schema == AMENDMENT_SCHEMA:
+    if schema in AMENDMENT_SCHEMAS:
         if manifest.get("replicates") != len(AMENDMENT_BRANCH_SCHEDULE):
             raise AnalysisInvalid("amended manifest must freeze exactly eight replicates")
         schedule = manifest.get("branch_schedule")
@@ -166,7 +172,7 @@ def branch_order_for_replicate(
     """Return the frozen execution order for one complete replicate."""
     if replicate not in range(1, int(manifest["replicates"]) + 1):
         raise AnalysisInvalid(f"replicate must be in range 1..{manifest['replicates']}")
-    if manifest.get("schema") == AMENDMENT_SCHEMA:
+    if manifest.get("schema") in AMENDMENT_SCHEMAS:
         return tuple(manifest["branch_schedule"][replicate - 1])
     return BRANCHES
 
@@ -175,7 +181,7 @@ def branch_schedule_metadata(
     manifest: dict[str, Any], replicate: int, branch: str
 ) -> dict[str, Any]:
     """Return amendment-only run identity without changing base v2.1 metadata."""
-    if manifest.get("schema") != AMENDMENT_SCHEMA:
+    if manifest.get("schema") not in AMENDMENT_SCHEMAS:
         return {}
     replicate_branch_order = branch_order_for_replicate(manifest, replicate)
     return {
@@ -371,11 +377,21 @@ def render_prompt(manifest: dict[str, Any], branch: str) -> str:
     rendered_calls = []
     for call in build_branch_calls(manifest, branch):
         rendered_calls.append(f"```bash\n{render_call(manifest, call)}\n```")
+    one_fence_contract = ""
+    if manifest.get("schema") == AMENDMENT_2_SCHEMA:
+        one_fence_contract = (
+            "Submit each fenced command as its own command tool call. "
+            "A command tool call must contain exactly one fence and exactly one "
+            "BENCH_V21_CALL marker. Never batch, concatenate, loop over, or wrap "
+            "commands from multiple fences in one shell invocation. Wait for each "
+            "call to complete before submitting the next fence.\n\n"
+        )
     return (
         f"Run frozen sshai benchmark v2.1 branch `{branch}` for aimem#743.\n\n"
         "Execute every fenced command exactly once, sequentially, in the displayed order. "
         "Do not add probes, retries, output filtering, artifact reads, or repository changes. "
         "Return only a compact completion summary after all marked calls.\n\n"
+        + one_fence_contract
         + "\n\n".join(rendered_calls)
         + "\n"
     )
@@ -1357,12 +1373,18 @@ def _success_rate(branch: dict[str, Any]) -> float:
     return sum(item.get("outcome") == "success" for item in evidence) / len(OBSERVATION_IDS)
 
 
+def analysis_schema(manifest: dict[str, Any]) -> str:
+    return AMENDMENT_ANALYSIS_SCHEMAS.get(
+        str(manifest.get("schema")), "sshai-benchmark-analysis/v2.1"
+    )
+
+
 def decide_replicates(
     replicates: list[dict[str, dict[str, Any]]],
     manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Apply the frozen base or amended decision rule to validated branches."""
-    amended = manifest is not None and manifest.get("schema") == AMENDMENT_SCHEMA
+    amended = manifest is not None and manifest.get("schema") in AMENDMENT_SCHEMAS
     if manifest is not None:
         validate_manifest(manifest)
     required_replicates = int(manifest["replicates"]) if manifest is not None else 3
@@ -1456,8 +1478,8 @@ def decide_replicates(
     else:
         decision = "needs-work"
     return {
-        "schema": (
-            AMENDMENT_ANALYSIS_SCHEMA if amended else "sshai-benchmark-analysis/v2.1"
+        "schema": analysis_schema(manifest) if manifest is not None else (
+            "sshai-benchmark-analysis/v2.1"
         ),
         "valid": True,
         "decision": decision,
@@ -1689,11 +1711,7 @@ def analyze_all(manifest_path: Path) -> dict[str, Any]:
         replicates.append(branches)
     if reasons:
         return {
-            "schema": (
-                AMENDMENT_ANALYSIS_SCHEMA
-                if manifest.get("schema") == AMENDMENT_SCHEMA
-                else "sshai-benchmark-analysis/v2.1"
-            ),
+            "schema": analysis_schema(manifest),
             "valid": False,
             "decision": "invalid",
             "manifest": str(manifest_path.resolve()),

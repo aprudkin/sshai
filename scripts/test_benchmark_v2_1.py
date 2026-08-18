@@ -173,6 +173,14 @@ def amended_manifest_fixture(
     return manifest
 
 
+def amendment_2_manifest_fixture(
+    root: Path, codex_path: str = "/opt/benchmark/bin/codex"
+) -> dict[str, object]:
+    manifest = amended_manifest_fixture(root, codex_path)
+    manifest["schema"] = "sshai-benchmark/v2.1-amendment-2"
+    return manifest
+
+
 def attach_frozen_provenance(manifest: dict[str, object], sshai: Path) -> None:
     manifest["executables"]["sshai"] = str(sshai)
     fixture_root = Path(manifest["repo"])
@@ -488,6 +496,48 @@ def test_rendered_prompts_have_exact_maps_and_control_boundaries() -> None:
         assert "--ctx benchmark-v2.1-linux" in repeated
         assert "--delta" not in repeated
         assert "--ctx benchmark-v2.1-linux --delta" in delta
+
+
+def test_amendment_2_enforces_one_fence_per_command_item() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        manifest = amendment_2_manifest_fixture(Path(directory))
+        instruction = (
+            "Submit each fenced command as its own command tool call. "
+            "A command tool call must contain exactly one fence and exactly one "
+            "BENCH_V21_CALL marker. Never batch, concatenate, loop over, or wrap "
+            "commands from multiple fences in one shell invocation. Wait for each "
+            "call to complete before submitting the next fence."
+        )
+        for branch, expected_fences in {
+            "raw-control": 36,
+            "raw": 36,
+            "fanout-control": 24,
+            "fanout": 24,
+        }.items():
+            prompt = BENCH.render_prompt(manifest, branch)
+            assert instruction in prompt
+            assert prompt.count("```bash\n") == expected_fences
+
+        historical_prompt = BENCH.render_prompt(
+            amended_manifest_fixture(Path(directory)), "fanout"
+        )
+        assert instruction not in historical_prompt
+
+        calls = BENCH.build_branch_calls(manifest, "fanout")
+        combined = "\n".join(BENCH.render_call(manifest, call) for call in calls[:2])
+        try:
+            BENCH.analyze_command_population(
+                [completed_command(combined, "ok")],
+                "fanout",
+                {
+                    "linux-01": ("L01", "L13"),
+                    "linux-02": ("L02", "L14"),
+                },
+            )
+        except BENCH.AnalysisInvalid as exc:
+            assert "multiple v2.1 markers" in str(exc)
+        else:
+            raise AssertionError("multiple fences in one command item must fail closed")
 
 
 def test_call_identity_survives_shell_comment_elision() -> None:
@@ -985,6 +1035,12 @@ def test_amended_decision_allows_at_most_two_predeclared_control_floor_pairs() -
         }
         assert decision["median_control_adjusted_input_reduction"] == 0.875
 
+        amendment_2 = amendment_2_manifest_fixture(Path(directory))
+        amendment_2_decision = BENCH.decide_replicates(six_defined, amendment_2)
+        assert amendment_2_decision["schema"] == (
+            "sshai-benchmark-analysis/v2.1-amendment-2"
+        )
+
         five_defined = (
             [replicate(300) for _ in range(5)]
             + [replicate(100) for _ in range(3)]
@@ -1062,6 +1118,7 @@ def main() -> None:
     test_schedule_metadata_is_required_only_for_the_amendment()
     test_noop_helper_is_deterministic_and_network_free()
     test_rendered_prompts_have_exact_maps_and_control_boundaries()
+    test_amendment_2_enforces_one_fence_per_command_item()
     test_call_identity_survives_shell_comment_elision()
     test_run_branch_writes_immutable_prompt_result_and_metadata()
     test_fanout_evidence_requires_every_declared_host_result()

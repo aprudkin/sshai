@@ -114,10 +114,12 @@ The p95, compaction, success, and quoting-debug targets passed. The primary targ
 lower actual input tokens did not, so the recorded decision is **needs work**, not “v1.1
 confirmed.” Read the [full result and its boundaries](docs/benchmarks/v1.1-results-2026-08-13.md).
 
-The follow-up fan-out experiment is frozen in the [v2.1 protocol](docs/benchmarks/v2.1-protocol.md)
-and [analyzer definition](docs/benchmarks/v2.1-analyzer.md). It requires paired no-op controls,
-fixed populations, executable provenance, lifecycle cross-checks, and eight balanced complete
-replicates with at least six defined control-adjusted reductions before a result can be promoted.
+The next follow-up fan-out experiment is defined by the latest
+[v2.1 protocol](docs/benchmarks/v2.1-protocol.md) and
+[analyzer definition](docs/benchmarks/v2.1-analyzer.md). It requires paired no-op controls, fixed
+populations, one fenced command per agent-visible command item, executable provenance, lifecycle
+cross-checks, and eight balanced complete replicates with at least six defined control-adjusted
+reductions before a result can be promoted. The amendment-2 root has not been measured yet.
 
 ## Command surface
 
