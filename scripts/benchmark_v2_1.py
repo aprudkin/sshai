@@ -171,6 +171,19 @@ def branch_order_for_replicate(
     return BRANCHES
 
 
+def branch_schedule_metadata(
+    manifest: dict[str, Any], replicate: int, branch: str
+) -> dict[str, Any]:
+    """Return amendment-only run identity without changing base v2.1 metadata."""
+    if manifest.get("schema") != AMENDMENT_SCHEMA:
+        return {}
+    replicate_branch_order = branch_order_for_replicate(manifest, replicate)
+    return {
+        "branch_order": list(replicate_branch_order),
+        "branch_index": replicate_branch_order.index(branch),
+    }
+
+
 def build_branch_calls(manifest: dict[str, Any], branch: str) -> list[dict[str, Any]]:
     """Return the exact ordered call map for one manifest branch."""
     if branch not in BRANCHES:
@@ -626,13 +639,11 @@ def run_branch(manifest_path: Path, replicate: int, branch: str) -> dict[str, Pa
     stderr_bytes = process.stderr.encode("utf-8")
     with paths["stderr"].open("xb") as stream:
         stream.write(stderr_bytes)
-    replicate_branch_order = branch_order_for_replicate(manifest, replicate)
     metadata = {
         "schema": "sshai-benchmark-run/v2.1",
         "replicate": replicate,
         "branch": branch,
-        "branch_order": list(replicate_branch_order),
-        "branch_index": replicate_branch_order.index(branch),
+        **branch_schedule_metadata(manifest, replicate, branch),
         "manifest": str(manifest_path.resolve()),
         "manifest_sha256": manifest_digest(manifest_path),
         "prompt": str(paths["prompt"].resolve()),
@@ -1504,8 +1515,7 @@ def analyze_branch_files(
         "schema": "sshai-benchmark-run/v2.1",
         "replicate": replicate,
         "branch": branch,
-        "branch_order": list(branch_order_for_replicate(manifest, replicate)),
-        "branch_index": branch_order_for_replicate(manifest, replicate).index(branch),
+        **branch_schedule_metadata(manifest, replicate, branch),
         "process_exit": 0,
         "manifest_sha256": manifest_digest(manifest_path),
         "sandbox": "workspace-write" if branch.endswith("-control") else "danger-full-access",

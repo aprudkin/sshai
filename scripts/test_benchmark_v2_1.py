@@ -369,6 +369,20 @@ def test_amended_manifest_rejects_nonadjacent_pair_schedule() -> None:
             raise AssertionError("nonadjacent workload/control pairs must fail closed")
 
 
+def test_schedule_metadata_is_required_only_for_the_amendment() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        legacy = manifest_fixture(root)
+        assert BENCH.branch_schedule_metadata(legacy, 1, "raw-control") == {}
+        amended = amended_manifest_fixture(root)
+        assert BENCH.branch_schedule_metadata(amended, 2, "raw-control") == {
+            "branch_order": [
+                "raw", "raw-control", "fanout", "fanout-control",
+            ],
+            "branch_index": 1,
+        }
+
+
 def test_noop_helper_is_deterministic_and_network_free() -> None:
     helper = MODULE_PATH.with_name("benchmark_v2_1_noop.py")
     audit_wrapper = """
@@ -538,10 +552,8 @@ print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": len(prompt
         assert metadata["schema"] == "sshai-benchmark-run/v2.1"
         assert metadata["branch"] == "raw-control"
         assert metadata["replicate"] == 1
-        assert metadata["branch_order"] == [
-            "raw-control", "raw", "fanout-control", "fanout",
-        ]
-        assert metadata["branch_index"] == 0
+        assert "branch_order" not in metadata
+        assert "branch_index" not in metadata
         assert metadata["process_exit"] == 0
         assert metadata["sandbox"] == "workspace-write"
         assert metadata["ignore_user_config"] is True
@@ -1047,6 +1059,7 @@ def main() -> None:
     test_exact_branch_call_maps()
     test_amended_manifest_freezes_balanced_adjacent_branch_schedule()
     test_amended_manifest_rejects_nonadjacent_pair_schedule()
+    test_schedule_metadata_is_required_only_for_the_amendment()
     test_noop_helper_is_deterministic_and_network_free()
     test_rendered_prompts_have_exact_maps_and_control_boundaries()
     test_call_identity_survives_shell_comment_elision()
