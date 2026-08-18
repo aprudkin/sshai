@@ -421,7 +421,7 @@
     "files": {
       "runner": {
         "path": "/Users/alexeyprudkin/dev/sshai/scripts/benchmark_v2_1.py",
-        "sha256": "760e6a0b2e04e882029a6b2667af7185804ef95bc1e3f8136618154c5e344905"
+        "sha256": "b01c5074cb3be3c12f7298546c4e6efa9312e286f213af23691eb807028ab5f6"
       },
       "helper": {
         "path": "/Users/alexeyprudkin/dev/sshai/scripts/benchmark_v2_1_noop.py",
@@ -437,7 +437,7 @@
       },
       "tests": {
         "path": "/Users/alexeyprudkin/dev/sshai/scripts/test_benchmark_v2_1.py",
-        "sha256": "4ccd4b0946a6f84b5954711371440d7a2eac15850564266e6bd8c0d48ee7bb92"
+        "sha256": "37c85137eeb6556c88ebaac4c075d889ae2cfd83428c88ec35943ac608e2cc8b"
       }
     },
     "sshai": {

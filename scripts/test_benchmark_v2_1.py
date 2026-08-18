@@ -701,6 +701,12 @@ def test_complete_branch_gate_cross_checks_thread_lifecycle_and_evidence() -> No
             manifest, branch, wrapped_events, persisted
         )
         assert wrapped_report["marked_calls"] == 24
+        sample = BENCH.render_call(
+            manifest, BENCH.build_branch_calls(manifest, branch)[0]
+        )
+        assert BENCH.command_script(
+            shlex.join(["/bin/zsh", "-c", sample])
+        ) == sample
 
         reversed_events = events[:2] + list(reversed(events[2:-1])) + events[-1:]
         try:

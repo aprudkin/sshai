@@ -1158,6 +1158,7 @@ def command_script(command: str) -> str:
         return command
     if len(arguments) == 3 and arguments[:2] in (
         ["/bin/zsh", "-lc"],
+        ["/bin/zsh", "-c"],
         ["/bin/bash", "-c"],
     ):
         return arguments[2]
