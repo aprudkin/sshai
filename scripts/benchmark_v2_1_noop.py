@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 import sys
+from pathlib import Path
 
 
 OBSERVATION_RE = re.compile(r"^[LW][0-9]{2}$")
@@ -23,7 +24,7 @@ def comma_values(value: str) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("run",))
-    parser.add_argument("--body-file", choices=("-",), required=True)
+    parser.add_argument("--body-file", required=True)
     parser.add_argument("--timeout", type=int, choices=(180,), required=True)
     parser.add_argument("--result-format", choices=("json",), required=True)
     parser.add_argument("--ctx")
@@ -46,7 +47,13 @@ def main() -> int:
     except ValueError:
         parser.error("expected exits must be integers")
 
-    body = sys.stdin.buffer.read()
+    if args.body_file == "-":
+        body = sys.stdin.buffer.read()
+    else:
+        body_path = Path(args.body_file)
+        if not body_path.is_absolute() or not body_path.is_file() or body_path.is_symlink():
+            parser.error("body file must be an absolute regular file")
+        body = body_path.read_bytes()
     document = {
         "schema": "sshai-benchmark-noop/v2.1",
         "branch": args.branch,

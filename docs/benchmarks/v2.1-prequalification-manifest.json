@@ -421,15 +421,15 @@
     "files": {
       "runner": {
         "path": "/Users/alexeyprudkin/dev/sshai/scripts/benchmark_v2_1.py",
-        "sha256": "beca5d393fe23db4eeb8ee489fbaa62cbe900fb6978c10665f3afa19a6e91690"
+        "sha256": "760e6a0b2e04e882029a6b2667af7185804ef95bc1e3f8136618154c5e344905"
       },
       "helper": {
         "path": "/Users/alexeyprudkin/dev/sshai/scripts/benchmark_v2_1_noop.py",
-        "sha256": "89afc90f26a54a276bd7673feb9b1fbafcfaab57cf9b9a66eaa398d24d877cd9"
+        "sha256": "7e4e5d8d0a4d4c77a96ed5106b497dac82d39bf73884cddfb6125767e98bbf76"
       },
       "protocol": {
         "path": "/Users/alexeyprudkin/dev/sshai/docs/benchmarks/v2.1-protocol.md",
-        "sha256": "0824a57f442692ea47e5fadc55cfc1cf0c6eadd3a3f7a865405fee1891396aec"
+        "sha256": "c5441d7ed9e1ec009c57c2b251b2419d346f17784f9fe8e27743e290970227fa"
       },
       "analyzer_definition": {
         "path": "/Users/alexeyprudkin/dev/sshai/docs/benchmarks/v2.1-analyzer.md",
@@ -437,7 +437,7 @@
       },
       "tests": {
         "path": "/Users/alexeyprudkin/dev/sshai/scripts/test_benchmark_v2_1.py",
-        "sha256": "597682e81b3bebb49813d6ffc3cf81f6a5b760b62c9484ecb7a0eba0488f353d"
+        "sha256": "4ccd4b0946a6f84b5954711371440d7a2eac15850564266e6bd8c0d48ee7bb92"
       }
     },
     "sshai": {
@@ -460,7 +460,12 @@
       "sha256": "19c4f144c5226a9f17c58e6f0fa854843b0f77a6eb420f40e2745a12f10f5d37",
       "version": "0.147.0"
     },
-    "instruction_files": [],
+    "instruction_files": [
+      {
+        "path": "/Users/alexeyprudkin/.agents/skills/source-command-sshai/SKILL.md",
+        "sha256": "275a0d46fd2921dbcbefafc7ff99e69582ed693a1ea6ee0c42884a5227c13c70"
+      }
+    ],
     "config_files": [],
     "repository": {
       "head": "4dea3bc4c97c8fee45f462667c0ed87fa11174eb",
@@ -468,10 +473,10 @@
       "clean": false
     },
     "prompt_sha256": {
-      "raw-control": "246e2f4b0abc3c45f0308826b61c2dc06e075abfefe7124450ec20ccda819a9b",
-      "raw": "423c62aef2e55f92fa95439c95b883bc8ca59f508d9dc0d9fbf5ffd7dc207f58",
-      "fanout-control": "9fe58235a27f47f942d910d70520f16f92303c8eeb9872da245004b51dafccf5",
-      "fanout": "fa797273ec79551c5269112adf6a6509f91eb3fd053a1f0ca97c3793b351daba"
+      "raw-control": "72925b59e3d4c311b9a9aaef0497a1c06b3db5659d7c91aafbfe88d009502dfe",
+      "raw": "85b01369255a49394550803fca799298ce98ad859a1418b6fe8191e9535bfc35",
+      "fanout-control": "c509305a7ea16662cc4003c8fdd00b53279d88bdb5f415ec21331b56750a9d6b",
+      "fanout": "da8cdf927be9b16418aebea7d6286a4a6993d812b14ae0b68ce60886429fc5a3"
     },
     "execution_contract_sha256": "84b30c4af0de18e6e1db7e81f3164667a2a9af1f19bfc5adce9034dabf107aca"
   }

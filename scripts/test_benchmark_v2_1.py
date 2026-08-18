@@ -401,20 +401,22 @@ def test_rendered_prompts_have_exact_maps_and_control_boundaries() -> None:
         for branch, expected in BENCH.EXPECTED_CALL_COUNTS.items():
             marker = f"# BENCH_V21_CALL={branch}:"
             assert prompts[branch].count(marker) == expected
-        assert prompts["raw-control"].count("<<'SSHAI_BENCH_V21_") == 36
-        assert prompts["raw"].count("<<'SSHAI_BENCH_V21_") == 36
-        assert prompts["fanout-control"].count("<<'SSHAI_BENCH_V21_") == 24
-        assert prompts["fanout"].count("<<'SSHAI_BENCH_V21_") == 24
+        assert all("<<'SSHAI_BENCH_V21_" not in prompt for prompt in prompts.values())
         assert "/usr/bin/ssh" not in prompts["raw-control"]
         assert "/opt/benchmark/bin/sshai" not in prompts["raw-control"]
         assert "/usr/bin/ssh" not in prompts["fanout-control"]
         assert "/opt/benchmark/bin/sshai" not in prompts["fanout-control"]
         assert str(MODULE_PATH.with_name("benchmark_v2_1_noop.py")) in prompts["raw-control"]
         assert "BENCH_V21_OBS=L01,L13" in prompts["fanout-control"]
-        assert "/usr/bin/ssh linux-a bash -s" in prompts["raw"]
-        assert "/usr/bin/ssh windows-a pwsh -NoProfile -NonInteractive -File -" in prompts["raw"]
+        linux_body = str(Path(manifest["artifact_root"]) / "inputs" / "L01.body")
+        windows_body = str(Path(manifest["artifact_root"]) / "inputs" / "W01.body")
+        assert f"/usr/bin/ssh linux-a bash -s < {linux_body}" in prompts["raw"]
         assert (
-            "/opt/benchmark/bin/sshai run --body-file - --timeout 180 "
+            "/usr/bin/ssh windows-a pwsh -NoProfile -NonInteractive -File - "
+            f"< {windows_body}"
+        ) in prompts["raw"]
+        assert (
+            f"/opt/benchmark/bin/sshai run --body-file {linux_body} --timeout 180 "
             "--result-format=json linux-a linux-b"
         ) in prompts["fanout"]
         assert prompts["fanout"].find("linux-a linux-b") < prompts["fanout"].find("windows-a")
@@ -452,6 +454,11 @@ print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": len(prompt
         original_repository_validator = BENCH.validate_repository_state
         BENCH.validate_repository_state = lambda _manifest: None
         paths = BENCH.run_branch(manifest_path, 1, "raw-control")
+        body_inputs = root / "artifacts" / "inputs"
+        assert len(list(body_inputs.glob("*.body"))) == 36
+        assert (body_inputs / "L07.body").read_text() == (
+            "printf observation-07\n"
+        )
         assert paths == {
             "prompt": root / "artifacts" / "replicate-01" / "raw-control.prompt.txt",
             "result": root / "artifacts" / "replicate-01" / "raw-control.jsonl",
@@ -663,11 +670,33 @@ def test_complete_branch_gate_cross_checks_thread_lifecycle_and_evidence() -> No
         assert report["usage"]["non_cached_input_tokens"] == 200
         assert report["compactions"]["matched"] is True
 
+        skill_path = Path(directory) / "sshai-skill.md"
+        skill_text = "frozen sshai skill\n"
+        skill_path.write_text(skill_text, encoding="utf-8")
+        manifest["provenance"] = {
+            "instruction_files": [{
+                "path": str(skill_path),
+                "sha256": hashlib.sha256(skill_text.encode()).hexdigest(),
+            }],
+        }
+        events.insert(-1, completed_command(
+            shlex.join(["/bin/zsh", "-lc", f"cat {skill_path}"]),
+            skill_text,
+        ))
+        setup_report = BENCH.analyze_branch_events(
+            manifest, branch, events, persisted
+        )
+        assert setup_report["unmarked_calls"] == 1
+
         wrapped_events = json.loads(json.dumps(events))
         for event in wrapped_events:
             item = event.get("item")
-            if isinstance(item, dict) and item.get("type") == "command_execution":
-                item["command"] = shlex.join(["/bin/zsh", "-lc", item["command"]])
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "command_execution"
+                and "BENCH_V21_" in item["command"]
+            ):
+                item["command"] = shlex.join(["/bin/bash", "-c", item["command"]])
         wrapped_report = BENCH.analyze_branch_events(
             manifest, branch, wrapped_events, persisted
         )
@@ -850,7 +879,7 @@ def test_invalid_analysis_retains_all_branch_reasons_and_file_evidence() -> None
         assert set(report["branches"][0]) == set(BENCH.BRANCHES)
         first = report["branches"][0]["raw-control"]
         assert first["valid"] is False
-        assert "cannot read run metadata" in first["reason"]
+        assert "body input directory" in first["reason"]
         assert first["available_files"]["manifest"]["sha256"] == hashlib.sha256(
             manifest_path.read_bytes()
         ).hexdigest()

@@ -183,6 +183,44 @@ def _marker(call: dict[str, Any]) -> str:
     return f"# BENCH_V21_CALL={call['branch']}:{call['id']} BENCH_V21_OBS={observations}"
 
 
+def body_input_path(manifest: dict[str, Any], observation_id: str) -> Path:
+    return Path(str(manifest["artifact_root"])) / "inputs" / f"{observation_id}.body"
+
+
+def expected_body_inputs(manifest: dict[str, Any]) -> dict[str, bytes]:
+    return {
+        f"{item['id']}.body": (item["body"] + "\n").encode("utf-8")
+        for item in manifest["observations"]
+    }
+
+
+def validate_body_inputs(manifest: dict[str, Any]) -> None:
+    directory = Path(str(manifest["artifact_root"])) / "inputs"
+    expected = expected_body_inputs(manifest)
+    if not directory.is_dir() or directory.is_symlink():
+        raise AnalysisInvalid("benchmark body input directory is not a regular directory")
+    actual_names = {path.name for path in directory.iterdir()}
+    if actual_names != set(expected):
+        raise AnalysisInvalid("benchmark body input inventory differs from the manifest")
+    for name, data in expected.items():
+        path = directory / name
+        if not path.is_file() or path.is_symlink() or read_bytes(path, "body input") != data:
+            raise AnalysisInvalid(f"benchmark body input differs from manifest: {path}")
+
+
+def materialize_body_inputs(manifest: dict[str, Any]) -> None:
+    directory = Path(str(manifest["artifact_root"])) / "inputs"
+    expected = expected_body_inputs(manifest)
+    if not directory.exists():
+        directory.mkdir(mode=0o700, parents=True)
+        for name, data in expected.items():
+            path = directory / name
+            with path.open("xb") as stream:
+                stream.write(data)
+            path.chmod(0o400)
+    validate_body_inputs(manifest)
+
+
 def _control_command(manifest: dict[str, Any], call: dict[str, Any]) -> str:
     executables = manifest["executables"]
     observations = _observation_by_id(manifest)
@@ -192,7 +230,7 @@ def _control_command(manifest: dict[str, Any], call: dict[str, Any]) -> str:
         executables["noop_helper"],
         "run",
         "--body-file",
-        "-",
+        str(body_input_path(manifest, call["observations"][0])),
         "--timeout",
         str(manifest["timeout_seconds"]),
         "--result-format=json",
@@ -222,17 +260,14 @@ def _control_command(manifest: dict[str, Any], call: dict[str, Any]) -> str:
         ]
     else:
         arguments = helper_arguments
-    rendered = " ".join(shlex.quote(str(argument)) for argument in arguments)
-    delimiter = "SSHAI_BENCH_V21_" + call["id"].replace("-", "_").upper()
-    return f"{rendered} <<'{delimiter}'\n{first['body']}\n{delimiter}"
+    return " ".join(shlex.quote(str(argument)) for argument in arguments)
 
 
 def _workload_command(manifest: dict[str, Any], call: dict[str, Any]) -> str:
     executables = manifest["executables"]
     observations = _observation_by_id(manifest)
     first = observations[call["observations"][0]]
-    body = first["body"]
-    delimiter = "SSHAI_BENCH_V21_" + call["id"].replace("-", "_").upper()
+    body_path = str(body_input_path(manifest, call["observations"][0]))
 
     if call["branch"] == "raw":
         if first["os"] == "linux":
@@ -248,7 +283,7 @@ def _workload_command(manifest: dict[str, Any], call: dict[str, Any]) -> str:
         ]
     else:
         command = [
-            executables["sshai"], "run", "--body-file", "-", "--timeout",
+            executables["sshai"], "run", "--body-file", body_path, "--timeout",
             str(manifest["timeout_seconds"]), "--result-format=json",
         ]
         if first["class"] in {8, 9}:
@@ -257,7 +292,9 @@ def _workload_command(manifest: dict[str, Any], call: dict[str, Any]) -> str:
             command.append("--delta")
         command.extend(call["hosts"])
     rendered = " ".join(shlex.quote(str(argument)) for argument in command)
-    return f"{rendered} <<'{delimiter}'\n{body}\n{delimiter}"
+    if call["branch"] == "raw":
+        rendered += " < " + shlex.quote(body_path)
+    return rendered
 
 
 def render_call(manifest: dict[str, Any], call: dict[str, Any]) -> str:
@@ -494,6 +531,7 @@ def run_branch(manifest_path: Path, replicate: int, branch: str) -> dict[str, Pa
         raise AnalysisInvalid(
             f"refusing to overwrite existing branch artifacts: {', '.join(existing)}"
         )
+    materialize_body_inputs(manifest)
     codex_home = branch_codex_home(manifest, replicate, branch)
     if codex_home.exists() or codex_home.is_symlink():
         raise AnalysisInvalid(f"fresh branch Codex home already exists: {codex_home}")
@@ -819,7 +857,7 @@ def analyze_branch_events(
         command = command_script(str(item.get("command") or ""))
         marker = MARKER_RE.search(command)
         if marker is None:
-            if branch.endswith("-control"):
+            if branch.endswith("-control") and not is_frozen_local_setup(item, manifest):
                 raise AnalysisInvalid("unmarked control command invalidates the branch")
             remote_paths = (manifest["executables"]["ssh"], manifest["executables"]["sshai"])
             if any(path in command for path in remote_paths):
@@ -1113,14 +1151,37 @@ def estimated_tokens(output: str) -> int:
 
 
 def command_script(command: str) -> str:
-    """Return the submitted script from Codex's fixed local zsh envelope."""
+    """Return the submitted script from Codex's fixed local shell envelopes."""
     try:
         arguments = shlex.split(command)
     except ValueError:
         return command
-    if len(arguments) == 3 and arguments[:2] == ["/bin/zsh", "-lc"]:
+    if len(arguments) == 3 and arguments[:2] in (
+        ["/bin/zsh", "-lc"],
+        ["/bin/bash", "-c"],
+    ):
         return arguments[2]
     return command
+
+
+def is_frozen_local_setup(item: dict[str, Any], manifest: dict[str, Any]) -> bool:
+    script = command_script(str(item.get("command") or ""))
+    try:
+        arguments = shlex.split(script)
+    except ValueError:
+        return False
+    records = manifest.get("provenance", {}).get("instruction_files", [])
+    for record in records:
+        path = str(record.get("path") or "") if isinstance(record, dict) else ""
+        if arguments not in (["cat", path], ["sed", "-n", "1,240p", path]):
+            continue
+        output = str(item.get("aggregated_output") or "").encode("utf-8")
+        return (
+            type(item.get("exit_code")) is int
+            and item["exit_code"] == 0
+            and sha256_bytes(output) == record.get("sha256")
+        )
+    return False
 
 
 def analyze_command_population(
@@ -1333,6 +1394,7 @@ def analyze_branch_files(
     manifest = load_manifest(manifest_path)
     validate_frozen_provenance(manifest)
     validate_measurement_ready(manifest)
+    validate_body_inputs(manifest)
     paths = branch_artifact_paths(manifest, replicate, branch)
     rollout = paths["result"].parent / f"{branch}.rollout.jsonl"
     rollout_meta_path = paths["result"].parent / f"{branch}.rollout.meta.json"
@@ -1423,6 +1485,15 @@ def analyze_branch_files(
             "path": str(rollout_meta_path),
             "sha256": sha256_bytes(rollout_metadata_bytes),
         },
+        "body_inputs": [
+            {
+                "path": str(body_input_path(manifest, item["id"])),
+                "sha256": sha256_bytes(
+                    body_input_path(manifest, item["id"]).read_bytes()
+                ),
+            }
+            for item in manifest["observations"]
+        ],
     }
     report["elapsed_seconds"] = metadata.get("elapsed_seconds")
     report["stderr"] = {
