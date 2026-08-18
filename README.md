@@ -1,16 +1,20 @@
 # sshai
 
-Remote command execution on Windows and Linux servers for AI agents (Claude Code, Codex CLI),
-designed around one constraint: **agent context is more expensive than CPU cycles**.
+<p align="center">
+  <img src="./assets/readme/hero.svg" width="100%" alt="sshai turns remote Linux and Windows command output into a compact passport backed by a full local artifact">
+</p>
 
-Raw `ssh host 'powershell -c "…"'` returns everything to the agent — banners, CLIXML wrappers,
-blank lines, a hundred-thousand-line `Get-EventLog`. The agent pays a token for every byte and
-keeps it until the end of the session. `sshai` owns transport and encodings, returns
-budget-bounded output upward, and leaves the full result on disk — by reference, not in context.
+`sshai` is a Go CLI for AI agents that runs non-interactive commands on Linux bash and Windows
+PowerShell 7 hosts over SSH. It returns a budget-bounded result to the conversation and keeps the
+captured output on disk for local querying.
 
-The agent gets a compact *passport* instead of raw output:
+> Remote commands in. Compact evidence out. Full output stays available by reference.
 
-```
+## See the result, not the noise
+
+A large remote result becomes a compact *passport*:
+
+```console
 $ sshai run pg-prod-01 -- journalctl -u postgres --since -1h
 a17 host=pg-prod-01 exit=0 lines=8412 bytes=612K time=1.8s
 file=~/.sshai/art/a17
@@ -18,131 +22,127 @@ tail3:
   ...
 ```
 
-and then queries the artifact locally (`sshai q a17 -- grep -iE 'fatal'`, or its own grep — the
-artifact is a plain local file). Repeat runs can return just the diff (`--delta`); a local run-log
-survives context compaction.
+The agent can inspect only what it needs, without replaying the complete artifact into context:
 
-## Status
-
-v1 implemented: `run` (single host and fan-out, `--delta`, `--ctx` state re-injection), `q`,
-`diff`, `log`, `hosts`, `gc`, and `help` all exist and are unit-tested; the Linux path is
-integration-verified against a live host, the Windows path against a live host via the manual
-parity gate ([evidence](docs/windows-parity.md)). Architecture, CLI surface, and v1 scope:
-`docs/superpowers/specs/2026-08-06-sshai-design.md`. Purpose and definition of done:
-`docs/superpowers/specs/2026-08-06-sshai-charter.md`. The current server-workflow migration,
-fallback boundary, and fresh Windows/Linux acceptance evidence are in
-`docs/server-workflow-migration.md`.
-
-## Context economics
-
-The available measurements are a historical baseline for the predecessor `/ps-ssh` workflow,
-not a completed before/after benchmark of `sshai`. A 2026-07-29 transcript audit found:
-
-| Measurement | Historical result |
-|---|---:|
-| Claude `/usage` attribution to `/ps-ssh` | 26% |
-| Agent-visible Bash calls per remote invocation | 457 / 113 = **4.04** |
-| Longest quoting/`DefaultShell` debug tail | **20** calls |
-| Heaviest sampled session | 271 assistant turns, 118 Bash calls, 69 related to `ps-ssh` |
-| Same session's total token counters | 40.79M cache-read, 0.24M output |
-
-The 26% and 40.79M figures describe whole sessions and must not be read as token cost caused only
-by the helper. They identify the amplification mechanism: **cost grows roughly as agent-visible
-round trips × accumulated context**. As an illustrative calculation from the audit, 5k tokens of
-output introduced at turn 40 of a 271-turn session can contribute about 1.2M cumulative later
-cache-read tokens. This is a model of repeated context reads, not an isolated A/B measurement.
-
-`sshai` reduces that amplification in several layers:
-
-- one `sshai run` contains staging, transport, encoding, execution, and collection behind one
-  agent tool call, replacing the historical 4.04-call average and avoiding 10–20-turn quoting
-  repair loops;
-- tiered output inlines a small result, but a large result returns only metadata plus `tail3`; the
-  complete bytes remain in `~/.sshai/art/<id>`;
-- the metadata-only passport fixture is unit-asserted below 200 estimated tokens; `run` uses a
-  factory 500-token estimate (approximately 2 KB at bytes/4) as its full-body inlining threshold,
-  while `q` (per stream) and `diff` trim their output to the same default estimate;
-- `sshai q` filters the local artifact, while `diff` and `--delta` return only relevant changes;
-  an unchanged delta is represented by the short `no change since ...` line (approximately 20
-  tokens by design);
-- `log` and artifact IDs keep evidence outside the conversation, so analysis can resume after
-  compaction without replaying full remote output;
-- fan-out divides the configured inlining threshold across hosts (with a 100-token per-host floor)
-  instead of giving every host the full threshold.
-
-Token estimates in the CLI use `ceil(bytes / 4)`, not a model-specific tokenizer.
-
-The controlled v1.1 benchmark completed on 2026-08-13: 36 read-only observations across two Linux
-and one Windows host, in fresh raw-SSH and `sshai` Codex sessions. `sshai` reduced agent-visible
-marked tool output by **99.86%** (p95 **262,152 → 50** estimated tokens) and actual Codex input
-tokens by **44.71%** (**2,896,077 → 1,601,293**). Both branches succeeded on 34/36 observations,
-had zero marker retries, and exposed zero compaction events. The p95, compaction, success, and
-quoting-debug targets passed; the primary ≥80% input-token target did not, so the decision is
-**needs work**, not v1.1 confirmed. See the [full result and boundaries](docs/benchmarks/v1.1-results-2026-08-13.md),
-the [design](docs/superpowers/specs/2026-08-06-sshai-design.md), and
-[aimem#735](https://github.com/aprudkin/aimem/issues/735).
-
-The follow-up fan-out measurement is frozen in the
-[v2.1 protocol](docs/benchmarks/v2.1-protocol.md) and
-[analyzer definition](docs/benchmarks/v2.1-analyzer.md). It uses paired no-op controls and does
-not promote a measured result until the declared populations, executable provenance, lifecycle
-cross-checks, and three complete replicates pass their validity gates. The
-[pre-qualification manifest](docs/benchmarks/v2.1-prequalification-manifest.json) freezes the
-36/24 call maps, local no-op helper, prompts, isolated Codex home, runtime identity, and executable
-provenance;
-its adjacent `.sha256` file locks the manifest bytes. The v2.1 runner refuses measured branches
-while target qualification remains pending, and later branches require immutable rollout and
-branch-validation evidence from every earlier branch.
-
-## Usage
-
-```
-sshai run [flags] <host...> -- <command>     # execute; N hosts = fan-out
-sshai run --body-file f.ps1 <host...>        # body from file or stdin (never argv)
-sshai q <id> -- <tool> <args>                # run a local tool over a stored artifact
-sshai diff <id1> <id2>                       # diff two artifacts (any hosts)
-sshai log [--host H] [--since T] [--grep P]  # search the run-log
-sshai hosts                                  # known aliases, detected OS, readonly flag
-sshai gc                                     # prune artifacts per retention policy
-sshai help [command]                         # this list, or the full reference for one command
+```console
+$ sshai q a17 -- grep -iE 'fatal|error'
+$ sshai diff a12 a17
+$ sshai log --host pg-prod-01 --since 2h
 ```
 
-Add `--result-format=json` to `sshai run` for a versioned machine-readable
-result envelope (`schema_version: "v1"`) instead of the human passport — see
-`sshai help run` and `docs/agent-usage.md`.
+Artifacts are plain local files. Run metadata remains searchable after context compaction, and
+`--delta` can return only what changed between repeated checks.
 
-The agent-facing quick-start (what an operator pastes into their agent's instructions):
-`docs/agent-usage.md`.
+## Quick start
 
-## Installation
-
-Install the current checkout into `~/.local/bin` (or set `SSHAI_INSTALL_DIR` to another existing
-PATH directory):
+Build and atomically install the current checkout into `~/.local/bin`:
 
 ```bash
 scripts/install.sh
 ```
 
-The installer builds a temporary binary, refuses to replace a symlink or non-file, atomically
-replaces the exact `sshai` target, and runs `sshai help` as a smoke check.
+Then run a command against an alias already defined in `ssh_config`:
 
-## Origin
+```bash
+sshai run web01 -- df -h
+```
 
-A generalization of the now-archived `ps_ssh.py` helper — one Windows host, one shot. It already
-paid for UTF-8 BOM, scp body delivery, pwsh 7 invocation, DefaultShell detection, CLIXML filtering,
-head/tail truncation, and a status line as the source of truth. That experience is ported, not
-rediscovered; the legacy helper is no longer an active fallback.
+Use `--body-file` for multi-line or quote-heavy commands so the body stays out of process
+arguments:
 
-What the archived helper lacked and what this project exists for: Linux/bash targets, multiple
-hosts per call, persistent session state (cwd/env) between calls, artifact-by-reference output
-with local querying, deltas, and a searchable run-log.
+```bash
+sshai run --body-file check.ps1 win01
+```
 
-## Implementation language
+Run `sshai help` for the command inventory or `sshai help run` for the complete execution
+contract.
 
-Go. A single static binary with millisecond startup — the agent invokes the tool hundreds of
-times per session.
+## How it protects agent context
 
-## CI
+```text
+command → SSH transport → captured artifact → bounded passport → local q / diff / log
+```
 
-None yet. The repository is private on GitHub; unit-test CI and a license choice are queued for
-the moment it goes public.
+1. `sshai run` owns command staging, transport, shell selection, encoding, and collection.
+2. Small results may be returned inline; large results return metadata and the last three lines.
+3. Full captured output remains under `~/.sshai/art/<id>` up to the configured stream cap.
+4. `q`, `diff`, `log`, and `--delta` bring back only the evidence needed for the next decision.
+5. Fan-out shares the output budget across hosts instead of multiplying it per host.
+
+The factory inline threshold is a 500-token estimate, calculated as `ceil(bytes / 4)`. It is a
+predictable byte budget, not a model-specific tokenizer.
+
+## Machine-readable results
+
+For orchestration, add `--result-format=json`. Stdout becomes exactly one versioned envelope with
+`schema_version: "v1"`; diagnostics remain on stderr.
+
+```bash
+sshai run --result-format=json web01 -- uname -a | jq '.runs[0] | {host, exit, artifact_path}'
+```
+
+`--result-out <file>` atomically publishes the same envelope to one regular file with mode `0600`.
+Symlinks, directories, and other non-regular destinations are refused. File and stdin bodies are
+represented by a hash in stored metadata rather than by their command text.
+
+## Safety boundary
+
+`sshai` is a transport and evidence tool. It does not authorize remote changes or replace an
+operational runbook.
+
+- Use it for non-interactive Linux bash or Windows PowerShell 7 commands on configured SSH aliases.
+- Keep passwords, tokens, keys, and other secrets out of command text and expected output.
+- Use a separate approved workflow for secret stdin, file transfer, interactive programs,
+  PowerShell 5.1, ad-hoc identity options, or unsupported two-hop execution.
+- A readonly policy denial, transport failure, and remote non-zero exit remain distinct outcomes.
+- The archived `ps_ssh.py` helper is not a fallback.
+
+See [agent usage](docs/agent-usage.md) for the default-use rule and explicit fallback contract.
+
+## Measured context economics
+
+The controlled v1.1 benchmark completed on 2026-08-13 with 36 read-only observations across two
+Linux hosts and one Windows host, using fresh raw-SSH and `sshai` Codex sessions.
+
+| Measurement | Raw SSH | `sshai` | Result |
+| --- | ---: | ---: | ---: |
+| Agent-visible marked tool output, p95 estimated tokens | 262,152 | 50 | **99.86% lower** |
+| Actual Codex input tokens | 2,896,077 | 1,601,293 | **44.71% lower** |
+| Successful observations | 34 / 36 | 34 / 36 | equal |
+
+The p95, compaction, success, and quoting-debug targets passed. The primary target of at least 80%
+lower actual input tokens did not, so the recorded decision is **needs work**, not “v1.1
+confirmed.” Read the [full result and its boundaries](docs/benchmarks/v1.1-results-2026-08-13.md).
+
+The follow-up fan-out experiment is frozen in the [v2.1 protocol](docs/benchmarks/v2.1-protocol.md)
+and [analyzer definition](docs/benchmarks/v2.1-analyzer.md). It requires paired no-op controls,
+fixed populations, executable provenance, lifecycle cross-checks, and three complete replicates
+before a result can be promoted.
+
+## Command surface
+
+```text
+sshai run [flags] <host...> -- <command>      execute; multiple hosts fan out
+sshai run --body-file <file|-> <host...>      read a body from a file or stdin
+sshai q <id> -- <tool> <args...>              query one stored artifact locally
+sshai diff <id1> <id2>                        compare two stored artifacts
+sshai log [--host H] [--since T] [--grep P]  search run history
+sshai hosts                                   list known aliases and cached facts
+sshai gc                                      prune artifacts by retention policy
+sshai help [command]                          show concise or detailed help
+```
+
+## Project status
+
+Version 1 implements single-host and fan-out execution, bounded passports, artifacts, local
+queries, diffs, deltas, searchable history, named state contexts, readonly policy, and JSON result
+envelopes. Linux and Windows paths have live acceptance evidence recorded in the repository.
+
+- [Architecture and CLI design](docs/superpowers/specs/2026-08-06-sshai-design.md)
+- [Purpose and definition of done](docs/superpowers/specs/2026-08-06-sshai-charter.md)
+- [Windows parity evidence](docs/windows-parity.md)
+- [Server-workflow migration and live acceptance](docs/server-workflow-migration.md)
+- [Agent-facing usage reference](docs/agent-usage.md)
+
+Implementation: Go 1.26.5, one executable, no daemon. Unit-test CI and a license choice remain
+pending before the private repository is made public.
