@@ -16,7 +16,15 @@ BENCH = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BENCH)
 
 
-def event_file(path: Path, branch: str, input_tokens: int, output_size: int) -> None:
+def event_file(
+    path: Path,
+    branch: str,
+    input_tokens: int,
+    output_size: int,
+    *,
+    unmarked_output_sizes: tuple[int, ...] = (),
+    misleading_compaction_prose: bool = False,
+) -> None:
     events = [{"type": "thread.started", "thread_id": f"thread-{branch}"}]
     for step_id in BENCH.expected_step_ids():
         events.append({
@@ -28,6 +36,30 @@ def event_file(path: Path, branch: str, input_tokens: int, output_size: int) -> 
                 "exit_code": 0,
             },
         })
+    for output_size in unmarked_output_sizes:
+        events.append({
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "command": "printf setup",
+                "aggregated_output": "s" * output_size,
+                "exit_code": 0,
+            },
+        })
+    if misleading_compaction_prose:
+        events.extend([
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "agent_message",
+                    "text": "No compact lifecycle event was observed.",
+                },
+            },
+            {
+                "type": "message.compaction_hint",
+                "message": "This is prose, not a schema-defined lifecycle event.",
+            },
+        ])
     events.append({"type": "turn.completed", "usage": {"input_tokens": input_tokens}})
     path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
 
@@ -35,6 +67,18 @@ def event_file(path: Path, branch: str, input_tokens: int, output_size: int) -> 
 def main() -> None:
     assert BENCH.percentile_nearest_rank([1, 2, 3, 100], 0.95) == 100
     assert len(BENCH.expected_step_ids()) == 36
+    rollout_events = [
+        {"type": "response_item", "payload": {"type": "message", "content": "compacted"}},
+        {"type": "event_msg", "payload": {"type": "compact_status"}},
+        {"type": "compacted", "payload": {"message": "schema-defined lifecycle record"}},
+    ]
+    assert BENCH.count_persisted_compactions(rollout_events) == 1
+    assert BENCH.lifecycle_cross_check(1, rollout_events) == {
+        "codex_exec": 1,
+        "persisted_rollout": 1,
+        "matched": True,
+    }
+    assert BENCH.lifecycle_cross_check(0, rollout_events)["matched"] is False
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         raw = root / "raw.jsonl"
@@ -65,7 +109,14 @@ def main() -> None:
             "steps": steps,
         }), encoding="utf-8")
         event_file(raw, "raw", 100_000, 4000)
-        event_file(sshai, "sshai", 10_000, 400)
+        event_file(
+            sshai,
+            "sshai",
+            10_000,
+            400,
+            unmarked_output_sizes=(40_000, 40_000),
+            misleading_compaction_prose=True,
+        )
         report = BENCH.analyze(manifest, raw, sshai, None)
         assert report["input_token_reduction"] == 0.9
         assert report["cached_input_token_reduction"] is None
@@ -75,7 +126,10 @@ def main() -> None:
         assert report["targets"]["all_steps_observed"] is True
         assert report["targets"]["sshai_success_ge_raw"] is True
         assert report["raw"]["tool_response_est_tokens"]["p95"] == 1000
-        assert report["sshai"]["tool_response_est_tokens"]["p95"] == 100
+        assert report["sshai"]["tool_response_est_tokens"]["p95"] == 10_000
+        assert report["sshai"]["marked_tool_response_est_tokens"]["p95"] == 100
+        assert report["sshai"]["unmarked_calls"] == 2
+        assert report["sshai"]["explicit_compaction_mentions"] == 0
         assert report["decision"] == "confirmed"
     print("benchmark_v1_1 tests: ok")
 

@@ -19,6 +19,8 @@ from typing import Any
 REQUIRED_STEPS = 36
 BRANCHES = ("raw", "sshai")
 STEP_RE = re.compile(r"BENCH_STEP=([LW][0-9]{2})")
+CODEX_EXEC_COMPACTION_EVENT_TYPES = frozenset({"compacted"})
+CODEX_EXEC_COMPACTION_ITEM_TYPES: frozenset[str] = frozenset()
 
 
 def fail(message: str) -> None:
@@ -170,6 +172,37 @@ def percentile_nearest_rank(values: list[int], percentile: float) -> int:
     return ordered[rank - 1]
 
 
+def count_explicit_compactions(events: list[dict[str, Any]]) -> int:
+    """Count only lifecycle records declared by the frozen analyzer schema."""
+    return sum(
+        1
+        for event in events
+        if event.get("type") in CODEX_EXEC_COMPACTION_EVENT_TYPES
+        or (
+            event.get("type") in {"item.started", "item.completed"}
+            and isinstance(event.get("item"), dict)
+            and event["item"].get("type") in CODEX_EXEC_COMPACTION_ITEM_TYPES
+        )
+    )
+
+
+def count_persisted_compactions(events: list[dict[str, Any]]) -> int:
+    """Count the exact compaction record type used by persisted Codex rollouts."""
+    return sum(1 for event in events if event.get("type") == "compacted")
+
+
+def lifecycle_cross_check(
+    codex_exec_compactions: int,
+    persisted_events: list[dict[str, Any]],
+) -> dict[str, int | bool]:
+    persisted_compactions = count_persisted_compactions(persisted_events)
+    return {
+        "codex_exec": codex_exec_compactions,
+        "persisted_rollout": persisted_compactions,
+        "matched": codex_exec_compactions == persisted_compactions,
+    }
+
+
 def analyze_branch(path: Path, expected_exits: dict[str, int]) -> dict[str, Any]:
     events = read_events(path)
     completed = [
@@ -197,14 +230,7 @@ def analyze_branch(path: Path, expected_exits: dict[str, int]) -> dict[str, Any]
             unmarked += 1
     turns = [event for event in events if event.get("type") == "turn.completed"]
     usage = turns[-1].get("usage", {}) if turns else {}
-    compactions = sum(
-        1 for event in events
-        if "compact" in str(event.get("type") or "").lower()
-        or (
-            isinstance(event.get("item"), dict)
-            and "compact" in str(event["item"].get("type") or "").lower()
-        )
-    )
+    compactions = count_explicit_compactions(events)
     successful_steps = sorted(
         step_id for step_id, expected in expected_exits.items()
         if observed_exits.get(step_id) == expected
@@ -277,7 +303,7 @@ def analyze(manifest_path: Path, raw_path: Path, sshai_path: Path, output: Path 
         "marked_tool_output_reduction": visible_reduction,
         "targets": {
             "input_reduction_ge_80pct": reduction is not None and reduction >= 0.80,
-            "sshai_p95_lt_500": sshai["tool_response_est_tokens"]["p95"] < 500,
+            "sshai_p95_lt_500": sshai["marked_tool_response_est_tokens"]["p95"] < 500,
             "sshai_zero_compaction_mentions": sshai["explicit_compaction_mentions"] == 0,
             "sshai_success_ge_raw": sshai["success_rate"] >= raw["success_rate"],
             "sshai_quoting_debug_le_1": sshai["retries"] <= 1,

@@ -82,6 +82,12 @@ quoting-debug targets passed; the primary ≥80% input-token target did not, so 
 the [design](docs/superpowers/specs/2026-08-06-sshai-design.md), and
 [aimem#735](https://github.com/aprudkin/aimem/issues/735).
 
+The follow-up fan-out measurement is frozen in the
+[v2.1 protocol](docs/benchmarks/v2.1-protocol.md) and
+[analyzer definition](docs/benchmarks/v2.1-analyzer.md). It uses paired no-op controls and does
+not promote a measured result until the declared populations, executable provenance, lifecycle
+cross-checks, and three complete replicates pass their validity gates.
+
 ## Usage
 
 ```
