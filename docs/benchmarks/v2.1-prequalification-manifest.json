@@ -1,0 +1,486 @@
+{
+  "schema": "sshai-benchmark/v2.1",
+  "frozen": true,
+  "freeze_scope": "prequalification",
+  "task": "aimem#743",
+  "repo": "/Users/alexeyprudkin/dev/sshai",
+  "replicates": 3,
+  "branch_order": [
+    "raw-control",
+    "raw",
+    "fanout-control",
+    "fanout"
+  ],
+  "timeout_seconds": 180,
+  "artifact_root": "/Users/alexeyprudkin/.sshai/benchmarks/v2.1-2026-08-18-01",
+  "executables": {
+    "codex": "/Users/alexeyprudkin/.codex/packages/standalone/releases/0.147.0-aarch64-apple-darwin/bin/codex",
+    "python": "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/bin/python3.14",
+    "noop_helper": "/Users/alexeyprudkin/dev/sshai/scripts/benchmark_v2_1_noop.py",
+    "sshai": "/Users/alexeyprudkin/.local/bin/sshai",
+    "ssh": "/usr/bin/ssh",
+    "watchdog": "/usr/bin/perl"
+  },
+  "codex": {
+    "version": "0.147.0",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high"
+  },
+  "qualification": {
+    "status": "pending",
+    "declared_target_order": [
+      "sf-bot-app01",
+      "sf-bot-db01",
+      "sd-ops-dev-gr01.nko.local"
+    ],
+    "probes": [
+      {
+        "alias": "sf-bot-app01",
+        "command": "printf 'SSHAI_BENCH_QUAL_V21\\n'; uname -s; printf 'shell=bash\\n'",
+        "command_sha256": "d7fc4c004cd0832bec08f5e823ea08e3c05664a9bed19b12136d04f6a3737b0f",
+        "expected_exit": 0,
+        "max_output_bytes": 4096,
+        "expected_output_lines": [
+          "SSHAI_BENCH_QUAL_V21",
+          "Linux",
+          "shell=bash"
+        ]
+      },
+      {
+        "alias": "sf-bot-db01",
+        "command": "printf 'SSHAI_BENCH_QUAL_V21\\n'; uname -s; printf 'shell=bash\\n'",
+        "command_sha256": "d7fc4c004cd0832bec08f5e823ea08e3c05664a9bed19b12136d04f6a3737b0f",
+        "expected_exit": 0,
+        "max_output_bytes": 4096,
+        "expected_output_lines": [
+          "SSHAI_BENCH_QUAL_V21",
+          "Linux",
+          "shell=bash"
+        ]
+      },
+      {
+        "alias": "sd-ops-dev-gr01.nko.local",
+        "command": "[Console]::Out.WriteLine('SSHAI_BENCH_QUAL_V21'); $PSVersionTable.PSVersion.ToString()",
+        "command_sha256": "a4e7f783695cc3616404f52df51e96db5b0b829444e13fd2de06a92f20e33f25",
+        "expected_exit": 0,
+        "max_output_bytes": 4096,
+        "expected_output_lines": [
+          "SSHAI_BENCH_QUAL_V21",
+          "7.6.3"
+        ]
+      }
+    ]
+  },
+  "targets": [
+    {
+      "alias": "sf-bot-app01",
+      "os": "linux",
+      "shell": "bash"
+    },
+    {
+      "alias": "sf-bot-db01",
+      "os": "linux",
+      "shell": "bash"
+    },
+    {
+      "alias": "sd-ops-dev-gr01.nko.local",
+      "os": "windows",
+      "shell": "pwsh-7.6.3"
+    }
+  ],
+  "observations": [
+    {
+      "id": "L01",
+      "class": 1,
+      "host": "sf-bot-app01",
+      "os": "linux",
+      "body": "uname -sr",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L02",
+      "class": 2,
+      "host": "sf-bot-app01",
+      "os": "linux",
+      "body": "uptime -p",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L03",
+      "class": 3,
+      "host": "sf-bot-app01",
+      "os": "linux",
+      "body": "getconf _NPROCESSORS_ONLN",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L04",
+      "class": 4,
+      "host": "sf-bot-app01",
+      "os": "linux",
+      "body": "awk '/MemTotal:|MemAvailable:/ {print $1, $2, $3}' /proc/meminfo",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L05",
+      "class": 5,
+      "host": "sf-bot-app01",
+      "os": "linux",
+      "body": "df -Pk / | awk 'NR == 2 {print $2, $3, $4, $5}'",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L06",
+      "class": 6,
+      "host": "sf-bot-app01",
+      "os": "linux",
+      "body": "ps -e --no-headers | wc -l",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L07",
+      "class": 7,
+      "host": "sf-bot-app01",
+      "os": "linux",
+      "body": "if command -v ss >/dev/null 2>&1; then ss -Htan | wc -l; else printf 'unsupported\\n'; fi",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L08",
+      "class": 8,
+      "host": "sf-bot-app01",
+      "os": "linux",
+      "body": "awk 'BEGIN { for (i = 1; i <= 2000; i++) printf \"benchmark-line-%06d x\\n\", i }'",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L09",
+      "class": 9,
+      "host": "sf-bot-app01",
+      "os": "linux",
+      "body": "awk 'BEGIN { for (i = 1; i <= 2000; i++) printf \"benchmark-line-%06d x\\n\", i }'",
+      "expected_exit": 0,
+      "delta": true
+    },
+    {
+      "id": "L10",
+      "class": 10,
+      "host": "sf-bot-app01",
+      "os": "linux",
+      "body": "awk 'BEGIN { for (i = 1; i <= 43000; i++) printf \"benchmark-line-%06d x\\n\", i }'",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L11",
+      "class": 11,
+      "host": "sf-bot-app01",
+      "os": "linux",
+      "body": "printf 'intentional-failure\\n' >&2; exit 7",
+      "expected_exit": 7,
+      "delta": false
+    },
+    {
+      "id": "L12",
+      "class": 12,
+      "host": "sf-bot-app01",
+      "os": "linux",
+      "body": "printf 'healthy-after-failure\\n'",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L13",
+      "class": 1,
+      "host": "sf-bot-db01",
+      "os": "linux",
+      "body": "uname -sr",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L14",
+      "class": 2,
+      "host": "sf-bot-db01",
+      "os": "linux",
+      "body": "uptime -p",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L15",
+      "class": 3,
+      "host": "sf-bot-db01",
+      "os": "linux",
+      "body": "getconf _NPROCESSORS_ONLN",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L16",
+      "class": 4,
+      "host": "sf-bot-db01",
+      "os": "linux",
+      "body": "awk '/MemTotal:|MemAvailable:/ {print $1, $2, $3}' /proc/meminfo",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L17",
+      "class": 5,
+      "host": "sf-bot-db01",
+      "os": "linux",
+      "body": "df -Pk / | awk 'NR == 2 {print $2, $3, $4, $5}'",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L18",
+      "class": 6,
+      "host": "sf-bot-db01",
+      "os": "linux",
+      "body": "ps -e --no-headers | wc -l",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L19",
+      "class": 7,
+      "host": "sf-bot-db01",
+      "os": "linux",
+      "body": "if command -v ss >/dev/null 2>&1; then ss -Htan | wc -l; else printf 'unsupported\\n'; fi",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L20",
+      "class": 8,
+      "host": "sf-bot-db01",
+      "os": "linux",
+      "body": "awk 'BEGIN { for (i = 1; i <= 2000; i++) printf \"benchmark-line-%06d x\\n\", i }'",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L21",
+      "class": 9,
+      "host": "sf-bot-db01",
+      "os": "linux",
+      "body": "awk 'BEGIN { for (i = 1; i <= 2000; i++) printf \"benchmark-line-%06d x\\n\", i }'",
+      "expected_exit": 0,
+      "delta": true
+    },
+    {
+      "id": "L22",
+      "class": 10,
+      "host": "sf-bot-db01",
+      "os": "linux",
+      "body": "awk 'BEGIN { for (i = 1; i <= 43000; i++) printf \"benchmark-line-%06d x\\n\", i }'",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "L23",
+      "class": 11,
+      "host": "sf-bot-db01",
+      "os": "linux",
+      "body": "printf 'intentional-failure\\n' >&2; exit 7",
+      "expected_exit": 7,
+      "delta": false
+    },
+    {
+      "id": "L24",
+      "class": 12,
+      "host": "sf-bot-db01",
+      "os": "linux",
+      "body": "printf 'healthy-after-failure\\n'",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "W01",
+      "class": 1,
+      "host": "sd-ops-dev-gr01.nko.local",
+      "os": "windows",
+      "body": "$PSVersionTable.PSVersion.ToString()\n[System.Environment]::OSVersion.VersionString",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "W02",
+      "class": 2,
+      "host": "sd-ops-dev-gr01.nko.local",
+      "os": "windows",
+      "body": "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "W03",
+      "class": 3,
+      "host": "sd-ops-dev-gr01.nko.local",
+      "os": "windows",
+      "body": "[Environment]::ProcessorCount",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "W04",
+      "class": 4,
+      "host": "sd-ops-dev-gr01.nko.local",
+      "os": "windows",
+      "body": "$os = Get-CimInstance Win32_OperatingSystem\n'TotalVisibleMemoryKB={0} FreePhysicalMemoryKB={1}' -f $os.TotalVisibleMemorySize, $os.FreePhysicalMemory",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "W05",
+      "class": 5,
+      "host": "sd-ops-dev-gr01.nko.local",
+      "os": "windows",
+      "body": "Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='C:'\" | ForEach-Object { 'Size={0} FreeSpace={1}' -f $_.Size, $_.FreeSpace }",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "W06",
+      "class": 6,
+      "host": "sd-ops-dev-gr01.nko.local",
+      "os": "windows",
+      "body": "(Get-Process).Count",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "W07",
+      "class": 7,
+      "host": "sd-ops-dev-gr01.nko.local",
+      "os": "windows",
+      "body": "(Get-NetTCPConnection -ErrorAction SilentlyContinue).Count",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "W08",
+      "class": 8,
+      "host": "sd-ops-dev-gr01.nko.local",
+      "os": "windows",
+      "body": "1..2000 | ForEach-Object { 'benchmark-line-{0:D6} x' -f $_ }",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "W09",
+      "class": 9,
+      "host": "sd-ops-dev-gr01.nko.local",
+      "os": "windows",
+      "body": "1..2000 | ForEach-Object { 'benchmark-line-{0:D6} x' -f $_ }",
+      "expected_exit": 0,
+      "delta": true
+    },
+    {
+      "id": "W10",
+      "class": 10,
+      "host": "sd-ops-dev-gr01.nko.local",
+      "os": "windows",
+      "body": "1..43000 | ForEach-Object { 'benchmark-line-{0:D6} x' -f $_ }",
+      "expected_exit": 0,
+      "delta": false
+    },
+    {
+      "id": "W11",
+      "class": 11,
+      "host": "sd-ops-dev-gr01.nko.local",
+      "os": "windows",
+      "body": "[Console]::Error.WriteLine('intentional-failure')\nexit 7",
+      "expected_exit": 7,
+      "delta": false
+    },
+    {
+      "id": "W12",
+      "class": 12,
+      "host": "sd-ops-dev-gr01.nko.local",
+      "os": "windows",
+      "body": "[Console]::Out.WriteLine('healthy-after-failure')",
+      "expected_exit": 0,
+      "delta": false
+    }
+  ],
+  "provenance": {
+    "source_revision": "930bf0b8c28ebb166d7868a9f049e1758253027e",
+    "files": {
+      "runner": {
+        "path": "/Users/alexeyprudkin/dev/sshai/scripts/benchmark_v2_1.py",
+        "sha256": "fa9901a59cf2a1ec116ad41cc096266014b212488e8ed551bfae773712e5f7a5"
+      },
+      "helper": {
+        "path": "/Users/alexeyprudkin/dev/sshai/scripts/benchmark_v2_1_noop.py",
+        "sha256": "89afc90f26a54a276bd7673feb9b1fbafcfaab57cf9b9a66eaa398d24d877cd9"
+      },
+      "protocol": {
+        "path": "/Users/alexeyprudkin/dev/sshai/docs/benchmarks/v2.1-protocol.md",
+        "sha256": "661a1dfd02b74cceb069c4ef2fed851f2003bf5a4f46dd0e54f6cf31d539a35c"
+      },
+      "analyzer_definition": {
+        "path": "/Users/alexeyprudkin/dev/sshai/docs/benchmarks/v2.1-analyzer.md",
+        "sha256": "e959499979b2d3449729d67f7314da87b5fc6584e7b2ede2ce8c44dc04f8e705"
+      },
+      "tests": {
+        "path": "/Users/alexeyprudkin/dev/sshai/scripts/test_benchmark_v2_1.py",
+        "sha256": "919b500fa2645dd0f41fda71ec228683c0edf3e43a13cc08948d41737392b5b9"
+      }
+    },
+    "sshai": {
+      "path": "/Users/alexeyprudkin/.local/bin/sshai",
+      "sha256": "c43c04bb2d35fb23377bbdcc04cf868529fc0459f59c58be048a5d6c8ebcc843",
+      "go_version": "go1.26.6",
+      "vcs_revision": "930bf0b8c28ebb166d7868a9f049e1758253027e",
+      "vcs_modified": false,
+      "smoke_command": [
+        "/Users/alexeyprudkin/.local/bin/sshai",
+        "help"
+      ],
+      "smoke_exit": 0,
+      "smoke_stdout_bytes": 729,
+      "smoke_stderr_bytes": 0,
+      "smoke_ok": true
+    },
+    "codex": {
+      "path": "/Users/alexeyprudkin/.codex/packages/standalone/releases/0.147.0-aarch64-apple-darwin/bin/codex",
+      "sha256": "19c4f144c5226a9f17c58e6f0fa854843b0f77a6eb420f40e2745a12f10f5d37",
+      "version": "0.147.0"
+    },
+    "instruction_files": [
+      {
+        "path": "/Users/alexeyprudkin/.codex/AGENTS.md",
+        "sha256": "d96b372eda011995c605be640fea093c56cec5d1ea8d802142da30d13813bc90"
+      }
+    ],
+    "config_files": [
+      {
+        "path": "/Users/alexeyprudkin/.codex/config.toml",
+        "sha256": "9f70a46653dbf6574afd62e538343603bfad14736050dfd66cbdedb7e5b29022"
+      }
+    ],
+    "repository": {
+      "head": "4dea3bc4c97c8fee45f462667c0ed87fa11174eb",
+      "upstream": "4dea3bc4c97c8fee45f462667c0ed87fa11174eb",
+      "clean": false
+    },
+    "prompt_sha256": {
+      "raw-control": "246e2f4b0abc3c45f0308826b61c2dc06e075abfefe7124450ec20ccda819a9b",
+      "raw": "423c62aef2e55f92fa95439c95b883bc8ca59f508d9dc0d9fbf5ffd7dc207f58",
+      "fanout-control": "9fe58235a27f47f942d910d70520f16f92303c8eeb9872da245004b51dafccf5",
+      "fanout": "fa797273ec79551c5269112adf6a6509f91eb3fd053a1f0ca97c3793b351daba"
+    },
+    "execution_contract_sha256": "961d5fe2213fc0828de080812ad27dc0e4e0a1f1f27da6156218fbe96b0ca0b6"
+  }
+}

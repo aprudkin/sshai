@@ -86,7 +86,12 @@ The follow-up fan-out measurement is frozen in the
 [v2.1 protocol](docs/benchmarks/v2.1-protocol.md) and
 [analyzer definition](docs/benchmarks/v2.1-analyzer.md). It uses paired no-op controls and does
 not promote a measured result until the declared populations, executable provenance, lifecycle
-cross-checks, and three complete replicates pass their validity gates.
+cross-checks, and three complete replicates pass their validity gates. The
+[pre-qualification manifest](docs/benchmarks/v2.1-prequalification-manifest.json) freezes the
+36/24 call maps, local no-op helper, prompts, runtime/config identity, and executable provenance;
+its adjacent `.sha256` file locks the manifest bytes. The v2.1 runner refuses measured branches
+while target qualification remains pending, and later branches require immutable rollout and
+branch-validation evidence from every earlier branch.
 
 ## Usage
 

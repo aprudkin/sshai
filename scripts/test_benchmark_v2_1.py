@@ -4,6 +4,11 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import json
+import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
 
@@ -40,7 +45,828 @@ def assert_invalid(events: list[dict[str, object]], expected: str) -> None:
         raise AssertionError(f"expected AnalysisInvalid containing {expected!r}")
 
 
+def manifest_fixture(root: Path, codex_path: str = "/opt/benchmark/bin/codex") -> dict[str, object]:
+    targets = [
+        {"alias": "linux-a", "os": "linux", "shell": "bash"},
+        {"alias": "linux-b", "os": "linux", "shell": "bash"},
+        {"alias": "windows-a", "os": "windows", "shell": "pwsh-7"},
+    ]
+    qualification_probes = []
+    qualification_results = []
+    for index, target in enumerate(targets):
+        command = (
+            "printf 'SSHAI_BENCH_QUAL_V21\\n'; uname -s; printf 'shell=bash\\n'"
+            if target["os"] == "linux"
+            else "[Console]::Out.WriteLine('SSHAI_BENCH_QUAL_V21'); "
+            "$PSVersionTable.PSVersion.ToString()"
+        )
+        output_path = root / f"qualification-{index}.stdout"
+        expected_output_lines = (
+            ["SSHAI_BENCH_QUAL_V21", "Linux", "shell=bash"]
+            if target["os"] == "linux"
+            else ["SSHAI_BENCH_QUAL_V21", target["shell"].removeprefix("pwsh-")]
+        )
+        output_bytes = ("\n".join(expected_output_lines) + "\n").encode()
+        output_path.write_bytes(output_bytes)
+        qualification_probes.append({
+            "alias": target["alias"],
+            "command": command,
+            "command_sha256": hashlib.sha256((command + "\n").encode()).hexdigest(),
+            "expected_exit": 0,
+            "max_output_bytes": 4096,
+            "expected_output_lines": expected_output_lines,
+        })
+        qualification_results.append({
+            **target,
+            "readonly": True,
+            "probe": {
+                "command_sha256": qualification_probes[-1]["command_sha256"],
+                "exit": 0,
+                "output_path": str(output_path),
+                "output_sha256": hashlib.sha256(output_bytes).hexdigest(),
+                "output_bytes": len(output_bytes),
+            },
+        })
+    qualification = {
+        "schema": "sshai-benchmark-qualification/v2.1",
+        "ok": True,
+        "target_order": [target["alias"] for target in targets],
+        "results": qualification_results,
+    }
+    qualification_path = root / "qualification.json"
+    qualification_bytes = (json.dumps(qualification) + "\n").encode()
+    qualification_path.write_bytes(qualification_bytes)
+    observations = []
+    for target_index, target in enumerate(targets):
+        prefix = "L" if target["os"] == "linux" else "W"
+        start = target_index * 12 + 1 if prefix == "L" else 1
+        for offset in range(12):
+            observations.append({
+                "id": f"{prefix}{start + offset:02d}",
+                "class": offset + 1,
+                "host": target["alias"],
+                "os": target["os"],
+                "body": f"printf observation-{offset + 1:02d}",
+                "expected_exit": 7 if offset == 10 else 0,
+                "delta": offset == 8,
+            })
+    return {
+        "schema": "sshai-benchmark/v2.1",
+        "frozen": True,
+        "repo": str(root),
+        "replicates": 3,
+        "branch_order": ["raw-control", "raw", "fanout-control", "fanout"],
+        "timeout_seconds": 180,
+        "artifact_root": str(root / "artifacts"),
+        "executables": {
+            "python": sys.executable,
+            "noop_helper": str(MODULE_PATH.with_name("benchmark_v2_1_noop.py")),
+            "sshai": "/opt/benchmark/bin/sshai",
+            "ssh": "/usr/bin/ssh",
+            "watchdog": "/usr/bin/perl",
+            "codex": codex_path,
+        },
+        "codex": {
+            "version": "test-version",
+            "model": "test-model",
+            "reasoning_effort": "high",
+        },
+        "qualification": {
+            "status": "passed",
+            "probes": qualification_probes,
+            "evidence_path": str(qualification_path),
+            "evidence_sha256": hashlib.sha256(qualification_bytes).hexdigest(),
+        },
+        "targets": targets,
+        "observations": observations,
+    }
+
+
+def attach_frozen_provenance(manifest: dict[str, object], sshai: Path) -> None:
+    manifest["executables"]["sshai"] = str(sshai)
+    fixture_root = Path(manifest["repo"])
+    fixture_docs = fixture_root / "docs" / "benchmarks"
+    fixture_scripts = fixture_root / "scripts"
+    fixture_docs.mkdir(parents=True, exist_ok=True)
+    fixture_scripts.mkdir(parents=True, exist_ok=True)
+    fixture_protocol = fixture_docs / "v2.1-protocol.md"
+    fixture_analyzer = fixture_docs / "v2.1-analyzer.md"
+    fixture_tests = fixture_scripts / "test_benchmark_v2_1.py"
+    fixture_protocol.write_bytes(
+        (MODULE_PATH.parent.parent / "docs/benchmarks/v2.1-protocol.md").read_bytes()
+    )
+    fixture_analyzer.write_bytes(
+        (MODULE_PATH.parent.parent / "docs/benchmarks/v2.1-analyzer.md").read_bytes()
+    )
+    fixture_tests.write_bytes(MODULE_PATH.with_name("test_benchmark_v2_1.py").read_bytes())
+
+    def record(path: Path) -> dict[str, str]:
+        return {
+            "path": str(path.resolve()),
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        }
+
+    manifest["provenance"] = {
+        "source_revision": "abc123",
+        "files": {
+            "runner": record(MODULE_PATH),
+            "helper": record(Path(manifest["executables"]["noop_helper"])),
+            "protocol": record(fixture_protocol),
+            "analyzer_definition": record(fixture_analyzer),
+            "tests": record(fixture_tests),
+        },
+        "sshai": {
+            **record(sshai),
+            "vcs_revision": "abc123",
+            "vcs_modified": False,
+            "smoke_ok": True,
+        },
+        "codex": {
+            **record(Path(manifest["executables"]["codex"])),
+            "version": manifest["codex"]["version"],
+        },
+        "instruction_files": [record(MODULE_PATH)],
+        "config_files": [record(MODULE_PATH)],
+        "repository": {
+            "head": "abc123",
+            "upstream": "abc123",
+            "clean": True,
+        },
+        "prompt_sha256": {
+            branch: hashlib.sha256(BENCH.render_prompt(manifest, branch).encode()).hexdigest()
+            for branch in manifest["branch_order"]
+        },
+    }
+    manifest["provenance"]["execution_contract_sha256"] = (
+        BENCH.execution_contract_digest(manifest)
+    )
+
+
+def write_manifest_with_lock(path: Path, manifest: dict[str, object]) -> None:
+    data = json.dumps(manifest).encode()
+    path.write_bytes(data)
+    path.with_name(path.name + ".sha256").write_text(
+        hashlib.sha256(data).hexdigest() + "\n", encoding="utf-8"
+    )
+
+
+def test_exact_branch_call_maps() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        manifest = manifest_fixture(Path(directory))
+        BENCH.validate_manifest(manifest)
+        calls = {
+            branch: BENCH.build_branch_calls(manifest, branch)
+            for branch in manifest["branch_order"]
+        }
+        assert [len(calls[branch]) for branch in manifest["branch_order"]] == [36, 36, 24, 24]
+        assert calls["raw"][0]["observations"] == ("L01",)
+        assert calls["raw"][-1]["observations"] == ("W12",)
+        assert calls["fanout"][0]["observations"] == ("L01", "L13")
+        assert calls["fanout"][0]["hosts"] == ("linux-a", "linux-b")
+        assert calls["fanout"][11]["observations"] == ("L12", "L24")
+        assert calls["fanout"][12]["observations"] == ("W01",)
+        assert calls["fanout-control"] == [
+            {**call, "branch": "fanout-control"} for call in calls["fanout"]
+        ]
+        original_body = manifest["observations"][12]["body"]
+        manifest["observations"][12]["body"] = "printf incompatible"
+        try:
+            BENCH.validate_manifest(manifest)
+        except BENCH.AnalysisInvalid as exc:
+            assert "fan-out-compatible" in str(exc)
+        else:
+            raise AssertionError("different Linux bodies must not share one fan-out call")
+        manifest["observations"][12]["body"] = original_body
+        qualification_path = Path(manifest["qualification"]["evidence_path"])
+        valid_qualification = qualification_path.read_bytes()
+        qualification_path.write_text("{}\n", encoding="utf-8")
+        manifest["qualification"]["evidence_sha256"] = hashlib.sha256(
+            qualification_path.read_bytes()
+        ).hexdigest()
+        try:
+            BENCH.validate_measurement_ready(manifest)
+        except BENCH.AnalysisInvalid as exc:
+            assert "qualification evidence" in str(exc)
+        else:
+            raise AssertionError("arbitrary hashed bytes must not qualify targets")
+        qualification_path.write_bytes(valid_qualification)
+        manifest["qualification"]["evidence_sha256"] = hashlib.sha256(
+            valid_qualification
+        ).hexdigest()
+        qualification_document = json.loads(valid_qualification)
+        qualification_document["results"][0]["probe"]["command_sha256"] = "d" * 64
+        drifted_bytes = (json.dumps(qualification_document) + "\n").encode()
+        qualification_path.write_bytes(drifted_bytes)
+        manifest["qualification"]["evidence_sha256"] = hashlib.sha256(
+            drifted_bytes
+        ).hexdigest()
+        try:
+            BENCH.validate_measurement_ready(manifest)
+        except BENCH.AnalysisInvalid as exc:
+            assert "frozen command" in str(exc)
+        else:
+            raise AssertionError("qualification must use the frozen safe probe")
+        qualification_path.write_bytes(valid_qualification)
+        manifest["qualification"]["evidence_sha256"] = hashlib.sha256(
+            valid_qualification
+        ).hexdigest()
+        first_output = Path(
+            json.loads(valid_qualification)["results"][0]["probe"]["output_path"]
+        )
+        original_output = first_output.read_bytes()
+        first_output.write_bytes(b"tampered\n")
+        try:
+            BENCH.validate_measurement_ready(manifest)
+        except BENCH.AnalysisInvalid as exc:
+            assert "captured output" in str(exc)
+        else:
+            raise AssertionError("qualification output drift must fail closed")
+        first_output.write_bytes(original_output)
+        qualification_document = json.loads(valid_qualification)
+        unrelated_output = b"unrelated-but-self-consistent\n"
+        first_output.write_bytes(unrelated_output)
+        first_probe = qualification_document["results"][0]["probe"]
+        first_probe["output_sha256"] = hashlib.sha256(unrelated_output).hexdigest()
+        first_probe["output_bytes"] = len(unrelated_output)
+        unrelated_evidence = (json.dumps(qualification_document) + "\n").encode()
+        qualification_path.write_bytes(unrelated_evidence)
+        manifest["qualification"]["evidence_sha256"] = hashlib.sha256(
+            unrelated_evidence
+        ).hexdigest()
+        try:
+            BENCH.validate_measurement_ready(manifest)
+        except BENCH.AnalysisInvalid as exc:
+            assert "expected output" in str(exc)
+        else:
+            raise AssertionError("qualification output must substantiate OS and shell")
+        first_output.write_bytes(original_output)
+        qualification_path.write_bytes(valid_qualification)
+        manifest["qualification"]["evidence_sha256"] = hashlib.sha256(
+            valid_qualification
+        ).hexdigest()
+        manifest["qualification"] = {"status": "pending"}
+        try:
+            BENCH.validate_measurement_ready(manifest)
+        except BENCH.AnalysisInvalid as exc:
+            assert "qualification" in str(exc)
+        else:
+            raise AssertionError("pending target qualification must block measured branches")
+
+
+def test_noop_helper_is_deterministic_and_network_free() -> None:
+    helper = MODULE_PATH.with_name("benchmark_v2_1_noop.py")
+    audit_wrapper = """
+import runpy
+import sys
+
+def deny_network(event, args):
+    if event.startswith("socket."):
+        raise RuntimeError("network audit event: " + event)
+
+sys.addaudithook(deny_network)
+script = sys.argv.pop(1)
+runpy.run_path(script, run_name="__main__")
+"""
+    arguments = [
+        sys.executable,
+        "-c",
+        audit_wrapper,
+        str(helper),
+        "run",
+        "--body-file",
+        "-",
+        "--timeout",
+        "180",
+        "--result-format=json",
+        "--branch",
+        "fanout-control",
+        "--call-id",
+        "linux-01",
+        "--observations",
+        "L01,L13",
+        "--hosts",
+        "linux-a,linux-b",
+        "--expected-exits",
+        "0,0",
+    ]
+    body = "printf observation-01\n"
+    first = subprocess.run(arguments, input=body, check=True, text=True, capture_output=True)
+    second = subprocess.run(arguments, input=body, check=True, text=True, capture_output=True)
+    assert first.stderr == second.stderr == ""
+    assert first.stdout == second.stdout
+    envelope = json.loads(first.stdout)
+    assert envelope == {
+        "schema": "sshai-benchmark-noop/v2.1",
+        "branch": "fanout-control",
+        "call_id": "linux-01",
+        "body_sha256": hashlib.sha256(body.encode()).hexdigest(),
+        "results": [
+            {
+                "observation_id": "L01",
+                "host": "linux-a",
+                "exit": 0,
+                "outcome": "success",
+                "artifact_id": "noop-l01",
+                "artifact_path": "",
+                "transport_error": "",
+            },
+            {
+                "observation_id": "L13",
+                "host": "linux-b",
+                "exit": 0,
+                "outcome": "success",
+                "artifact_id": "noop-l13",
+                "artifact_path": "",
+                "transport_error": "",
+            },
+        ],
+    }
+
+
+def test_rendered_prompts_have_exact_maps_and_control_boundaries() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        manifest = manifest_fixture(Path(directory))
+        prompts = {
+            branch: BENCH.render_prompt(manifest, branch)
+            for branch in manifest["branch_order"]
+        }
+        for branch, expected in BENCH.EXPECTED_CALL_COUNTS.items():
+            marker = f"# BENCH_V21_CALL={branch}:"
+            assert prompts[branch].count(marker) == expected
+        assert prompts["raw-control"].count("<<'SSHAI_BENCH_V21_") == 36
+        assert prompts["raw"].count("<<'SSHAI_BENCH_V21_") == 36
+        assert prompts["fanout-control"].count("<<'SSHAI_BENCH_V21_") == 24
+        assert prompts["fanout"].count("<<'SSHAI_BENCH_V21_") == 24
+        assert "/usr/bin/ssh" not in prompts["raw-control"]
+        assert "/opt/benchmark/bin/sshai" not in prompts["raw-control"]
+        assert "/usr/bin/ssh" not in prompts["fanout-control"]
+        assert "/opt/benchmark/bin/sshai" not in prompts["fanout-control"]
+        assert str(MODULE_PATH.with_name("benchmark_v2_1_noop.py")) in prompts["raw-control"]
+        assert "BENCH_V21_OBS=L01,L13" in prompts["fanout-control"]
+        assert "/usr/bin/ssh linux-a bash -s" in prompts["raw"]
+        assert "/usr/bin/ssh windows-a pwsh -NoProfile -NonInteractive -File -" in prompts["raw"]
+        assert (
+            "/opt/benchmark/bin/sshai run --body-file - --timeout 180 "
+            "--result-format=json linux-a linux-b"
+        ) in prompts["fanout"]
+        assert prompts["fanout"].find("linux-a linux-b") < prompts["fanout"].find("windows-a")
+        fanout_calls = BENCH.build_branch_calls(manifest, "fanout")
+        repeated = BENCH.render_call(manifest, fanout_calls[7])
+        delta = BENCH.render_call(manifest, fanout_calls[8])
+        assert "--ctx benchmark-v2.1-linux" in repeated
+        assert "--delta" not in repeated
+        assert "--ctx benchmark-v2.1-linux --delta" in delta
+
+
+def test_run_branch_writes_immutable_prompt_result_and_metadata() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        codex = root / "fake-codex"
+        codex.write_text(
+            """#!/usr/bin/env python3
+import json
+import sys
+prompt = sys.stdin.read()
+print(json.dumps({"type": "thread.started", "thread_id": "thread-test"}))
+print(json.dumps({"type": "turn.started"}))
+print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": len(prompt)}}))
+""",
+            encoding="utf-8",
+        )
+        codex.chmod(0o755)
+        sshai = root / "fake-sshai"
+        sshai.write_bytes(b"fake-sshai")
+        sshai.chmod(0o755)
+        manifest_path = root / "manifest.json"
+        manifest = manifest_fixture(root, str(codex))
+        attach_frozen_provenance(manifest, sshai)
+        write_manifest_with_lock(manifest_path, manifest)
+        original_repository_validator = BENCH.validate_repository_state
+        BENCH.validate_repository_state = lambda _manifest: None
+        paths = BENCH.run_branch(manifest_path, 1, "raw-control")
+        assert paths == {
+            "prompt": root / "artifacts" / "replicate-01" / "raw-control.prompt.txt",
+            "result": root / "artifacts" / "replicate-01" / "raw-control.jsonl",
+            "stderr": root / "artifacts" / "replicate-01" / "raw-control.stderr.txt",
+            "metadata": root / "artifacts" / "replicate-01" / "raw-control.meta.json",
+        }
+        prompt_bytes = paths["prompt"].read_bytes()
+        result_bytes = paths["result"].read_bytes()
+        metadata = json.loads(paths["metadata"].read_text(encoding="utf-8"))
+        assert metadata["schema"] == "sshai-benchmark-run/v2.1"
+        assert metadata["branch"] == "raw-control"
+        assert metadata["replicate"] == 1
+        assert metadata["process_exit"] == 0
+        assert metadata["sandbox"] == "workspace-write"
+        assert metadata["ignore_user_config"] is True
+        assert metadata["prompt_sha256"] == hashlib.sha256(prompt_bytes).hexdigest()
+        assert metadata["result_sha256"] == hashlib.sha256(result_bytes).hexdigest()
+        assert metadata["stderr_bytes"] == 0
+        assert metadata["stderr_sha256"] == hashlib.sha256(b"").hexdigest()
+        assert metadata["stderr_truncated"] is False
+        try:
+            BENCH.run_branch(manifest_path, 1, "raw-control")
+        except BENCH.AnalysisInvalid as exc:
+            assert "refusing to overwrite" in str(exc)
+        else:
+            raise AssertionError("second branch run must fail closed")
+        assert paths["prompt"].read_bytes() == prompt_bytes
+        assert paths["result"].read_bytes() == result_bytes
+
+        sessions = root / "sessions" / "2026" / "08" / "18"
+        sessions.mkdir(parents=True)
+        source_rollout = sessions / "rollout-2026-08-18-thread-test.jsonl"
+        source_rollout.write_text(
+            json.dumps({"type": "session_meta", "payload": {"id": "thread-test"}}) + "\n",
+            encoding="utf-8",
+        )
+        captured = BENCH.capture_persisted_rollout(
+            manifest_path, 1, "raw-control", root / "sessions"
+        )
+        assert captured["rollout"].read_bytes() == source_rollout.read_bytes()
+        capture_meta = json.loads(captured["metadata"].read_text(encoding="utf-8"))
+        assert capture_meta["thread_id"] == "thread-test"
+        assert capture_meta["rollout_sha256"] == hashlib.sha256(
+            source_rollout.read_bytes()
+        ).hexdigest()
+        try:
+            BENCH.capture_persisted_rollout(manifest_path, 1, "raw-control", root / "sessions")
+        except BENCH.AnalysisInvalid as exc:
+            assert "refusing to overwrite" in str(exc)
+        else:
+            raise AssertionError("second rollout capture must fail closed")
+        try:
+            BENCH.run_branch(manifest_path, 1, "raw")
+        except BENCH.AnalysisInvalid as exc:
+            assert "branch order" in str(exc)
+        else:
+            raise AssertionError("next branch must wait for immutable validation evidence")
+        validation_path = root / "artifacts" / "replicate-01" / "raw-control.validation.json"
+        validation_path.write_text("{}\n", encoding="utf-8")
+        try:
+            BENCH.run_branch(manifest_path, 1, "raw")
+        except BENCH.AnalysisInvalid as exc:
+            assert "validation evidence" in str(exc)
+        else:
+            raise AssertionError("empty validation file must not unlock the next branch")
+        validation_path.unlink()
+        try:
+            BENCH.run_branch(manifest_path, 1, "fanout-control")
+        except BENCH.AnalysisInvalid as exc:
+            assert "branch order" in str(exc)
+        else:
+            raise AssertionError("runner must not skip the raw workload branch")
+        BENCH.validate_repository_state = original_repository_validator
+
+
+def test_fanout_evidence_requires_every_declared_host_result() -> None:
+    call = {
+        "branch": "fanout",
+        "id": "linux-01",
+        "observations": ("L01", "L13"),
+        "hosts": ("linux-a", "linux-b"),
+        "expected_exits": (0, 0),
+    }
+    incomplete = completed_command(
+        "# BENCH_V21_CALL=fanout:linux-01 BENCH_V21_OBS=L01,L13\nprintf ok",
+        json.dumps({
+            "schema_version": "v1",
+            "batch_id": "a123",
+            "summary": {
+                "hosts": 1,
+                "ok": 1,
+                "failed": 0,
+                "transport_errors": 0,
+                "policy_denied": 0,
+                "worst_exit": 0,
+            },
+            "runs": [{
+                "id": "a1",
+                "host": "linux-a",
+                "exit": 0,
+                "transport_error": "",
+                "artifact_path": "/tmp/a1",
+            }],
+        }),
+    )
+    try:
+        BENCH.validate_call_evidence(incomplete["item"], call)
+    except BENCH.AnalysisInvalid as exc:
+        assert "host results" in str(exc)
+    else:
+        raise AssertionError("incomplete fan-out envelope must be invalid")
+
+    complete = json.loads(incomplete["item"]["aggregated_output"])
+    complete["summary"]["hosts"] = 2
+    complete["summary"]["ok"] = 2
+    complete["runs"].append({
+        "id": "a2",
+        "host": "linux-b",
+        "exit": 0,
+        "transport_error": "",
+        "artifact_path": "/tmp/a2",
+    })
+    incomplete["item"]["aggregated_output"] = json.dumps(complete)
+    assert BENCH.validate_call_evidence(incomplete["item"], call) == [
+        {
+            "observation_id": "L01", "host": "linux-a", "exit": 0,
+            "outcome": "success", "artifact_id": "a1",
+        },
+        {
+            "observation_id": "L13", "host": "linux-b", "exit": 0,
+            "outcome": "success", "artifact_id": "a2",
+        },
+    ]
+    complete["runs"][0]["exit"] = False
+    incomplete["item"]["aggregated_output"] = json.dumps(complete)
+    try:
+        BENCH.validate_call_evidence(incomplete["item"], call)
+    except BENCH.AnalysisInvalid as exc:
+        assert "exit shape" in str(exc)
+    else:
+        raise AssertionError("JSON boolean must not be accepted as an integer exit")
+
+    raw_call = {
+        "branch": "raw",
+        "id": "linux-01",
+        "observations": ("L01",),
+        "hosts": ("linux-a",),
+        "expected_exits": (0,),
+    }
+    try:
+        BENCH.validate_call_evidence(
+            completed_command("printf ok", "ok", False)["item"], raw_call
+        )
+    except BENCH.AnalysisInvalid as exc:
+        assert "integer exit" in str(exc)
+    else:
+        raise AssertionError("raw boolean exit must fail closed")
+
+
+def test_complete_branch_gate_cross_checks_thread_lifecycle_and_evidence() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        manifest = manifest_fixture(Path(directory))
+        branch = "fanout-control"
+        events: list[dict[str, object]] = [
+            {"type": "thread.started", "thread_id": "thread-01"},
+            {"type": "turn.started"},
+        ]
+        for call in BENCH.build_branch_calls(manifest, branch):
+            command = BENCH.render_call(manifest, call)
+            output = {
+                "schema": "sshai-benchmark-noop/v2.1",
+                "branch": branch,
+                "call_id": call["id"],
+                "body_sha256": call["body_sha256"],
+                "results": [
+                    {
+                        "observation_id": observation,
+                        "host": host,
+                        "exit": expected_exit,
+                        "outcome": "success",
+                        "artifact_id": f"noop-{observation.lower()}",
+                        "artifact_path": "",
+                        "transport_error": "",
+                    }
+                    for observation, host, expected_exit in zip(
+                        call["observations"], call["hosts"], call["expected_exits"], strict=True
+                    )
+                ],
+            }
+            events.append(completed_command(command, json.dumps(output)))
+        events.append({
+            "type": "turn.completed",
+            "usage": {"input_tokens": 1000, "cached_input_tokens": 800},
+        })
+        persisted = [{"type": "session_meta", "payload": {"id": "thread-01"}}]
+        report = BENCH.analyze_branch_events(manifest, branch, events, persisted)
+        assert report["thread_id"] == "thread-01"
+        assert report["marked_calls"] == 24
+        assert report["observations"] == list(BENCH.OBSERVATION_IDS)
+        assert len(report["observation_evidence"]) == 36
+        assert report["usage"]["non_cached_input_tokens"] == 200
+        assert report["compactions"]["matched"] is True
+
+        reversed_events = events[:2] + list(reversed(events[2:-1])) + events[-1:]
+        try:
+            BENCH.analyze_branch_events(manifest, branch, reversed_events, persisted)
+        except BENCH.AnalysisInvalid as exc:
+            assert "call order" in str(exc)
+        else:
+            raise AssertionError("reversed marked calls must invalidate the branch")
+
+        cached_tokens = events[-1]["usage"].pop("cached_input_tokens")
+        try:
+            BENCH.analyze_branch_events(manifest, branch, events, persisted)
+        except BENCH.AnalysisInvalid as exc:
+            assert "cached_input_tokens" in str(exc)
+        else:
+            raise AssertionError("missing cached token evidence must invalidate the branch")
+        events[-1]["usage"]["cached_input_tokens"] = cached_tokens
+
+        first_output = json.loads(events[2]["item"]["aggregated_output"])
+        events[2]["item"]["aggregated_output"] = json.dumps({
+            **first_output, "body_sha256": "wrong",
+        })
+        try:
+            BENCH.analyze_branch_events(manifest, branch, events, persisted)
+        except BENCH.AnalysisInvalid as exc:
+            assert "body digest" in str(exc)
+        else:
+            raise AssertionError("wrong control body digest must invalidate the branch")
+        events[2]["item"]["aggregated_output"] = json.dumps(first_output)
+
+        events.insert(-1, completed_command("ssh unlisted-host true", "network attempt"))
+        try:
+            BENCH.analyze_branch_events(manifest, branch, events, persisted)
+        except BENCH.AnalysisInvalid as exc:
+            assert "unmarked control" in str(exc)
+        else:
+            raise AssertionError("every unmarked control command must invalidate the branch")
+        events.pop(-2)
+
+        events.insert(-1, {
+            "type": "item.completed",
+            "item": {"type": "mcp_tool_call", "server": "exa", "tool": "web_search"},
+        })
+        try:
+            BENCH.analyze_branch_events(manifest, branch, events, persisted)
+        except BENCH.AnalysisInvalid as exc:
+            assert "unexpected completed item type" in str(exc)
+        else:
+            raise AssertionError("non-command tool calls must invalidate the branch")
+        events.pop(-2)
+
+        events.append({"type": "compaction.future"})
+        try:
+            BENCH.analyze_branch_events(manifest, branch, events, persisted)
+        except BENCH.AnalysisInvalid as exc:
+            assert "lifecycle" in str(exc)
+        else:
+            raise AssertionError("unknown lifecycle-like type must invalidate the branch")
+        events.pop()
+
+        persisted[0]["payload"]["id"] = "other-thread"
+        try:
+            BENCH.analyze_branch_events(manifest, branch, events, persisted)
+        except BENCH.AnalysisInvalid as exc:
+            assert "thread identity" in str(exc)
+        else:
+            raise AssertionError("persisted thread mismatch must be invalid")
+
+
+def test_frozen_provenance_detects_helper_and_prompt_drift() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        helper = root / "noop.py"
+        helper.write_bytes(MODULE_PATH.with_name("benchmark_v2_1_noop.py").read_bytes())
+        sshai = root / "sshai"
+        sshai.write_bytes(b"frozen-sshai-binary")
+        codex = root / "codex"
+        codex.write_bytes(b"frozen-codex-binary")
+        codex.chmod(0o755)
+        manifest = manifest_fixture(root, str(codex))
+        manifest["executables"]["noop_helper"] = str(helper)
+        attach_frozen_provenance(manifest, sshai)
+        BENCH.validate_frozen_provenance(manifest)
+        original_model = manifest["codex"]["model"]
+        manifest["codex"]["model"] = "drifted-model"
+        try:
+            BENCH.validate_frozen_provenance(manifest)
+        except BENCH.AnalysisInvalid as exc:
+            assert "execution contract" in str(exc)
+        else:
+            raise AssertionError("model drift must invalidate frozen provenance")
+        manifest["codex"]["model"] = original_model
+        manifest_path = root / "manifest.json"
+        write_manifest_with_lock(manifest_path, manifest)
+        validated = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "validate", "--manifest", str(manifest_path)],
+            text=True,
+            capture_output=True,
+        )
+        assert validated.returncode == 0, validated.stderr
+        assert json.loads(validated.stdout) == {
+            "schema": "sshai-benchmark-validation/v2.1",
+            "ok": True,
+        }
+        helper.write_text("drift", encoding="utf-8")
+        try:
+            BENCH.validate_frozen_provenance(manifest)
+        except BENCH.AnalysisInvalid as exc:
+            assert "helper digest" in str(exc)
+        else:
+            raise AssertionError("helper drift must invalidate frozen provenance")
+        rejected = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "validate", "--manifest", str(manifest_path)],
+            text=True,
+            capture_output=True,
+        )
+        assert rejected.returncode == 2
+        assert "helper digest" in rejected.stderr
+
+
+def test_three_replicate_decision_uses_paired_controls_and_control_floor() -> None:
+    def branch(input_tokens: int, calls: int, p95: int = 100) -> dict[str, object]:
+        return {
+            "usage": {"input_tokens": input_tokens, "cached_input_tokens": input_tokens // 2},
+            "marked_calls": calls,
+            "observations": list(BENCH.OBSERVATION_IDS),
+            "observation_evidence": [
+                {"outcome": "success"} for _ in BENCH.OBSERVATION_IDS
+            ],
+            "marked_tool_response_est_tokens": {"p95": p95, "sum": 1, "max": p95},
+            "compactions": {"codex_exec": 0, "persisted_rollout": 0, "matched": True},
+        }
+
+    replicates = []
+    for fanout_tokens in (300, 350, 400):
+        replicates.append({
+            "raw-control": branch(200, 36),
+            "raw": branch(1000, 36),
+            "fanout-control": branch(200, 24),
+            "fanout": branch(fanout_tokens, 24),
+        })
+    decision = BENCH.decide_replicates(replicates)
+    assert decision["decision"] == "confirmed"
+    assert decision["median_control_adjusted_input_reduction"] == 0.8125
+    assert decision["call_reduction"] == 1 / 3
+
+    replicates[1]["fanout"]["usage"]["input_tokens"] = 100
+    decision = BENCH.decide_replicates(replicates)
+    assert decision["decision"] == "inconclusive"
+    assert decision["replicates"][1]["input_tokens"]["fanout_margin"] == -100
+    assert decision["replicates"][1]["input_tokens"]["status"] == (
+        "indistinguishable-from-control-floor"
+    )
+    assert decision["median_control_adjusted_input_reduction"] is None
+
+
+def test_invalid_analysis_retains_all_branch_reasons_and_file_evidence() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        manifest_path = root / "manifest.json"
+        manifest = manifest_fixture(root)
+        write_manifest_with_lock(manifest_path, manifest)
+        original_provenance_validator = BENCH.validate_frozen_provenance
+        original_readiness_validator = BENCH.validate_measurement_ready
+        BENCH.validate_frozen_provenance = lambda _manifest: None
+        BENCH.validate_measurement_ready = lambda _manifest: None
+        try:
+            report = BENCH.analyze_all(manifest_path)
+        finally:
+            BENCH.validate_frozen_provenance = original_provenance_validator
+            BENCH.validate_measurement_ready = original_readiness_validator
+        assert report["schema"] == "sshai-benchmark-analysis/v2.1"
+        assert report["valid"] is False
+        assert report["decision"] == "invalid"
+        assert len(report["reasons"]) == 12
+        assert set(report["branches"][0]) == set(BENCH.BRANCHES)
+        first = report["branches"][0]["raw-control"]
+        assert first["valid"] is False
+        assert "cannot read run metadata" in first["reason"]
+        assert first["available_files"]["manifest"]["sha256"] == hashlib.sha256(
+            manifest_path.read_bytes()
+        ).hexdigest()
+        output_path = root / "invalid-analysis.json"
+        analyzed = subprocess.run(
+            [
+                sys.executable,
+                str(MODULE_PATH),
+                "analyze",
+                "--manifest",
+                str(manifest_path),
+                "--output",
+                str(output_path),
+            ],
+            text=True,
+            capture_output=True,
+        )
+        assert analyzed.returncode == 0, analyzed.stderr
+        published = json.loads(output_path.read_text(encoding="utf-8"))
+        assert published["valid"] is False
+        assert published["decision"] == "invalid"
+        assert len(published["reasons"]) == 12
+        invalid_jsonl = root / "invalid.jsonl"
+        invalid_jsonl.write_bytes(b"\xff\xfe")
+        try:
+            BENCH.read_jsonl(invalid_jsonl)
+        except BENCH.AnalysisInvalid as exc:
+            assert "cannot decode JSONL" in str(exc)
+        else:
+            raise AssertionError("non-UTF-8 JSONL must become a reportable invalid reason")
+
+
 def main() -> None:
+    test_exact_branch_call_maps()
+    test_noop_helper_is_deterministic_and_network_free()
+    test_rendered_prompts_have_exact_maps_and_control_boundaries()
+    test_run_branch_writes_immutable_prompt_result_and_metadata()
+    test_fanout_evidence_requires_every_declared_host_result()
+    test_complete_branch_gate_cross_checks_thread_lifecycle_and_evidence()
+    test_frozen_provenance_detects_helper_and_prompt_drift()
+    test_three_replicate_decision_uses_paired_controls_and_control_floor()
+    test_invalid_analysis_retains_all_branch_reasons_and_file_evidence()
     marker = "# BENCH_V21_CALL=fanout:linux-01 BENCH_V21_OBS=L01,L13\nprintf ok"
     events = [
         completed_command(marker, "x" * 400),
@@ -111,7 +937,9 @@ def main() -> None:
         "reduction": None,
         "status": "indistinguishable-from-control-floor",
     }
-    assert BENCH.control_adjusted(100, 200, 300, 100)["status"] == "inconclusive"
+    assert BENCH.control_adjusted(100, 200, 300, 100)["status"] == (
+        "indistinguishable-from-control-floor"
+    )
     print("benchmark_v2_1 tests: ok")
 
 
