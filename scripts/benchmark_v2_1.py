@@ -464,6 +464,21 @@ def validate_runtime_paths(manifest: dict[str, Any]) -> None:
         path = Path(path_value)
         if not path.is_file() or not os.access(path, os.X_OK):
             raise AnalysisInvalid(f"frozen executable {name} is missing or not executable: {path}")
+    auth_source = Path(str(manifest["codex"]["auth_source"]))
+    if (
+        not auth_source.is_absolute()
+        or not auth_source.is_file()
+        or auth_source.is_symlink()
+        or auth_source.stat().st_mode & 0o077
+    ):
+        raise AnalysisInvalid("frozen Codex auth source must be a private regular file")
+
+
+def branch_codex_home(manifest: dict[str, Any], replicate: int, branch: str) -> Path:
+    root = Path(str(manifest["codex"]["home_root"]))
+    if not root.is_absolute():
+        raise AnalysisInvalid("frozen Codex home root must be absolute")
+    return root / f"replicate-{replicate:02d}" / branch
 
 
 def run_branch(manifest_path: Path, replicate: int, branch: str) -> dict[str, Path]:
@@ -479,6 +494,13 @@ def run_branch(manifest_path: Path, replicate: int, branch: str) -> dict[str, Pa
         raise AnalysisInvalid(
             f"refusing to overwrite existing branch artifacts: {', '.join(existing)}"
         )
+    codex_home = branch_codex_home(manifest, replicate, branch)
+    if codex_home.exists() or codex_home.is_symlink():
+        raise AnalysisInvalid(f"fresh branch Codex home already exists: {codex_home}")
+    codex_home.mkdir(mode=0o700, parents=True)
+    (codex_home / "auth.json").symlink_to(manifest["codex"]["auth_source"])
+    if set(path.name for path in codex_home.iterdir()) != {"auth.json"}:
+        raise AnalysisInvalid("fresh branch Codex home inventory is not minimal")
     paths["prompt"].parent.mkdir(parents=True, exist_ok=True)
     prompt = render_prompt(manifest, branch)
     prompt_bytes = prompt.encode("utf-8")
@@ -506,6 +528,8 @@ def run_branch(manifest_path: Path, replicate: int, branch: str) -> dict[str, Pa
         str(manifest["repo"]),
         "-",
     ]
+    environment = os.environ.copy()
+    environment["CODEX_HOME"] = str(codex_home)
     started = time.monotonic()
     with paths["result"].open("x", encoding="utf-8") as stream:
         process = subprocess.run(
@@ -514,6 +538,7 @@ def run_branch(manifest_path: Path, replicate: int, branch: str) -> dict[str, Pa
             text=True,
             stdout=stream,
             stderr=subprocess.PIPE,
+            env=environment,
             check=False,
         )
     elapsed = time.monotonic() - started
@@ -537,6 +562,7 @@ def run_branch(manifest_path: Path, replicate: int, branch: str) -> dict[str, Pa
         "process_exit": process.returncode,
         "sandbox": sandbox,
         "ignore_user_config": True,
+        "codex_home": str(codex_home),
         "codex": {
             "path": manifest["executables"]["codex"],
             "sha256": manifest["provenance"]["codex"]["sha256"],
@@ -569,6 +595,13 @@ def capture_persisted_rollout(
     validate_frozen_provenance(manifest)
     validate_measurement_ready(manifest)
     paths = branch_artifact_paths(manifest, replicate, branch)
+    expected_sessions_root = branch_codex_home(
+        manifest, replicate, branch
+    ) / "sessions"
+    if sessions_root != expected_sessions_root:
+        raise AnalysisInvalid(
+            f"sessions root is not the frozen branch Codex home: {sessions_root}"
+        )
     if not paths["result"].is_file():
         raise AnalysisInvalid(f"branch result does not exist: {paths['result']}")
     started = _single_event(read_jsonl(paths["result"]), "thread.started")
@@ -783,7 +816,7 @@ def analyze_branch_events(
             or item.get("type") != "command_execution"
         ):
             continue
-        command = str(item.get("command") or "")
+        command = command_script(str(item.get("command") or ""))
         marker = MARKER_RE.search(command)
         if marker is None:
             if branch.endswith("-control"):
@@ -907,13 +940,17 @@ def validate_frozen_provenance(manifest: dict[str, Any]) -> None:
         or not codex["model"]
         or codex.get("reasoning_effort")
         not in {"low", "medium", "high", "xhigh", "max", "ultra"}
+        or not isinstance(codex.get("home_root"), str)
+        or not Path(codex["home_root"]).is_absolute()
+        or not isinstance(codex.get("auth_source"), str)
+        or not Path(codex["auth_source"]).is_absolute()
     ):
         raise AnalysisInvalid("codex version, model, or reasoning effort is not frozen-valid")
 
     for category in ("instruction_files", "config_files"):
         records = provenance.get(category)
-        if not isinstance(records, list) or not records:
-            raise AnalysisInvalid(f"provenance {category} must be a non-empty list")
+        if not isinstance(records, list):
+            raise AnalysisInvalid(f"provenance {category} must be a list")
         for index, record in enumerate(records):
             _validate_file_record(f"{category}[{index}]", record)
     repository = provenance.get("repository")
@@ -1075,6 +1112,17 @@ def estimated_tokens(output: str) -> int:
     return (len(output.encode("utf-8")) + 3) // 4
 
 
+def command_script(command: str) -> str:
+    """Return the submitted script from Codex's fixed local zsh envelope."""
+    try:
+        arguments = shlex.split(command)
+    except ValueError:
+        return command
+    if len(arguments) == 3 and arguments[:2] == ["/bin/zsh", "-lc"]:
+        return arguments[2]
+    return command
+
+
 def analyze_command_population(
     events: list[dict[str, Any]],
     branch: str,
@@ -1096,7 +1144,7 @@ def analyze_command_population(
             or item.get("type") != "command_execution"
         ):
             continue
-        command = str(item.get("command") or "")
+        command = command_script(str(item.get("command") or ""))
         output = str(item.get("aggregated_output") or "")
         output_tokens = estimated_tokens(output)
         all_tokens.append(output_tokens)
@@ -1300,6 +1348,7 @@ def analyze_branch_files(
         "manifest_sha256": manifest_digest(manifest_path),
         "sandbox": "workspace-write" if branch.endswith("-control") else "danger-full-access",
         "ignore_user_config": True,
+        "codex_home": str(branch_codex_home(manifest, replicate, branch)),
         "codex": {
             "path": manifest["executables"]["codex"],
             "sha256": manifest["provenance"]["codex"]["sha256"],

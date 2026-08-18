@@ -6,6 +6,8 @@ from __future__ import annotations
 import importlib.util
 import hashlib
 import json
+import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -46,6 +48,10 @@ def assert_invalid(events: list[dict[str, object]], expected: str) -> None:
 
 
 def manifest_fixture(root: Path, codex_path: str = "/opt/benchmark/bin/codex") -> dict[str, object]:
+    auth_source = root / "benchmark-auth.json"
+    if not auth_source.exists():
+        auth_source.write_text("test-auth\n", encoding="utf-8")
+        auth_source.chmod(0o600)
     targets = [
         {"alias": "linux-a", "os": "linux", "shell": "bash"},
         {"alias": "linux-b", "os": "linux", "shell": "bash"},
@@ -130,6 +136,8 @@ def manifest_fixture(root: Path, codex_path: str = "/opt/benchmark/bin/codex") -
             "version": "test-version",
             "model": "test-model",
             "reasoning_effort": "high",
+            "home_root": str(root / "runtime-homes"),
+            "auth_source": str(auth_source),
         },
         "qualification": {
             "status": "passed",
@@ -459,6 +467,11 @@ print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": len(prompt
         assert metadata["process_exit"] == 0
         assert metadata["sandbox"] == "workspace-write"
         assert metadata["ignore_user_config"] is True
+        expected_home = root / "runtime-homes" / "replicate-01" / "raw-control"
+        assert metadata["codex_home"] == str(expected_home)
+        assert expected_home.is_dir()
+        assert (expected_home / "auth.json").is_symlink()
+        assert set(path.name for path in expected_home.iterdir()) == {"auth.json"}
         assert metadata["prompt_sha256"] == hashlib.sha256(prompt_bytes).hexdigest()
         assert metadata["result_sha256"] == hashlib.sha256(result_bytes).hexdigest()
         assert metadata["stderr_bytes"] == 0
@@ -473,7 +486,8 @@ print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": len(prompt
         assert paths["prompt"].read_bytes() == prompt_bytes
         assert paths["result"].read_bytes() == result_bytes
 
-        sessions = root / "sessions" / "2026" / "08" / "18"
+        sessions_root = expected_home / "sessions"
+        sessions = sessions_root / "2026" / "08" / "18"
         sessions.mkdir(parents=True)
         source_rollout = sessions / "rollout-2026-08-18-thread-test.jsonl"
         source_rollout.write_text(
@@ -481,7 +495,7 @@ print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": len(prompt
             encoding="utf-8",
         )
         captured = BENCH.capture_persisted_rollout(
-            manifest_path, 1, "raw-control", root / "sessions"
+            manifest_path, 1, "raw-control", sessions_root
         )
         assert captured["rollout"].read_bytes() == source_rollout.read_bytes()
         capture_meta = json.loads(captured["metadata"].read_text(encoding="utf-8"))
@@ -490,7 +504,9 @@ print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": len(prompt
             source_rollout.read_bytes()
         ).hexdigest()
         try:
-            BENCH.capture_persisted_rollout(manifest_path, 1, "raw-control", root / "sessions")
+            BENCH.capture_persisted_rollout(
+                manifest_path, 1, "raw-control", sessions_root
+            )
         except BENCH.AnalysisInvalid as exc:
             assert "refusing to overwrite" in str(exc)
         else:
@@ -646,6 +662,16 @@ def test_complete_branch_gate_cross_checks_thread_lifecycle_and_evidence() -> No
         assert len(report["observation_evidence"]) == 36
         assert report["usage"]["non_cached_input_tokens"] == 200
         assert report["compactions"]["matched"] is True
+
+        wrapped_events = json.loads(json.dumps(events))
+        for event in wrapped_events:
+            item = event.get("item")
+            if isinstance(item, dict) and item.get("type") == "command_execution":
+                item["command"] = shlex.join(["/bin/zsh", "-lc", item["command"]])
+        wrapped_report = BENCH.analyze_branch_events(
+            manifest, branch, wrapped_events, persisted
+        )
+        assert wrapped_report["marked_calls"] == 24
 
         reversed_events = events[:2] + list(reversed(events[2:-1])) + events[-1:]
         try:

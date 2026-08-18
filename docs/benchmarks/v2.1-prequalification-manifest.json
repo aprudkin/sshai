@@ -24,7 +24,9 @@
   "codex": {
     "version": "0.147.0",
     "model": "gpt-5.6-sol",
-    "reasoning_effort": "high"
+    "reasoning_effort": "high",
+    "home_root": "/Users/alexeyprudkin/.sshai/benchmarks/v2.1-codex-homes-03",
+    "auth_source": "/Users/alexeyprudkin/.codex/auth.json"
   },
   "qualification": {
     "status": "pending",
@@ -419,7 +421,7 @@
     "files": {
       "runner": {
         "path": "/Users/alexeyprudkin/dev/sshai/scripts/benchmark_v2_1.py",
-        "sha256": "fa9901a59cf2a1ec116ad41cc096266014b212488e8ed551bfae773712e5f7a5"
+        "sha256": "beca5d393fe23db4eeb8ee489fbaa62cbe900fb6978c10665f3afa19a6e91690"
       },
       "helper": {
         "path": "/Users/alexeyprudkin/dev/sshai/scripts/benchmark_v2_1_noop.py",
@@ -427,7 +429,7 @@
       },
       "protocol": {
         "path": "/Users/alexeyprudkin/dev/sshai/docs/benchmarks/v2.1-protocol.md",
-        "sha256": "661a1dfd02b74cceb069c4ef2fed851f2003bf5a4f46dd0e54f6cf31d539a35c"
+        "sha256": "0824a57f442692ea47e5fadc55cfc1cf0c6eadd3a3f7a865405fee1891396aec"
       },
       "analyzer_definition": {
         "path": "/Users/alexeyprudkin/dev/sshai/docs/benchmarks/v2.1-analyzer.md",
@@ -435,7 +437,7 @@
       },
       "tests": {
         "path": "/Users/alexeyprudkin/dev/sshai/scripts/test_benchmark_v2_1.py",
-        "sha256": "919b500fa2645dd0f41fda71ec228683c0edf3e43a13cc08948d41737392b5b9"
+        "sha256": "597682e81b3bebb49813d6ffc3cf81f6a5b760b62c9484ecb7a0eba0488f353d"
       }
     },
     "sshai": {
@@ -458,18 +460,8 @@
       "sha256": "19c4f144c5226a9f17c58e6f0fa854843b0f77a6eb420f40e2745a12f10f5d37",
       "version": "0.147.0"
     },
-    "instruction_files": [
-      {
-        "path": "/Users/alexeyprudkin/.codex/AGENTS.md",
-        "sha256": "d96b372eda011995c605be640fea093c56cec5d1ea8d802142da30d13813bc90"
-      }
-    ],
-    "config_files": [
-      {
-        "path": "/Users/alexeyprudkin/.codex/config.toml",
-        "sha256": "9f70a46653dbf6574afd62e538343603bfad14736050dfd66cbdedb7e5b29022"
-      }
-    ],
+    "instruction_files": [],
+    "config_files": [],
     "repository": {
       "head": "4dea3bc4c97c8fee45f462667c0ed87fa11174eb",
       "upstream": "4dea3bc4c97c8fee45f462667c0ed87fa11174eb",
@@ -481,6 +473,6 @@
       "fanout-control": "9fe58235a27f47f942d910d70520f16f92303c8eeb9872da245004b51dafccf5",
       "fanout": "fa797273ec79551c5269112adf6a6509f91eb3fd053a1f0ca97c3793b351daba"
     },
-    "execution_contract_sha256": "961d5fe2213fc0828de080812ad27dc0e4e0a1f1f27da6156218fbe96b0ca0b6"
+    "execution_contract_sha256": "84b30c4af0de18e6e1db7e81f3164667a2a9af1f19bfc5adce9034dabf107aca"
   }
 }
