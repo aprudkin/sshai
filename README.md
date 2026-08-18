@@ -116,8 +116,8 @@ confirmed.” Read the [full result and its boundaries](docs/benchmarks/v1.1-res
 
 The follow-up fan-out experiment is frozen in the [v2.1 protocol](docs/benchmarks/v2.1-protocol.md)
 and [analyzer definition](docs/benchmarks/v2.1-analyzer.md). It requires paired no-op controls,
-fixed populations, executable provenance, lifecycle cross-checks, and three complete replicates
-before a result can be promoted.
+fixed populations, executable provenance, lifecycle cross-checks, and eight balanced complete
+replicates with at least six defined control-adjusted reductions before a result can be promoted.
 
 ## Command surface
 

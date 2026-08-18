@@ -20,6 +20,19 @@ from typing import Any
 
 
 BRANCHES = ("raw-control", "raw", "fanout-control", "fanout")
+AMENDMENT_SCHEMA = "sshai-benchmark/v2.1-amendment-1"
+AMENDMENT_ANALYSIS_SCHEMA = "sshai-benchmark-analysis/v2.1-amendment-1"
+AMENDMENT_BRANCH_SCHEDULE = (
+    ("raw-control", "raw", "fanout-control", "fanout"),
+    ("raw", "raw-control", "fanout", "fanout-control"),
+    ("fanout-control", "fanout", "raw-control", "raw"),
+    ("fanout", "fanout-control", "raw", "raw-control"),
+) * 2
+AMENDMENT_DECISION_RULE = {
+    "minimum_defined_reductions": 6,
+    "maximum_control_floor_pairs": 2,
+    "median_reduction_threshold": 0.80,
+}
 OBSERVATION_IDS = tuple(
     [f"L{index:02d}" for index in range(1, 25)]
     + [f"W{index:02d}" for index in range(1, 13)]
@@ -46,11 +59,27 @@ class AnalysisInvalid(ValueError):
 
 def validate_manifest(manifest: dict[str, Any]) -> None:
     """Validate the structural population contract needed to render branches."""
-    if manifest.get("schema") != "sshai-benchmark/v2.1" or manifest.get("frozen") is not True:
-        raise AnalysisInvalid("manifest must be frozen sshai-benchmark/v2.1")
+    schema = manifest.get("schema")
+    if (
+        schema not in {"sshai-benchmark/v2.1", AMENDMENT_SCHEMA}
+        or manifest.get("frozen") is not True
+    ):
+        raise AnalysisInvalid(
+            "manifest must be frozen sshai-benchmark/v2.1 or v2.1-amendment-1"
+        )
     if manifest.get("branch_order") != list(BRANCHES):
         raise AnalysisInvalid(f"branch_order must be {list(BRANCHES)!r}")
-    if manifest.get("replicates") != 3:
+    if schema == AMENDMENT_SCHEMA:
+        if manifest.get("replicates") != len(AMENDMENT_BRANCH_SCHEDULE):
+            raise AnalysisInvalid("amended manifest must freeze exactly eight replicates")
+        schedule = manifest.get("branch_schedule")
+        if schedule != [list(row) for row in AMENDMENT_BRANCH_SCHEDULE]:
+            raise AnalysisInvalid(
+                "amended branch_schedule must freeze two exact balanced four-replicate cycles"
+            )
+        if manifest.get("decision_rule") != AMENDMENT_DECISION_RULE:
+            raise AnalysisInvalid("amended decision_rule differs from the frozen contract")
+    elif manifest.get("replicates") != 3:
         raise AnalysisInvalid("manifest must freeze exactly three replicates")
     if manifest.get("timeout_seconds") != 180:
         raise AnalysisInvalid("manifest timeout_seconds must be 180")
@@ -129,6 +158,17 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             raise AnalysisInvalid(
                 f"Linux observations {first['id']} and {second['id']} are not fan-out-compatible"
             )
+
+
+def branch_order_for_replicate(
+    manifest: dict[str, Any], replicate: int
+) -> tuple[str, ...]:
+    """Return the frozen execution order for one complete replicate."""
+    if replicate not in range(1, int(manifest["replicates"]) + 1):
+        raise AnalysisInvalid(f"replicate must be in range 1..{manifest['replicates']}")
+    if manifest.get("schema") == AMENDMENT_SCHEMA:
+        return tuple(manifest["branch_schedule"][replicate - 1])
+    return BRANCHES
 
 
 def build_branch_calls(manifest: dict[str, Any], branch: str) -> list[dict[str, Any]]:
@@ -432,12 +472,13 @@ def _complete_branch_paths(
 def validate_branch_order(
     manifest_path: Path, manifest: dict[str, Any], replicate: int, branch: str
 ) -> None:
-    branch_index = BRANCHES.index(branch)
+    current_order = branch_order_for_replicate(manifest, replicate)
+    branch_index = current_order.index(branch)
     required: list[Path] = []
     for prior_replicate in range(1, replicate):
-        for prior_branch in BRANCHES:
+        for prior_branch in branch_order_for_replicate(manifest, prior_replicate):
             required.extend(_complete_branch_paths(manifest, prior_replicate, prior_branch))
-    for prior_branch in BRANCHES[:branch_index]:
+    for prior_branch in current_order[:branch_index]:
         required.extend(_complete_branch_paths(manifest, replicate, prior_branch))
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
@@ -446,8 +487,9 @@ def validate_branch_order(
         )
     current_manifest_digest = manifest_digest(manifest_path)
     for prior_replicate in range(1, replicate + 1):
-        last_index = len(BRANCHES) if prior_replicate < replicate else branch_index
-        for prior_branch in BRANCHES[:last_index]:
+        prior_order = branch_order_for_replicate(manifest, prior_replicate)
+        last_index = len(prior_order) if prior_replicate < replicate else branch_index
+        for prior_branch in prior_order[:last_index]:
             metadata_path = branch_artifact_paths(
                 manifest, prior_replicate, prior_branch
             )["metadata"]
@@ -487,7 +529,7 @@ def validate_branch_order(
                     f"prior branch validation evidence is stale: {validation_path}"
                 )
     future_paths = []
-    for future_branch in BRANCHES[branch_index + 1:]:
+    for future_branch in current_order[branch_index + 1:]:
         future_paths.extend(_complete_branch_paths(manifest, replicate, future_branch))
     existing_future = [str(path) for path in future_paths if path.exists()]
     if existing_future:
@@ -584,10 +626,13 @@ def run_branch(manifest_path: Path, replicate: int, branch: str) -> dict[str, Pa
     stderr_bytes = process.stderr.encode("utf-8")
     with paths["stderr"].open("xb") as stream:
         stream.write(stderr_bytes)
+    replicate_branch_order = branch_order_for_replicate(manifest, replicate)
     metadata = {
         "schema": "sshai-benchmark-run/v2.1",
         "replicate": replicate,
         "branch": branch,
+        "branch_order": list(replicate_branch_order),
+        "branch_index": replicate_branch_order.index(branch),
         "manifest": str(manifest_path.resolve()),
         "manifest_sha256": manifest_digest(manifest_path),
         "prompt": str(paths["prompt"].resolve()),
@@ -1301,10 +1346,26 @@ def _success_rate(branch: dict[str, Any]) -> float:
     return sum(item.get("outcome") == "success" for item in evidence) / len(OBSERVATION_IDS)
 
 
-def decide_replicates(replicates: list[dict[str, dict[str, Any]]]) -> dict[str, Any]:
-    """Apply the v2.1 three-replicate decision rule to validated branches."""
-    if len(replicates) != 3:
-        raise AnalysisInvalid("the decision requires exactly three complete replicates")
+def decide_replicates(
+    replicates: list[dict[str, dict[str, Any]]],
+    manifest: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Apply the frozen base or amended decision rule to validated branches."""
+    amended = manifest is not None and manifest.get("schema") == AMENDMENT_SCHEMA
+    if manifest is not None:
+        validate_manifest(manifest)
+    required_replicates = int(manifest["replicates"]) if manifest is not None else 3
+    if len(replicates) != required_replicates:
+        raise AnalysisInvalid(
+            f"the decision requires exactly {required_replicates} complete replicates"
+        )
+    decision_rule = (
+        manifest["decision_rule"] if amended else {
+            "minimum_defined_reductions": 3,
+            "maximum_control_floor_pairs": 0,
+            "median_reduction_threshold": 0.80,
+        }
+    )
     replicate_reports = []
     reductions: list[float] = []
     acceptance = {
@@ -1355,25 +1416,61 @@ def decide_replicates(replicates: list[dict[str, dict[str, Any]]]) -> dict[str, 
             "fanout_success_rate": fanout_success,
         })
 
-    all_defined = len(reductions) == 3
-    median_reduction = statistics.median(reductions) if all_defined else None
-    acceptance["median_control_adjusted_reduction_ge_80pct"] = (
-        median_reduction is not None and median_reduction >= 0.80
+    defined_reductions = len(reductions)
+    control_floor_pairs = required_replicates - defined_reductions
+    sufficient_defined = (
+        defined_reductions >= decision_rule["minimum_defined_reductions"]
     )
-    if not all_defined:
+    control_floor_within_cap = (
+        control_floor_pairs <= decision_rule["maximum_control_floor_pairs"]
+    )
+    if amended:
+        median_reduction = statistics.median(reductions) if reductions else None
+        acceptance["sufficient_defined_reductions"] = sufficient_defined
+        acceptance["control_floor_pairs_within_cap"] = control_floor_within_cap
+    else:
+        median_reduction = (
+            statistics.median(reductions)
+            if defined_reductions == required_replicates
+            else None
+        )
+    acceptance["median_control_adjusted_reduction_ge_80pct"] = (
+        median_reduction is not None
+        and median_reduction >= decision_rule["median_reduction_threshold"]
+    )
+    if not sufficient_defined or not control_floor_within_cap:
         decision = "inconclusive"
     elif all(acceptance.values()):
         decision = "confirmed"
     else:
         decision = "needs-work"
     return {
-        "schema": "sshai-benchmark-analysis/v2.1",
+        "schema": (
+            AMENDMENT_ANALYSIS_SCHEMA if amended else "sshai-benchmark-analysis/v2.1"
+        ),
         "valid": True,
         "decision": decision,
         "call_reduction": (
             EXPECTED_CALL_COUNTS["raw"] - EXPECTED_CALL_COUNTS["fanout"]
         ) / EXPECTED_CALL_COUNTS["raw"],
         "median_control_adjusted_input_reduction": median_reduction,
+        **(
+            {
+                "sampling": {
+                    "replicates": required_replicates,
+                    "defined_reductions": defined_reductions,
+                    "control_floor_pairs": control_floor_pairs,
+                    "minimum_defined_reductions": decision_rule[
+                        "minimum_defined_reductions"
+                    ],
+                    "maximum_control_floor_pairs": decision_rule[
+                        "maximum_control_floor_pairs"
+                    ],
+                },
+            }
+            if amended
+            else {}
+        ),
         "acceptance": acceptance,
         "replicates": replicate_reports,
     }
@@ -1407,6 +1504,8 @@ def analyze_branch_files(
         "schema": "sshai-benchmark-run/v2.1",
         "replicate": replicate,
         "branch": branch,
+        "branch_order": list(branch_order_for_replicate(manifest, replicate)),
+        "branch_index": branch_order_for_replicate(manifest, replicate).index(branch),
         "process_exit": 0,
         "manifest_sha256": manifest_digest(manifest_path),
         "sandbox": "workspace-write" if branch.endswith("-control") else "danger-full-access",
@@ -1580,7 +1679,11 @@ def analyze_all(manifest_path: Path) -> dict[str, Any]:
         replicates.append(branches)
     if reasons:
         return {
-            "schema": "sshai-benchmark-analysis/v2.1",
+            "schema": (
+                AMENDMENT_ANALYSIS_SCHEMA
+                if manifest.get("schema") == AMENDMENT_SCHEMA
+                else "sshai-benchmark-analysis/v2.1"
+            ),
             "valid": False,
             "decision": "invalid",
             "manifest": str(manifest_path.resolve()),
@@ -1588,7 +1691,7 @@ def analyze_all(manifest_path: Path) -> dict[str, Any]:
             "reasons": reasons,
             "branches": replicates,
         }
-    report = decide_replicates(replicates)
+    report = decide_replicates(replicates, manifest)
     report["manifest"] = str(manifest_path.resolve())
     report["branches"] = replicates
     return report

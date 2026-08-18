@@ -22,6 +22,14 @@ BENCH = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BENCH)
 
 
+AMENDED_BRANCH_SCHEDULE = [
+    ["raw-control", "raw", "fanout-control", "fanout"],
+    ["raw", "raw-control", "fanout", "fanout-control"],
+    ["fanout-control", "fanout", "raw-control", "raw"],
+    ["fanout", "fanout-control", "raw", "raw-control"],
+] * 2
+
+
 def completed_command(command: str, output: str, exit_code: int = 0) -> dict[str, object]:
     return {
         "type": "item.completed",
@@ -148,6 +156,21 @@ def manifest_fixture(root: Path, codex_path: str = "/opt/benchmark/bin/codex") -
         "targets": targets,
         "observations": observations,
     }
+
+
+def amended_manifest_fixture(
+    root: Path, codex_path: str = "/opt/benchmark/bin/codex"
+) -> dict[str, object]:
+    manifest = manifest_fixture(root, codex_path)
+    manifest["schema"] = "sshai-benchmark/v2.1-amendment-1"
+    manifest["replicates"] = 8
+    manifest["branch_schedule"] = [list(row) for row in AMENDED_BRANCH_SCHEDULE]
+    manifest["decision_rule"] = {
+        "minimum_defined_reductions": 6,
+        "maximum_control_floor_pairs": 2,
+        "median_reduction_threshold": 0.80,
+    }
+    return manifest
 
 
 def attach_frozen_provenance(manifest: dict[str, object], sshai: Path) -> None:
@@ -321,6 +344,31 @@ def test_exact_branch_call_maps() -> None:
             raise AssertionError("pending target qualification must block measured branches")
 
 
+def test_amended_manifest_freezes_balanced_adjacent_branch_schedule() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        manifest = amended_manifest_fixture(Path(directory))
+        BENCH.validate_manifest(manifest)
+        observed = [
+            list(BENCH.branch_order_for_replicate(manifest, replicate))
+            for replicate in range(1, 9)
+        ]
+        assert observed == AMENDED_BRANCH_SCHEDULE
+
+
+def test_amended_manifest_rejects_nonadjacent_pair_schedule() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        manifest = amended_manifest_fixture(Path(directory))
+        manifest["branch_schedule"][0] = [
+            "raw-control", "fanout-control", "raw", "fanout",
+        ]
+        try:
+            BENCH.validate_manifest(manifest)
+        except BENCH.AnalysisInvalid as exc:
+            assert "branch_schedule" in str(exc)
+        else:
+            raise AssertionError("nonadjacent workload/control pairs must fail closed")
+
+
 def test_noop_helper_is_deterministic_and_network_free() -> None:
     helper = MODULE_PATH.with_name("benchmark_v2_1_noop.py")
     audit_wrapper = """
@@ -490,6 +538,10 @@ print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": len(prompt
         assert metadata["schema"] == "sshai-benchmark-run/v2.1"
         assert metadata["branch"] == "raw-control"
         assert metadata["replicate"] == 1
+        assert metadata["branch_order"] == [
+            "raw-control", "raw", "fanout-control", "fanout",
+        ]
+        assert metadata["branch_index"] == 0
         assert metadata["process_exit"] == 0
         assert metadata["sandbox"] == "workspace-write"
         assert metadata["ignore_user_config"] is True
@@ -882,6 +934,60 @@ def test_three_replicate_decision_uses_paired_controls_and_control_floor() -> No
     assert decision["median_control_adjusted_input_reduction"] is None
 
 
+def test_amended_decision_allows_at_most_two_predeclared_control_floor_pairs() -> None:
+    def branch(input_tokens: int, calls: int) -> dict[str, object]:
+        return {
+            "usage": {"input_tokens": input_tokens, "cached_input_tokens": input_tokens // 2},
+            "marked_calls": calls,
+            "observations": list(BENCH.OBSERVATION_IDS),
+            "observation_evidence": [
+                {"outcome": "success"} for _ in BENCH.OBSERVATION_IDS
+            ],
+            "marked_tool_response_est_tokens": {"p95": 100, "sum": 1, "max": 100},
+            "compactions": {"codex_exec": 0, "persisted_rollout": 0, "matched": True},
+        }
+
+    def replicate(fanout_tokens: int) -> dict[str, dict[str, object]]:
+        return {
+            "raw-control": branch(200, 36),
+            "raw": branch(1000, 36),
+            "fanout-control": branch(200, 24),
+            "fanout": branch(fanout_tokens, 24),
+        }
+
+    with tempfile.TemporaryDirectory() as directory:
+        manifest = amended_manifest_fixture(Path(directory))
+        six_defined = (
+            [replicate(300) for _ in range(6)]
+            + [replicate(100) for _ in range(2)]
+        )
+        decision = BENCH.decide_replicates(six_defined, manifest)
+        assert decision["schema"] == "sshai-benchmark-analysis/v2.1-amendment-1"
+        assert decision["decision"] == "confirmed"
+        assert decision["sampling"] == {
+            "replicates": 8,
+            "defined_reductions": 6,
+            "control_floor_pairs": 2,
+            "minimum_defined_reductions": 6,
+            "maximum_control_floor_pairs": 2,
+        }
+        assert decision["median_control_adjusted_input_reduction"] == 0.875
+
+        five_defined = (
+            [replicate(300) for _ in range(5)]
+            + [replicate(100) for _ in range(3)]
+        )
+        decision = BENCH.decide_replicates(five_defined, manifest)
+        assert decision["decision"] == "inconclusive"
+        assert decision["acceptance"]["sufficient_defined_reductions"] is False
+        assert decision["acceptance"]["control_floor_pairs_within_cap"] is False
+
+        below_target = [replicate(500) for _ in range(8)]
+        decision = BENCH.decide_replicates(below_target, manifest)
+        assert decision["decision"] == "needs-work"
+        assert decision["median_control_adjusted_input_reduction"] == 0.625
+
+
 def test_invalid_analysis_retains_all_branch_reasons_and_file_evidence() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -939,6 +1045,8 @@ def test_invalid_analysis_retains_all_branch_reasons_and_file_evidence() -> None
 
 def main() -> None:
     test_exact_branch_call_maps()
+    test_amended_manifest_freezes_balanced_adjacent_branch_schedule()
+    test_amended_manifest_rejects_nonadjacent_pair_schedule()
     test_noop_helper_is_deterministic_and_network_free()
     test_rendered_prompts_have_exact_maps_and_control_boundaries()
     test_call_identity_survives_shell_comment_elision()
@@ -947,6 +1055,7 @@ def main() -> None:
     test_complete_branch_gate_cross_checks_thread_lifecycle_and_evidence()
     test_frozen_provenance_detects_helper_and_prompt_drift()
     test_three_replicate_decision_uses_paired_controls_and_control_floor()
+    test_amended_decision_allows_at_most_two_predeclared_control_floor_pairs()
     test_invalid_analysis_retains_all_branch_reasons_and_file_evidence()
     marker = "BENCH_V21_CALL=fanout:linux-01 BENCH_V21_OBS=L01,L13 printf ok"
     events = [
