@@ -1,0 +1,36 @@
+schema: sshai-public-release/v1
+source:
+  repository: github:aprudkin/sshai
+  revision: 244807cb6f10c7ee856a25fd26b48ebdea1d298c
+  visibility: restricted-until-separately-approved
+target:
+  repository: github:aprudkin/sshai
+  license: MIT
+  publication: not-authorized
+allowlist: release/allowlist.txt
+included_bundles:
+  - id: go-cli
+    paths: [cmd/, internal/, go.mod, go.sum]
+    provenance: owner-authored source and declared Go dependencies
+    decision: candidate
+  - id: documentation-and-governance
+    paths: [README.md, README.ru.md, LICENSE, SECURITY.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md, docs/agent-usage.md, docs/windows-parity.md, docs/benchmarks/, docs/public-release/]
+    provenance: repository-authored documentation
+    decision: candidate-after-staging-scan
+  - id: assets
+    paths: [assets/readme/]
+    provenance: repository-owned SVG artwork
+    decision: candidate
+excluded_bundles:
+  - paths: [CLAUDE.md, docs/superpowers/]
+    reason: internal agent instructions, plans, and design history
+  - paths: [docs/benchmarks/v1.1-manifest.json, docs/benchmarks/v1.1-manifest-v2.json, docs/benchmarks/v2.1-prequalification-manifest.json, docs/benchmarks/v2.1-prequalification-manifest.json.sha256]
+    reason: historical manifests contain private local-path provenance
+  - paths: [.git/, .env*, secrets/, state.json, logs/, tmp/, build/, dist/, '*.log', '*.test', sshai]
+    reason: repository metadata, runtime state, credentials, logs, or generated output
+release_gate:
+  required_before_publication:
+    - build a clean staging tree from release/allowlist.txt
+    - re-run security and environment-path scans on the staging tree
+    - verify dependency and asset license obligations
+    - obtain explicit approval for the exact public target and artifact set
