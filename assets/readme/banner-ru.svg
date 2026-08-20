@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 420" role="img" aria-labelledby="title desc">
+  <title id="title">sshai: удалённые команды и компактные доказательства</title><desc id="desc">Тёмно-синий баннер с терминалом и карточкой доказательств.</desc>
+  <defs><linearGradient id="bg" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#07152d"/><stop offset="1" stop-color="#123c57"/></linearGradient><linearGradient id="accent" x1="0" x2="1"><stop stop-color="#70e0c1"/><stop offset="1" stop-color="#75b9ff"/></linearGradient></defs>
+  <rect width="1440" height="420" rx="28" fill="url(#bg)"/><path d="M0 336C280 255 470 470 790 336s401-33 650-140v224H0z" fill="#0b2545" opacity=".72"/>
+  <text x="112" y="150" fill="#eaf4ff" font-family="ui-monospace, monospace" font-size="68" font-weight="700">$ sshai run</text><text x="116" y="215" fill="#9cb7cb" font-family="system-ui, sans-serif" font-size="31">Удалённые команды. Компактные доказательства.</text>
+  <rect x="905" y="92" width="370" height="204" rx="18" fill="#081a2f" stroke="url(#accent)" stroke-width="3"/><circle cx="951" cy="137" r="10" fill="#70e0c1"/><text x="980" y="148" fill="#eaf4ff" font-family="ui-monospace, monospace" font-size="25">host=web01 exit=0</text><text x="948" y="201" fill="#a8c4d8" font-family="ui-monospace, monospace" font-size="23">lines=8412 bytes=612K</text><path d="M948 241h213" stroke="#70e0c1" stroke-width="9" stroke-linecap="round"/><text x="948" y="278" fill="#a8c4d8" font-family="ui-monospace, monospace" font-size="20">artifact saved locally</text>
+</svg>
