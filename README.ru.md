@@ -42,7 +42,7 @@ PowerShell по SSH. По умолчанию используется PowerShell
 </picture>
 
 Для адаптивного разбора этой модели выполнения и потока доказательств смотрите
-[визуальное руководство по выполнению](https://aprudkin.github.io/sshai/execution-model.ru.html).
+[визуальное руководство по выполнению](docs/execution-model.ru.html).
 
 ## Быстрый старт
 
