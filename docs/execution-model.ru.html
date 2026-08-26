@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Визуальное руководство по удалённому выполнению команд и модели ограниченных доказательств sshai.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230d332f'/%3E%3Cpath d='M14 20h36M14 32h28M14 44h36' stroke='%236fe0bc' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E">
+  <title>sshai — выполнение и поток доказательств</title>
+  <style>
+    :root { color-scheme: light dark; --ink: #102923; --muted: #557069; --paper: #f4f8f5; --surface: #ffffff; --line: #c7d8d0; --terminal: #0d332f; --terminal-ink: #d7f8e9; --signal: #087d61; --amber: #a86008; --shadow: 0 18px 48px rgb(16 41 35 / 9%); }
+    @media (prefers-color-scheme: dark) { :root { --ink: #e0eee7; --muted: #a7beb4; --paper: #0c1713; --surface: #13231d; --line: #2e4b40; --terminal: #081f1b; --terminal-ink: #d7f8e9; --signal: #70d9b6; --amber: #ffbd69; --shadow: 0 18px 48px rgb(0 0 0 / 24%); } }
+    * { box-sizing: border-box; }
+    html { background: var(--paper); }
+    body { margin: 0; color: var(--ink); background: var(--paper); font-family: "IBM Plex Sans", "Avenir Next", Avenir, sans-serif; line-height: 1.55; }
+    a { color: inherit; text-decoration-color: var(--signal); text-underline-offset: .18em; }
+    a:hover { color: var(--signal); }
+    a:focus-visible, summary:focus-visible { outline: 3px solid var(--amber); outline-offset: 4px; }
+    .page { width: min(1160px, calc(100% - 40px)); margin-inline: auto; }
+    .masthead { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 22px 0; border-bottom: 1px solid var(--line); font-family: "SFMono-Regular", Consolas, monospace; font-size: .88rem; }
+    .wordmark { font-weight: 800; letter-spacing: .04em; }
+    .wordmark span { color: var(--signal); }
+    main { padding: clamp(44px, 7vw, 88px) 0 72px; }
+    .hero { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, .85fr); align-items: end; gap: clamp(32px, 7vw, 96px); padding-bottom: clamp(52px, 8vw, 104px); }
+    .eyebrow, .step-number, .card-label, .status-label { margin: 0; color: var(--signal); font-family: "SFMono-Regular", Consolas, monospace; font-size: .75rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+    h1, h2, h3, p { overflow-wrap: break-word; }
+    h1 { max-width: 12ch; margin: 12px 0 20px; font-size: clamp(2.7rem, 7vw, 5.4rem); line-height: .98; letter-spacing: -.055em; text-wrap: balance; }
+    h2 { margin: 0; font-size: clamp(1.7rem, 3vw, 2.6rem); line-height: 1.08; letter-spacing: -.035em; text-wrap: balance; }
+    h3 { margin: 0; font-size: 1.08rem; }
+    .lede { max-width: 58ch; margin: 0; color: var(--muted); font-size: clamp(1.1rem, 1.7vw, 1.3rem); }
+    .thesis { min-width: 0; padding: 28px; border: 1px solid var(--line); border-top: 4px solid var(--signal); background: var(--surface); box-shadow: var(--shadow); }
+    .thesis p:last-child { margin: 10px 0 0; font-size: 1.12rem; }
+    .section { padding: 48px 0; border-top: 1px solid var(--line); }
+    .section-heading { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, .8fr); gap: 24px; align-items: end; margin-bottom: 32px; }
+    .section-heading > p { margin: 0; color: var(--muted); }
+    .path { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; margin: 0; padding: 0; list-style: none; }
+    .path li { position: relative; min-width: 0; min-height: 220px; padding: 24px 22px 22px; border: 1px solid var(--line); background: var(--surface); }
+    .path li + li { border-left: 0; }
+    .path li:not(:last-child)::after { position: absolute; z-index: 1; top: 50%; right: -9px; width: 16px; height: 16px; content: ""; border-top: 2px solid var(--signal); border-right: 2px solid var(--signal); background: var(--paper); transform: translateY(-50%) rotate(45deg); }
+    .path li:nth-child(4)::after { border-color: var(--amber); }
+    .path li:nth-child(5) { border-bottom: 4px solid var(--signal); }
+    .step-number { display: block; margin-bottom: 32px; }
+    .path h3 { margin-bottom: 10px; }
+    .path p { margin: 0; color: var(--muted); font-size: .93rem; }
+    .terminal-strip { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 16px; align-items: start; margin-top: 24px; padding: 18px 22px; color: var(--terminal-ink); background: var(--terminal); font-family: "SFMono-Regular", Consolas, monospace; font-size: .88rem; }
+    .prompt { color: #6fe0bc; font-weight: 800; }
+    code { overflow-wrap: anywhere; }
+    .evidence-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 24px; }
+    .return-card, .follow-up, .guardrail { min-width: 0; }
+    .return-card { padding: 28px; color: var(--terminal-ink); background: var(--terminal); }
+    .return-card .card-label { color: #6fe0bc; }
+    .return-card h3 { margin: 12px 0; font-size: 1.45rem; }
+    .return-card p { margin: 0; color: #b5d5c7; }
+    .follow-up { padding: 28px; border: 1px solid var(--line); background: var(--surface); }
+    .follow-up p { color: var(--muted); }
+    .query-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 22px; }
+    .query-list span { min-width: 0; padding: 10px; border: 1px solid var(--line); color: var(--signal); font-family: "SFMono-Regular", Consolas, monospace; font-size: .86rem; font-weight: 800; text-align: center; }
+    .guardrails { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+    .guardrail { padding: 24px; border: 1px solid var(--line); background: var(--surface); }
+    .guardrail:nth-child(2) { border-top: 4px solid var(--amber); }
+    .guardrail h3 { margin: 10px 0; }
+    .guardrail p { margin: 0; color: var(--muted); }
+    .guardrail .status-label { color: var(--amber); }
+    details { margin-top: 28px; padding: 18px 22px; border: 1px solid var(--line); background: var(--surface); }
+    summary { cursor: pointer; font-weight: 800; }
+    details p { max-width: 74ch; margin: 14px 0 0; color: var(--muted); }
+    footer { display: flex; justify-content: space-between; gap: 20px; padding: 26px 0 40px; border-top: 1px solid var(--line); color: var(--muted); font-size: .9rem; }
+    @media (max-width: 850px) { .hero, .section-heading, .evidence-grid { grid-template-columns: 1fr; } .path { grid-template-columns: 1fr; gap: 12px; } .path li + li { border-left: 1px solid var(--line); } .path li { min-height: 0; padding-left: 76px; } .path li:not(:last-child)::after { top: auto; right: auto; bottom: -9px; left: 43px; transform: rotate(135deg); } .step-number { position: absolute; top: 26px; left: 22px; margin: 0; } .query-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 620px) { .page { width: min(100% - 28px, 1160px); } .masthead, footer { align-items: flex-start; flex-direction: column; } .guardrails { grid-template-columns: 1fr; } .terminal-strip { grid-template-columns: 1fr; gap: 6px; } }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="masthead">
+      <div class="wordmark">ssh<span>ai</span> / модель выполнения</div>
+      <a href="../README.ru.md">Назад к README</a>
+    </header>
+    <main>
+      <section class="hero" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">Удалённое выполнение без переполнения контекста</p>
+          <h1 id="page-title">Запускайте удалённо. Держите доказательства локально.</h1>
+          <p class="lede">sshai выполняет уже авторизованные неинтерактивные команды через системный клиент OpenSSH, сохраняет полученный вывод локально и возвращает агенту ограниченный результат.</p>
+        </div>
+        <aside class="thesis" aria-label="Ключевой принцип выполнения">
+          <p class="eyebrow">Граница</p>
+          <p>Транспорт и доказательства отделены от операционных полномочий. sshai не предоставляет прав на доступ к хосту или изменение его состояния.</p>
+        </aside>
+      </section>
+      <section class="section" aria-labelledby="execution-heading">
+        <div class="section-heading">
+          <div><p class="eyebrow">01 / Один ограниченный путь</p><h2 id="execution-heading">От выбранного алиаса до компактного результата</h2></div>
+          <p>Этот CSS-макет с карточками сохраняет читаемость каждого шага выполнения без горизонтальной прокрутки.</p>
+        </div>
+        <figure>
+          <ol class="path" aria-label="Путь выполнения sshai">
+            <li><span class="step-number">01</span><h3>Авторизованный запрос</h3><p>Выбирается настроенный SSH-алиас и передаётся неинтерактивная команда или файл тела.</p></li>
+            <li><span class="step-number">02</span><h3>Локальная проверка</h3><p>sshai разрешает конфигурацию, применяет политику readonly, если она настроена, и готовит выбранную оболочку.</p></li>
+            <li><span class="step-number">03</span><h3>Выполнение через SSH</h3><p>Системный OpenSSH подготавливает и запускает команду в Linux bash или выбранной Windows PowerShell.</p></li>
+            <li><span class="step-number">04</span><h3>Сбор и сохранение</h3><p>Полученные потоки, исход и метаданные сохраняются в локальном хранилище артефактов до формирования результата.</p></li>
+            <li><span class="step-number">05</span><h3>Возврат паспорта</h3><p>Вызывающая сторона получает ограниченный паспорт или версионированный JSON-конверт, а не полный удалённый вывод.</p></li>
+          </ol>
+          <figcaption class="terminal-strip"><span class="prompt">$</span><code>sshai run web01 -- df -h</code></figcaption>
+        </figure>
+      </section>
+      <section class="section" aria-labelledby="evidence-heading">
+        <div class="section-heading">
+          <div><p class="eyebrow">02 / Доказательства по запросу</p><h2 id="evidence-heading">Полный результат доступен, но не воспроизводится по умолчанию.</h2></div>
+          <p>Локальные артефакты позволяют запросить нужный фрагмент вместо повторной загрузки большого вывода команд в контекст агента.</p>
+        </div>
+        <div class="evidence-grid">
+          <article class="return-card"><p class="card-label">Возвращается сразу</p><h3>Ограниченный паспорт или JSON</h3><p>После сохранения формируются исход, расположение артефакта и компактная сводка доказательств. Для распознанных сбоев SSH возвращается только каноническая очищенная транспортная диагностика.</p></article>
+          <article class="follow-up"><p class="card-label">Выбирается позже</p><h3>Запросы к локальным доказательствам</h3><p>Запрашивайте фрагмент, полезный для текущего расследования, и сохраняйте полученный артефакт как первичный источник.</p><div class="query-list" aria-label="Доступные запросы к доказательствам"><span>q</span><span>diff</span><span>log</span><span>--delta</span></div></article>
+        </div>
+      </section>
+      <section class="section" aria-labelledby="guardrails-heading">
+        <div class="section-heading">
+          <div><p class="eyebrow">03 / Ограничения остаются явными</p><h2 id="guardrails-heading">CLI сохраняет значимые исходы, а не скрывает их.</h2></div>
+          <p>Отказ политики, транспортный сбой и ненулевой код завершения удалённой команды — разные результаты. Это различие входит в контракт доказательств.</p>
+        </div>
+        <div class="guardrails">
+          <article class="guardrail"><p class="status-label">Настроенные идентификаторы</p><h3>Используйте существующую SSH-конфигурацию</h3><p>Алиасы, конфигурация OpenSSH и локальный процесс авторизации остаются за пределами области ответственности инструмента.</p></article>
+          <article class="guardrail"><p class="status-label">Явный отказ</p><h3>Отказывайте неподдерживаемым путям выполнения</h3><p>Интерактивные программы, секреты в stdin, разовые параметры идентификации, передача файлов и неподдерживаемое двухпереходное выполнение требуют другого утверждённого процесса.</p></article>
+          <article class="guardrail"><p class="status-label">Выбор удалённой оболочки</p><h3>Используйте нужную оболочку Windows</h3><p>PowerShell 7 используется по умолчанию. Выбирайте Windows PowerShell 5.1 явно только когда это требуется команде.</p></article>
+        </div>
+        <details><summary>Откуда взяты утверждения на этой странице</summary><p>Этот обзор соответствует текущему README и документированному контракту выполнения. Флаги, правила запасных путей и границу безопасности смотрите в <a href="agent-usage.md">руководстве для агентов</a>; из checkout или установленного бинарного файла выполните <code>sshai help run</code>.</p></details>
+      </section>
+    </main>
+    <footer><span>sshai — выполнение и поток доказательств</span><a href="../README.ru.md">README</a></footer>
+  </div>
+</body>
+</html>
