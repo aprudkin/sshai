@@ -5,8 +5,8 @@
 <p align="center"><img src="assets/readme/banner.svg" width="100%" alt="sshai: remote commands in, compact evidence out"></p>
 
 `sshai` is a Go CLI for AI agents that runs non-interactive Linux bash and Windows PowerShell 7
-commands over SSH. It keeps full command output in a local artifact and returns a compact passport
-instead of flooding agent context.
+commands over SSH. It keeps captured command output in a local artifact and returns a compact
+passport instead of flooding agent context.
 
 Remote commands in. Compact evidence out.
 
@@ -21,13 +21,20 @@ It keeps transport, evidence, and operational authority separate.
 - Run commands on one or more Linux/bash or Windows/PowerShell 7 SSH aliases.
 - Store output locally and return a bounded passport with outcome and artifact location.
 - Query, diff, and search artifacts without replaying whole command results.
-- Use body files for multiline commands, JSON result envelopes, deltas, and named contexts.
+- Use `--body-file` for multiline commands, JSON result envelopes, `--delta`, and named contexts.
 - Fail closed for interactive programs, PowerShell 5.1, secret stdin, ad-hoc identities, and
   unsupported two-hop execution.
 
-```text
-command -> SSH transport -> captured artifact -> bounded passport -> local q / diff / log
-```
+The execution path keeps captured output local and returns only bounded evidence to agent context:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/readme/architecture-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/readme/architecture-light.svg">
+  <img
+    src="assets/readme/architecture-light.svg"
+    width="100%"
+    alt="Sequence diagram showing an AI agent calling sshai through OpenSSH, sshai saving captured output locally, and only bounded passport or queried evidence returning to agent context">
+</picture>
 
 ## Quick start
 
