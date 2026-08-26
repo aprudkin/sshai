@@ -40,7 +40,7 @@ The execution path keeps captured output local and returns only bounded evidence
 </picture>
 
 For a responsive walkthrough of this execution and evidence model, see the
-[visual execution guide](docs/execution-model.html).
+[visual execution guide](https://aprudkin.github.io/sshai/execution-model.html).
 
 ## Quick start
 
