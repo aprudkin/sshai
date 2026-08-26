@@ -18,25 +18,29 @@ type Summary struct {
 	WorstExit       int `json:"worst_exit"`
 }
 
-// runEntry is one host's result inside the envelope's runs[] array. Field
-// names are the frozen v1 contract (see the machine-readable-result-contract
-// design doc). Empty strings are kept, never omitted.
+// runEntry is one host's result inside the envelope's runs[] array. Existing
+// field names are the frozen v1 contract. Empty strings remain present except
+// for transport_diagnostic, an additive error-only field omitted when no safe
+// diagnostic is available so default envelopes remain byte-compatible.
 type runEntry struct {
-	ID             string `json:"id"`
-	Host           string `json:"host"`
-	Ctx            string `json:"ctx"`
-	Command        string `json:"command"`
-	Exit           int    `json:"exit"`
-	TransportError string `json:"transport_error"`
-	ArtifactPath   string `json:"artifact_path"`
-	Bytes          int64  `json:"bytes"`
-	Lines          int64  `json:"lines"`
-	SHA256         string `json:"sha256"`
-	DurationMs     int64  `json:"duration_ms"`
-	Ts             string `json:"ts"`
-	Truncated      bool   `json:"truncated"`
-	Binary         bool   `json:"binary"`
-	DeltaBase      string `json:"delta_base"`
+	ID                         string `json:"id"`
+	Host                       string `json:"host"`
+	Ctx                        string `json:"ctx"`
+	Command                    string `json:"command"`
+	Exit                       int    `json:"exit"`
+	TransportError             string `json:"transport_error"`
+	TransportDiagnostic        string `json:"transport_diagnostic,omitempty"`
+	AcceptedHostKeyAlgorithm   string `json:"accepted_host_key_algorithm,omitempty"`
+	AcceptedHostKeyFingerprint string `json:"accepted_host_key_fingerprint,omitempty"`
+	ArtifactPath               string `json:"artifact_path"`
+	Bytes                      int64  `json:"bytes"`
+	Lines                      int64  `json:"lines"`
+	SHA256                     string `json:"sha256"`
+	DurationMs                 int64  `json:"duration_ms"`
+	Ts                         string `json:"ts"`
+	Truncated                  bool   `json:"truncated"`
+	Binary                     bool   `json:"binary"`
+	DeltaBase                  string `json:"delta_base"`
 }
 
 type envelope struct {
@@ -55,21 +59,24 @@ func RenderResult(root string, metas []Meta, summary Summary, batchID string) []
 	runs := make([]runEntry, 0, len(metas))
 	for _, m := range metas {
 		runs = append(runs, runEntry{
-			ID:             m.ID,
-			Host:           m.Host,
-			Ctx:            m.Ctx,
-			Command:        m.Command,
-			Exit:           m.Exit,
-			TransportError: m.TransportErr,
-			ArtifactPath:   filepath.Join(root, "art", m.ID),
-			Bytes:          m.Bytes,
-			Lines:          m.Lines,
-			SHA256:         m.SHA256,
-			DurationMs:     m.DurationMs,
-			Ts:             m.Ts.UTC().Format(time.RFC3339Nano),
-			Truncated:      m.Truncated,
-			Binary:         m.Binary,
-			DeltaBase:      m.DeltaBase,
+			ID:                         m.ID,
+			Host:                       m.Host,
+			Ctx:                        m.Ctx,
+			Command:                    m.Command,
+			Exit:                       m.Exit,
+			TransportError:             m.TransportErr,
+			TransportDiagnostic:        m.TransportDiagnostic,
+			AcceptedHostKeyAlgorithm:   m.AcceptedHostKeyAlgorithm,
+			AcceptedHostKeyFingerprint: m.AcceptedHostKeyFingerprint,
+			ArtifactPath:               filepath.Join(root, "art", m.ID),
+			Bytes:                      m.Bytes,
+			Lines:                      m.Lines,
+			SHA256:                     m.SHA256,
+			DurationMs:                 m.DurationMs,
+			Ts:                         m.Ts.UTC().Format(time.RFC3339Nano),
+			Truncated:                  m.Truncated,
+			Binary:                     m.Binary,
+			DeltaBase:                  m.DeltaBase,
 		})
 	}
 	env := envelope{

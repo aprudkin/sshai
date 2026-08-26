@@ -18,6 +18,21 @@ func TestStatusLineExitForm(t *testing.T) {
 	}
 }
 
+func TestStatusLineReportsExplicitlyAcceptedHostKey(t *testing.T) {
+	m := meta()
+	m.AcceptedHostKeyAlgorithm = "ssh-ed25519"
+	m.AcceptedHostKeyFingerprint = "SHA256:abc123"
+	got := StatusLine(m)
+	for _, want := range []string{
+		"accepted-host-key-algorithm=ssh-ed25519",
+		"accepted-host-key-fingerprint=SHA256:abc123",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status line missing %q: %q", want, got)
+		}
+	}
+}
+
 func TestStatusLineTransportFormAndFlags(t *testing.T) {
 	m := meta()
 	m.TransportErr = "timeout"

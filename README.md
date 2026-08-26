@@ -4,9 +4,10 @@
 
 <p align="center"><img src="assets/readme/banner.svg" width="100%" alt="sshai: remote commands in, compact evidence out"></p>
 
-`sshai` is a Go CLI for AI agents that runs non-interactive Linux bash and Windows PowerShell 7
-commands over SSH. It keeps captured command output in a local artifact and returns a compact
-passport instead of flooding agent context.
+`sshai` is a Go CLI for AI agents that runs non-interactive Linux bash and Windows PowerShell
+commands over SSH. PowerShell 7 (`pwsh`) is the default; Windows PowerShell 5.1 is selectable per
+invocation. It keeps captured command output in a local artifact and returns a compact passport
+instead of flooding agent context.
 
 Remote commands in. Compact evidence out.
 
@@ -18,12 +19,14 @@ It keeps transport, evidence, and operational authority separate.
 
 ## Capabilities
 
-- Run commands on one or more Linux/bash or Windows/PowerShell 7 SSH aliases.
+- Run commands on one or more Linux/bash or Windows/PowerShell SSH aliases, with PowerShell 7 as
+  the default and Windows PowerShell 5.1 selectable per invocation.
 - Store output locally and return a bounded passport with outcome and artifact location.
 - Query, diff, and search artifacts without replaying whole command results.
 - Use `--body-file` for multiline commands, JSON result envelopes, `--delta`, and named contexts.
-- Fail closed for interactive programs, PowerShell 5.1, secret stdin, ad-hoc identities, and
-  unsupported two-hop execution.
+- Return bounded, sanitized diagnostics for recognized SSH failures.
+- Fail closed for interactive programs, secret stdin, ad-hoc identities, and unsupported two-hop
+  execution.
 
 The execution path keeps captured output local and returns only bounded evidence to agent context:
 
@@ -55,11 +58,33 @@ Keep a multiline body out of process arguments:
 sshai run --body-file check.ps1 win01
 ```
 
+PowerShell 7 remains the Windows default. Select Windows PowerShell 5.1 when a command requires it:
+
+```bash
+sshai run --powershell-host windows-powershell --body-file check.ps1 sccm01
+```
+
+After direct authorization for one exact alias, accept only its previously unknown host key:
+
+```bash
+sshai run --accept-new-host-key new01 new01 -- uname -a
+```
+
+Bypass a configured `ProxyJump` for one direct-route invocation without changing `ssh_config`:
+
+```bash
+sshai run --proxy-jump=none direct01 -- uname -a
+```
+
 For automation, request a versioned JSON envelope:
 
 ```bash
 sshai run --result-format=json web01 -- uname -a
 ```
+
+Recognized SSH failures expose only a canonical `transport_diagnostic`; raw SSH stderr remains
+private. An explicitly authorized host-key acceptance also returns the accepted algorithm and
+SHA-256 fingerprint.
 
 Run `sshai help` for the command inventory and `sshai help run` for its full execution contract.
 
@@ -71,9 +96,12 @@ host.
 - Use it only for separately authorized actions on configured aliases.
 - Keep passwords, tokens, keys, certificates, and expected secret output out of command text and
   artifacts.
-- Use `--body-file` for multiline bodies; use a separate approved workflow for secret stdin or
-  file transfer.
+- Use `--accept-new-host-key HOST` only after direct authorization for that exact alias, and
+  `--proxy-jump=none` only for an explicitly selected direct-route invocation.
+- Use a separate approved workflow for secret stdin, file transfer, interactive programs,
+  ad-hoc identity options, or unsupported two-hop execution.
 - A policy denial, transport failure, and remote non-zero exit are different outcomes.
+- The archived `ps_ssh.py` helper is not a fallback.
 
 See [agent usage](docs/agent-usage.md) for default-use and fallback rules.
 
@@ -98,8 +126,10 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the
 
 ### Project status
 
-Version 1 provides `run`, `q`, `diff`, `log`, `hosts`, `gc`, and `help`, with Linux and Windows
-acceptance evidence in this repository.
+Version 1 provides `run`, `q`, `diff`, `log`, `hosts`, `gc`, and `help`, including selectable
+Windows PowerShell hosts, sanitized transport diagnostics, scoped host-key acceptance, and a
+one-invocation direct-route override. Linux and PowerShell 7 acceptance evidence is recorded in
+this repository; live Windows PowerShell 5.1 evidence is still pending.
 
 ### Controlled v1.1 benchmark
 
@@ -133,8 +163,8 @@ The control stream was 0.61% of the raw evidence size—about **163× smaller**,
 in bytes visible during orchestration.
 
 This is evidence from a real workflow, not a controlled head-to-head token benchmark. Token counts
-use `ceil(bytes / 4)`, and the run used narrow raw-SSH exceptions for host-key trust and a direct
-route.
+use `ceil(bytes / 4)`. The run predated scoped host-key acceptance and direct-route support; those
+paths are now available without weakening the strict defaults.
 
 ### Follow-up fan-out experiment
 

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 923.7955 630" width="923.7955" height="630" style="--bg:#f6fbff;--fg:#07152d;--line:#49728d;--accent:#0f9f83;--muted:#5b7286;--surface:#eaf4ff;--border:#75b9ff;background:var(--bg)">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 966.7735 630" width="966.7735" height="630" style="--bg:#f6fbff;--fg:#07152d;--line:#49728d;--accent:#0f9f83;--muted:#5b7286;--surface:#eaf4ff;--border:#75b9ff;background:var(--bg)">
 <style>
   text { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
   svg {
@@ -28,8 +28,8 @@
 <line class="lifeline" data-actor="Agent" x1="70.3165" y1="70" x2="70.3165" y2="600" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
 <line class="lifeline" data-actor="CLI" x1="210.31650000000002" y1="70" x2="210.31650000000002" y2="600" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
 <line class="lifeline" data-actor="SSH" x1="358.05" y1="70" x2="358.05" y2="600" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<line class="lifeline" data-actor="Host" x1="590.9445" y1="70" x2="590.9445" y2="600" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
-<line class="lifeline" data-actor="Store" x1="824.9504999999999" y1="70" x2="824.9504999999999" y2="600" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="Host" x1="612.4335" y1="70" x2="612.4335" y2="600" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="Store" x1="867.9285" y1="70" x2="867.9285" y2="600" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
 <g class="message" data-from="Agent" data-to="Agent" data-label="prepare authorized request" data-line-style="solid" data-arrow-head="filled" data-self="true">
   <polyline points="70.3165,90 100.3165,90 100.3165,110 70.3165,110" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
   <text x="108.3165" y="100" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">prepare authorized request</text>
@@ -43,20 +43,20 @@
   <text x="284.18325000000004" y="190" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">stage and execute on one or more hosts</text>
 </g>
 <g class="message" data-from="SSH" data-to="Host" data-label="run in the selected shell" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="358.05" y1="240" x2="590.9445" y2="240" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="474.49725" y="230" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">run in the selected shell</text>
+  <line x1="358.05" y1="240" x2="612.4335" y2="240" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="485.24175" y="230" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">run in the selected shell</text>
 </g>
 <g class="message" data-from="Host" data-to="SSH" data-label="stdout, stderr, and exit status" data-line-style="dashed" data-arrow-head="filled" data-self="false">
-  <line x1="590.9445" y1="280" x2="358.05" y2="280" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
-  <text x="474.49725" y="270" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">stdout, stderr, and exit status</text>
+  <line x1="612.4335" y1="280" x2="358.05" y2="280" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="485.24175" y="270" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">stdout, stderr, and exit status</text>
 </g>
 <g class="message" data-from="SSH" data-to="CLI" data-label="captured streams and outcome" data-line-style="dashed" data-arrow-head="filled" data-self="false">
   <line x1="358.05" y1="320" x2="210.31650000000002" y2="320" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
   <text x="284.18325000000004" y="310" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">captured streams and outcome</text>
 </g>
 <g class="message" data-from="CLI" data-to="Store" data-label="persist captured output and metadata" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="210.31650000000002" y1="360" x2="824.9504999999999" y2="360" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="517.6334999999999" y="350" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">persist captured output and metadata</text>
+  <line x1="210.31650000000002" y1="360" x2="867.9285" y2="360" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="539.1225" y="350" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">persist captured output and metadata</text>
 </g>
 <g class="message" data-from="CLI" data-to="Agent" data-label="bounded passport or JSON" data-line-style="dashed" data-arrow-head="filled" data-self="false">
   <line x1="210.31650000000002" y1="400" x2="70.3165" y2="400" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
@@ -67,12 +67,12 @@
   <text x="140.31650000000002" y="430" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">q, diff, log, or --delta</text>
 </g>
 <g class="message" data-from="CLI" data-to="Store" data-label="request selected evidence" data-line-style="solid" data-arrow-head="filled" data-self="false">
-  <line x1="210.31650000000002" y1="480" x2="824.9504999999999" y2="480" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
-  <text x="517.6334999999999" y="470" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">request selected evidence</text>
+  <line x1="210.31650000000002" y1="480" x2="867.9285" y2="480" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="539.1225" y="470" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">request selected evidence</text>
 </g>
 <g class="message" data-from="Store" data-to="CLI" data-label="requested slice" data-line-style="dashed" data-arrow-head="filled" data-self="false">
-  <line x1="824.9504999999999" y1="520" x2="210.31650000000002" y2="520" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
-  <text x="517.6334999999999" y="510" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">requested slice</text>
+  <line x1="867.9285" y1="520" x2="210.31650000000002" y2="520" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="539.1225" y="510" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">requested slice</text>
 </g>
 <g class="message" data-from="CLI" data-to="Agent" data-label="bounded evidence" data-line-style="dashed" data-arrow-head="filled" data-self="false">
   <line x1="210.31650000000002" y1="560" x2="70.3165" y2="560" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
@@ -94,12 +94,12 @@
   <rect x="290.3165" y="30" width="135.46699999999998" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
   <text x="358.05" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">system OpenSSH</text>
 </g>
-<g class="actor" data-id="Host" data-label="Linux bash or Windows PowerShell 7" data-type="participant">
-  <rect x="465.7835" y="30" width="250.32199999999995" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="590.9445" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Linux bash or Windows PowerShell 7</text>
+<g class="actor" data-id="Host" data-label="Linux bash or selected Windows PowerShell" data-type="participant">
+  <rect x="465.7835" y="30" width="293.29999999999995" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="612.4335" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">Linux bash or selected Windows PowerShell</text>
 </g>
 <g class="actor" data-id="Store" data-label="local artifact store" data-type="participant">
-  <rect x="756.1054999999999" y="30" width="137.69000000000003" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
-  <text x="824.9504999999999" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">local artifact store</text>
+  <rect x="799.0835" y="30" width="137.69000000000003" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="867.9285" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">local artifact store</text>
 </g>
 </svg>

@@ -50,7 +50,7 @@ func TestHelpRunShowsFullFlagReference(t *testing.T) {
 		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
 	}
 	s := out.String()
-	for _, flag := range []string{"--body-file", "--delta", "--budget", "--timeout", "--ctx", "--result-format", "--result-out"} {
+	for _, flag := range []string{"--body-file", "--powershell-host", "--accept-new-host-key", "--proxy-jump", "--delta", "--budget", "--timeout", "--ctx", "--result-format", "--result-out"} {
 		if !strings.Contains(s, flag) {
 			t.Fatalf("help run missing flag %q: %q", flag, s)
 		}
@@ -58,6 +58,22 @@ func TestHelpRunShowsFullFlagReference(t *testing.T) {
 	for _, want := range []string{"captured output up to the configured stream cap", "factory default 500", "factory default 60"} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("help run missing accuracy qualifier %q: %q", want, s)
+		}
+	}
+}
+
+func TestHelpQExplainsFinalArtifactPathArgument(t *testing.T) {
+	var out, errB bytes.Buffer
+	if rc := Help([]string{"q"}, &out, &errB); rc != 0 {
+		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
+	}
+	for _, want := range []string{
+		"artifact is not sent on stdin",
+		"<tool> <args...> <artifact-path>",
+		"sys.argv[-1]",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("help q missing %q: %q", want, out.String())
 		}
 	}
 }

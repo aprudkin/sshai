@@ -19,10 +19,11 @@ func TestRenderResultSchemaShape(t *testing.T) {
 			ID: "a17", Host: "pg-prod-01", Ctx: "default", Command: "df -h",
 			Exit: 0, Bytes: 1024, Lines: 3, SHA256: "abc123",
 			DurationMs: 500, Truncated: false, Binary: false, Ts: ts,
+			AcceptedHostKeyAlgorithm: "ssh-ed25519", AcceptedHostKeyFingerprint: "SHA256:abc123",
 		},
 		{
 			ID: "a18", Host: "web01", Ctx: "default", Command: "body:1a2b3c4d5e6f7a8b",
-			TransportErr: "ssh", DurationMs: 10, Ts: ts,
+			TransportErr: "ssh", TransportDiagnostic: "host key verification failed", DurationMs: 10, Ts: ts,
 		},
 	}
 	summary := Summary{Hosts: 2, OK: 1, TransportErrors: 1, WorstExit: 0}
@@ -56,9 +57,16 @@ func TestRenderResultSchemaShape(t *testing.T) {
 	if r0["transport_error"] != "" {
 		t.Fatalf("transport_error=%v, want empty string", r0["transport_error"])
 	}
+	if r0["accepted_host_key_algorithm"] != "ssh-ed25519" ||
+		r0["accepted_host_key_fingerprint"] != "SHA256:abc123" {
+		t.Fatalf("accepted host key evidence missing from runs[0]: %v", r0)
+	}
 	r1, _ := runs[1].(map[string]any)
 	if r1["transport_error"] != "ssh" {
 		t.Fatalf("runs[1] transport_error=%v", r1["transport_error"])
+	}
+	if r1["transport_diagnostic"] != "host key verification failed" {
+		t.Fatalf("runs[1] transport_diagnostic=%v", r1["transport_diagnostic"])
 	}
 	if r1["exit"].(float64) != 0 {
 		t.Fatalf("runs[1] exit must be 0 when transport_error set, got %v", r1["exit"])
@@ -90,6 +98,15 @@ func TestRenderResultNeverOmitsEmptyFields(t *testing.T) {
 	for _, key := range []string{"sha256", "transport_error", "delta_base", "artifact_path", "ctx", "command"} {
 		if !strings.Contains(string(body), `"`+key+`":`) {
 			t.Fatalf("field %q missing from envelope (must be present, possibly empty)", key)
+		}
+	}
+	for _, optional := range []string{
+		`"transport_diagnostic":`,
+		`"accepted_host_key_algorithm":`,
+		`"accepted_host_key_fingerprint":`,
+	} {
+		if strings.Contains(string(body), optional) {
+			t.Fatalf("empty optional field %s changed default envelope: %s", optional, body)
 		}
 	}
 }

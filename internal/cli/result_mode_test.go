@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/aprudkin/sshai/internal/artifact"
+	"github.com/aprudkin/sshai/internal/transport"
 )
 
 // TestRunResultFormatJSONSuccess covers the single-host --result-format=json
@@ -47,6 +48,37 @@ func TestRunResultFormatJSONSuccess(t *testing.T) {
 	}
 	if r0["sha256"] == "" {
 		t.Fatal("sha256 empty on a successful run")
+	}
+}
+
+func TestRunResultFormatJSONReportsAcceptedHostKey(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	seedLinuxFacts(t, root, "new-host")
+	f := &multiHostTr{
+		rcs: map[string]int{"new-host": 0},
+		acceptedHostKeys: map[string]transport.HostKey{
+			"new-host": {Algorithm: "ssh-ed25519", Fingerprint: "SHA256:abc123"},
+		},
+	}
+	var out, errB bytes.Buffer
+	rc := runWith(f, []string{
+		"--result-format=json",
+		"--accept-new-host-key", "new-host",
+		"new-host", "--", "true",
+	}, &out, &errB)
+	if rc != 0 {
+		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
+	}
+	var env map[string]any
+	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, out.String())
+	}
+	runs, _ := env["runs"].([]any)
+	r0, _ := runs[0].(map[string]any)
+	if r0["accepted_host_key_algorithm"] != "ssh-ed25519" ||
+		r0["accepted_host_key_fingerprint"] != "SHA256:abc123" {
+		t.Fatalf("runs[0]=%v", r0)
 	}
 }
 
@@ -149,29 +181,37 @@ func TestRunResultFormatJSONNonZeroExit(t *testing.T) {
 	}
 }
 
-// Transport error: envelope carries transport_error=ssh, exit 0, empty
-// artifact (bytes 0) still with a saved artifact_path.
+// A classified transport failure carries its stable class plus a safe
+// diagnostic in JSON, and stores that same diagnostic as its artifact body.
 func TestRunResultFormatJSONTransportError(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("SSHAI_ROOT", root)
 	seedLinuxFacts(t, root, "web01")
-	f := &probeFailsTr{}
+	f := &probeFailsTr{rawOutput: []byte("private.example SHA256:TOPSECRET\nHost key verification failed.")}
 	var out, errB bytes.Buffer
 	rc := runWith(f, []string{"--result-format=json", "web01", "--", "true"}, &out, &errB)
 	if rc != exitTransport {
 		t.Fatalf("rc=%d, want %d", rc, exitTransport)
+	}
+	if strings.Contains(out.String(), "TOPSECRET") || strings.Contains(out.String(), "private.example") {
+		t.Fatalf("raw SSH output leaked into JSON: %q", out.String())
 	}
 	var env map[string]any
 	if err := json.Unmarshal(out.Bytes(), &env); err != nil {
 		t.Fatalf("not JSON: %v", err)
 	}
 	r0, _ := env["runs"].([]any)[0].(map[string]any)
-	if r0["transport_error"] != "ssh" || r0["exit"].(float64) != 0 {
+	if r0["transport_error"] != "ssh" || r0["transport_diagnostic"] != "host key verification failed" ||
+		r0["exit"].(float64) != 0 {
 		t.Fatalf("runs[0]=%v", r0)
 	}
 	ap, _ := r0["artifact_path"].(string)
-	if ap == "" {
-		t.Fatal("artifact_path empty on transport error")
+	body, err := os.ReadFile(ap)
+	if err != nil {
+		t.Fatalf("read transport artifact: %v", err)
+	}
+	if got, want := string(body), "transport diagnostic: host key verification failed\n"; got != want {
+		t.Fatalf("transport artifact=%q, want %q", got, want)
 	}
 	sum, _ := env["summary"].(map[string]any)
 	if sum["transport_errors"].(float64) != 1 {

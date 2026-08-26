@@ -10,9 +10,12 @@ import (
 	"strings"
 )
 
-// PwshDefaultShell is the pwsh 7 executable path assumed on a target host
-// unless a caller overrides it. Ported from ps_ssh.py's DEFAULT_SHELL.
-const PwshDefaultShell = `C:\Program Files\PowerShell\7\pwsh.exe`
+const (
+	// PwshDefaultShell is the PowerShell 7 executable used by default.
+	PwshDefaultShell = `C:\Program Files\PowerShell\7\pwsh.exe`
+	// WindowsPowerShellShell is the in-box Windows PowerShell 5.1 executable.
+	WindowsPowerShellShell = `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
+)
 
 // RemoteDir is the remote scratch directory a staged script is uploaded
 // to, relative to the SSH login's home directory: the remote file is

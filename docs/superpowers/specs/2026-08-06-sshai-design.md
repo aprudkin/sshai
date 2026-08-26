@@ -92,12 +92,15 @@ internal/policy/     # v1: readonly allowlist (fail-closed)
 
 ```
 sshai run [flags] <host...> -- <command>     # execute; N hosts = fan-out
+sshai run --powershell-host windows-powershell <host...> -- <command>  # select Windows PowerShell 5.1; pwsh 7 is default
 sshai run --body-file f.ps1 <host...>        # body from file or stdin (never argv)
+      --accept-new-host-key HOST  # exact authorized alias; accept unknown, reject changed, report algorithm/fingerprint
+      --proxy-jump none           # bypass configured ProxyJump for this invocation only
       --delta          # R3: print diff vs previous run of same (host, ctx, command)
       --budget N       # output budget in tokens (~bytes/4); default 500
       --timeout N      # seconds; default 60
       --ctx NAME       # named state context; default "default"; SSHAI_CTX env respected
-sshai q <id> -- <tool> <args>                # R2: run a local tool (grep/jq/awk/...); artifact path is appended as the tool's final argument
+sshai q <id> -- <tool> <args>                # R2: artifact is not stdin; its path is appended as the tool's final argument
 sshai diff <id1> <id2>                       # diff two artifacts (any hosts)
 sshai log [--host H] [--since T] [--grep P]  # R6: search the run-log
 sshai hosts                                  # known aliases (from ssh_config), detected OS, readonly flag
@@ -116,8 +119,10 @@ tail3:
   ...last 3 lines...
 ```
 
-- `exit=N` — the body ran and returned N. `transport-error=timeout|auth|dns|channel` — delivery
-  failed; the body may not have run at all. Exactly one of the two is present.
+- `exit=N` — the body ran and returned N. `transport-error=ssh|scp|timeout` — delivery failed;
+  the body may not have run at all. When raw OpenSSH output matches a fixed safe allowlist, the
+  artifact and optional JSON `transport_diagnostic` carry only the canonical cause. Exactly one
+  of `exit` and `transport-error` is present.
 - Optional flags appended to the status line: `truncated=1` (stream cap hit), `binary=1`
   (NUL detected; tail suppressed), `delta=a12` (delta mode, diff base).
 - **Tiered inlining:** when total output fits the budget (default 500 tokens ≈ 2 KB), the passport
@@ -144,7 +149,8 @@ over from `/ps-ssh`), cached in the local DB; overridable per host in config.
 
 **Windows path** carries the paid-for lessons from `ps_ssh.py` (314 lines, ported with its control
 cases): UTF-8 BOM on body files, body delivery via scp staging (command-line length limits,
-quoting), pwsh 7 with fallback, CLIXML filtering of stderr.
+quoting), PowerShell 7 by default with explicit Windows PowerShell 5.1 selection, DefaultShell
+invocation-form detection, and CLIXML filtering of stderr.
 
 **Re-injection mechanics.** Every run is wrapped: prologue (`cd` to saved cwd + restore changed env
 vars) → user body → epilogue (dump cwd/env after a sentinel marker; runs on failure too —
@@ -196,6 +202,10 @@ never lost to delta mode.
 - **S3:** `audit.jsonl`, append-only: ts, host, ctx, subcommand, body sha256, policy verdict, exit.
   Inline commands retain a short secret-redacted preview; `--body-file`/stdin bodies are hash-only
   because heuristic redaction cannot safely classify arbitrary script text.
+- **Scoped SSH exceptions:** `--accept-new-host-key HOST` requires direct authorization and applies
+  to exactly one matching alias; OpenSSH still refuses changed keys and returns only the newly
+  accepted algorithm/fingerprint. `--proxy-jump=none` disables a configured jump for one invocation.
+  Neither flag edits managed SSH configuration.
 - **readonly flag (mini-S2):** a host with `readonly = true` in `config.toml` accepts only
   commands matching a curated global allowlist of read-only patterns (shipped default: `cat`, `ls`,
   `grep`, `df`, `ps`, `journalctl`, `systemctl status`, `Get-*`, …), fail-closed otherwise. The
@@ -208,13 +218,18 @@ never lost to delta mode.
 - Binary output: NUL detection → `binary=1`, tail suppressed in the passport.
 - Stream cap (default 64 MB) → `truncated=1`.
 - ControlMaster death: `auto` re-establishes on the next call; host-facts cache is not invalidated.
-- Body-file staging failure, DNS, auth → `transport-error=...` with the specific reason.
+- SSH/scp failure → stable `transport-error=ssh|scp|timeout`; recognized raw errors are reduced to
+  an allowlisted canonical diagnostic. Key material, configuration, algorithm offers, paths, and
+  other raw error text are never persisted or rendered. The explicit accept-new path is the sole
+  exception for returning a newly stored key's algorithm and SHA256 fingerprint.
 
 ## Testing
 
 - **Unit:** CLIXML filter, passport rendering, budget trimmer, prologue/epilogue generation,
   env-diff logic, delta keying, redaction filter, readonly allowlist. Control fixtures ported from
   `/ps-ssh` (emoji, Cyrillic, BOM) — parity is proven on the already-paid-for cases.
+- **Transport/Windows selection:** allowlisted SSH diagnostics must not leak raw error text;
+  Windows command construction covers the default PowerShell 7 path and explicit PowerShell 5.1.
 - **Passport size** (<200 tokens for the metadata-only form) is a unit assertion, not an intention.
 - **Integration** (build-tagged, not run in CI): bash path against localhost sshd; pwsh path
   against a real Windows fleet host. Before declaring `/ps-ssh` superseded, its existing scenarios

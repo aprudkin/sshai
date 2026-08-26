@@ -4,8 +4,16 @@ package transport
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
+	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -15,6 +23,12 @@ import (
 // timeout, so a fixed budget is used — generous enough for pushing a
 // small script body, not meant for bulk file transfer.
 const defaultPutTimeout = 2 * time.Minute
+
+const (
+	hostKeyConfigCap     = 256 << 10
+	knownHostsReadCap    = 8 << 20
+	hostKeyLookupTimeout = 10 * time.Second
+)
 
 // execStartFailedRC is the out-of-band sentinel run() returns when the
 // local ssh/scp process never started at all (binary missing, exec
@@ -26,6 +40,49 @@ const defaultPutTimeout = 2 * time.Minute
 // to a TransportError rather than passing it through as an honest exit.
 const execStartFailedRC = -2
 
+// Transport diagnostics are deliberately an allowlist of fixed phrases.
+// ssh/scp stderr may contain hostnames, key fingerprints, algorithm offers,
+// paths, or configuration excerpts; none of that raw text may cross the
+// transport boundary. Matching is case-insensitive and bounded because this
+// only needs the short terminal error emitted by OpenSSH.
+const maxTransportDiagnosticBytes = 64 << 10
+
+var transportDiagnosticPatterns = []struct {
+	needle     []byte
+	diagnostic string
+}{
+	{[]byte("remote host identification has changed"), "remote host identification changed"},
+	{[]byte("host key verification failed"), "host key verification failed"},
+	{[]byte("no matching host key type"), "no matching host key type"},
+	{[]byte("no matching key exchange method"), "no matching key exchange method"},
+	{[]byte("no matching cipher found"), "no matching cipher"},
+	{[]byte("connection timed out"), "connection timed out"},
+	{[]byte("operation timed out"), "connection timed out"},
+	{[]byte("connection refused"), "connection refused"},
+	{[]byte("could not resolve hostname"), "could not resolve hostname"},
+	{[]byte("name or service not known"), "could not resolve hostname"},
+	{[]byte("nodename nor servname provided"), "could not resolve hostname"},
+	{[]byte("no route to host"), "no route to host"},
+	{[]byte("network is unreachable"), "network is unreachable"},
+	{[]byte("too many authentication failures"), "too many authentication failures"},
+	{[]byte("permission denied"), "permission denied"},
+	{[]byte("connection reset"), "connection reset"},
+	{[]byte("connection closed"), "connection closed"},
+}
+
+func safeTransportDiagnostic(output []byte) string {
+	if len(output) > maxTransportDiagnosticBytes {
+		output = output[len(output)-maxTransportDiagnosticBytes:]
+	}
+	lower := bytes.ToLower(output)
+	for _, pattern := range transportDiagnosticPatterns {
+		if bytes.Contains(lower, pattern.needle) {
+			return pattern.diagnostic
+		}
+	}
+	return ""
+}
+
 // OpenSSH is a Transport that shells out to the system ssh(1) and scp(1)
 // binaries, sharing one ControlMaster socket per host to avoid paying a
 // fresh TCP+auth handshake on every call.
@@ -33,6 +90,14 @@ type OpenSSH struct {
 	controlDir     string
 	controlPersist string
 	streamCap      int64
+	options        OpenSSHOptions
+
+	hostKeyMu       sync.Mutex
+	hostKeyBefore   map[string]HostKey
+	acceptedHostKey HostKey
+	hostKeyPrepared bool
+	hostKeyErr      error
+	hostKeyLookup   func(host string, sshOpts []string) (map[string]HostKey, error)
 
 	// Runner executes argv (argv[0] is "ssh" or "scp"), feeding it stdin
 	// and enforcing timeout. It returns the remote process's exit code,
@@ -42,29 +107,37 @@ type OpenSSH struct {
 	Runner func(argv []string, stdin []byte, timeout time.Duration) (rc int, out []byte, timedOut bool)
 }
 
+// OpenSSHOptions contains invocation-scoped SSH policy exceptions. The empty
+// value preserves the strict ssh_config-derived route and host-key behavior.
+type OpenSSHOptions struct {
+	AcceptNewHostKey string
+	ProxyJumpNone    bool
+}
+
 // NewOpenSSH builds an OpenSSH transport whose every Exec and Put call
 // carries the same ControlMaster options — each its own argv element —
 // pointed at a socket directory under controlDir and persisted for
 // controlPersist after the last client disconnects. streamCap bounds the
 // combined stdout+stderr captured per call; a remote command that writes
-// past it is killed and its Result reports Truncated.
-func NewOpenSSH(controlDir, controlPersist string, streamCap int64) *OpenSSH {
+// past it is killed and its Result reports Truncated. options apply only to
+// this transport instance.
+func NewOpenSSH(controlDir, controlPersist string, streamCap int64, options OpenSSHOptions) *OpenSSH {
 	tr := &OpenSSH{
 		controlDir:     controlDir,
 		controlPersist: controlPersist,
 		streamCap:      streamCap,
+		options:        options,
 	}
 	tr.Runner = tr.run
+	tr.hostKeyLookup = tr.lookupHostKeys
 	return tr
 }
 
-// sshOpts is the fixed set of -o options shared by every ssh and scp
-// invocation this transport makes, each option its own argv element (see
-// TestArgvDiscipline): never glue "-o" to its value, and never combine
-// two options into one element — a historical bug ("keyword batchmode
-// extra arguments") came from doing exactly that.
-func (tr *OpenSSH) sshOpts() []string {
-	return []string{
+// sshOpts returns the fixed options shared by every ssh and scp invocation,
+// plus only the explicitly requested invocation-scoped overrides. Each -o
+// and value remains a separate argv element (see TestArgvDiscipline).
+func (tr *OpenSSH) sshOpts(host string) []string {
+	opts := []string{
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=10",
 		"-o", "LogLevel=ERROR",
@@ -72,20 +145,276 @@ func (tr *OpenSSH) sshOpts() []string {
 		"-o", "ControlPath=" + tr.controlDir + "/%C",
 		"-o", "ControlPersist=" + tr.controlPersist,
 	}
+	if tr.options.ProxyJumpNone {
+		opts = append(opts, "-o", "ProxyJump=none")
+	}
+	if host == tr.options.AcceptNewHostKey {
+		opts = append(opts,
+			"-o", "StrictHostKeyChecking=accept-new",
+			"-o", "UpdateHostKeys=no",
+		)
+	}
+	return opts
 }
 
 // sshArgv builds the argv for a remote command: ssh <opts...> host command.
 // command travels as a single argv element — the shell on the remote end
 // parses it, never this process's own argv.
 func (tr *OpenSSH) sshArgv(host, command string) []string {
-	argv := append([]string{"ssh"}, tr.sshOpts()...)
+	argv := append([]string{"ssh"}, tr.sshOpts(host)...)
 	return append(argv, host, command)
 }
 
 // scpArgv builds the argv for a file copy: scp -q <opts...> local host:remote.
 func (tr *OpenSSH) scpArgv(host, localPath, remotePath string) []string {
-	argv := append([]string{"scp", "-q"}, tr.sshOpts()...)
+	argv := append([]string{"scp", "-q"}, tr.sshOpts(host)...)
 	return append(argv, localPath, host+":"+remotePath)
+}
+
+var (
+	errHostKeyInspection = errors.New("host key inspection failed")
+	errHostKeyAmbiguous  = errors.New("multiple new host keys recorded")
+)
+
+// prepareAcceptedHostKey snapshots the exact alias's known keys before the
+// first connection that carries accept-new. Failure is fail-closed: ssh/scp
+// is not started unless ssh_config and known_hosts can be inspected.
+func (tr *OpenSSH) prepareAcceptedHostKey(host string) error {
+	if host != tr.options.AcceptNewHostKey {
+		return nil
+	}
+
+	tr.hostKeyMu.Lock()
+	defer tr.hostKeyMu.Unlock()
+	if tr.hostKeyPrepared {
+		return tr.hostKeyErr
+	}
+	tr.hostKeyPrepared = true
+	before, err := tr.hostKeyLookup(host, tr.sshOpts(host))
+	if err != nil {
+		tr.hostKeyErr = errHostKeyInspection
+		return tr.hostKeyErr
+	}
+	tr.hostKeyBefore = before
+	return nil
+}
+
+// observeAcceptedHostKey compares known_hosts after a connection attempt.
+// StrictHostKeyChecking=accept-new itself refuses changed keys; this records
+// only a genuinely new entry and never retains raw ssh output or key bytes.
+func (tr *OpenSSH) observeAcceptedHostKey(host string) {
+	if host != tr.options.AcceptNewHostKey {
+		return
+	}
+
+	tr.hostKeyMu.Lock()
+	defer tr.hostKeyMu.Unlock()
+	if tr.hostKeyErr != nil || tr.acceptedHostKey.Fingerprint != "" {
+		return
+	}
+	after, err := tr.hostKeyLookup(host, tr.sshOpts(host))
+	if err != nil {
+		tr.hostKeyErr = errHostKeyInspection
+		return
+	}
+
+	var added []HostKey
+	for id, key := range after {
+		if _, existed := tr.hostKeyBefore[id]; !existed {
+			added = append(added, key)
+		}
+	}
+	switch len(added) {
+	case 0:
+		return
+	case 1:
+		tr.acceptedHostKey = added[0]
+	default:
+		tr.hostKeyErr = errHostKeyAmbiguous
+	}
+}
+
+// AcceptedHostKey implements HostKeyReporter.
+func (tr *OpenSSH) AcceptedHostKey(host string) (HostKey, bool, error) {
+	if host != tr.options.AcceptNewHostKey {
+		return HostKey{}, false, nil
+	}
+	tr.hostKeyMu.Lock()
+	defer tr.hostKeyMu.Unlock()
+	if tr.hostKeyErr != nil {
+		return HostKey{}, false, tr.hostKeyErr
+	}
+	if tr.acceptedHostKey.Fingerprint == "" {
+		return HostKey{}, false, nil
+	}
+	return tr.acceptedHostKey, true, nil
+}
+
+func (tr *OpenSSH) lookupHostKeys(host string, sshOpts []string) (map[string]HostKey, error) {
+	argv := append([]string{"ssh", "-G"}, sshOpts...)
+	argv = append(argv, host)
+	rc, out, timedOut := runBounded(argv, nil, hostKeyLookupTimeout, hostKeyConfigCap)
+	if timedOut || rc != 0 || int64(len(out)) > hostKeyConfigCap {
+		return nil, errHostKeyInspection
+	}
+	lookup, paths, err := parseKnownHostsConfig(out)
+	if err != nil {
+		return nil, err
+	}
+	return readKnownHostKeys(lookup, paths)
+}
+
+func parseKnownHostsConfig(output []byte) (string, []string, error) {
+	var hostname, port, alias string
+	var paths []string
+	for _, line := range bytes.Split(output, []byte{'\n'}) {
+		fields := strings.Fields(string(line))
+		if len(fields) < 2 {
+			continue
+		}
+		switch fields[0] {
+		case "hostname":
+			hostname = fields[1]
+		case "port":
+			port = fields[1]
+		case "hostkeyalias":
+			alias = fields[1]
+		case "userknownhostsfile":
+			paths = append(paths, fields[1:]...)
+		}
+	}
+	if hostname == "" {
+		return "", nil, errHostKeyInspection
+	}
+
+	lookup := alias
+	if lookup == "" || lookup == "none" {
+		lookup = hostname
+		if port != "" && port != "22" {
+			lookup = "[" + hostname + "]:" + port
+		}
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", nil, errHostKeyInspection
+	}
+	resolved := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if path == "none" {
+			continue
+		}
+		if path == "~" {
+			path = home
+		} else if strings.HasPrefix(path, "~/") {
+			path = filepath.Join(home, path[2:])
+		}
+		if strings.Contains(path, "%") {
+			return "", nil, errHostKeyInspection
+		}
+		resolved = append(resolved, path)
+	}
+	if len(resolved) == 0 {
+		return "", nil, errHostKeyInspection
+	}
+	return lookup, resolved, nil
+}
+
+func readKnownHostKeys(lookup string, paths []string) (map[string]HostKey, error) {
+	keys := make(map[string]HostKey)
+	for _, path := range paths {
+		f, err := os.Open(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, errHostKeyInspection
+		}
+		body, readErr := io.ReadAll(io.LimitReader(f, knownHostsReadCap+1))
+		closeErr := f.Close()
+		if readErr != nil || closeErr != nil || len(body) > knownHostsReadCap {
+			return nil, errHostKeyInspection
+		}
+		for _, rawLine := range bytes.Split(body, []byte{'\n'}) {
+			id, key, ok := knownHostKey(string(rawLine), lookup)
+			if ok {
+				keys[id] = key
+			}
+		}
+	}
+	return keys, nil
+}
+
+func knownHostKey(line, lookup string) (string, HostKey, bool) {
+	fields := strings.Fields(line)
+	if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
+		return "", HostKey{}, false
+	}
+	hostIndex := 0
+	if strings.HasPrefix(fields[0], "@") {
+		hostIndex = 1
+	}
+	if len(fields) <= hostIndex+2 || !knownHostListMatches(fields[hostIndex], lookup) {
+		return "", HostKey{}, false
+	}
+	algorithm, encoded := fields[hostIndex+1], fields[hostIndex+2]
+	if !safeHostKeyAlgorithm(algorithm) {
+		return "", HostKey{}, false
+	}
+	keyBytes, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		keyBytes, err = base64.RawStdEncoding.DecodeString(encoded)
+	}
+	if err != nil {
+		return "", HostKey{}, false
+	}
+	sum := sha256.Sum256(keyBytes)
+	key := HostKey{
+		Algorithm:   algorithm,
+		Fingerprint: "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:]),
+	}
+	return algorithm + "\x00" + encoded, key, true
+}
+
+func knownHostListMatches(hosts, lookup string) bool {
+	for _, host := range strings.Split(hosts, ",") {
+		if strings.EqualFold(host, lookup) || hashedKnownHostMatches(host, lookup) {
+			return true
+		}
+	}
+	return false
+}
+
+func hashedKnownHostMatches(host, lookup string) bool {
+	parts := strings.Split(host, "|")
+	if len(parts) != 4 || parts[0] != "" || parts[1] != "1" {
+		return false
+	}
+	salt, err := base64.StdEncoding.DecodeString(parts[2])
+	if err != nil {
+		return false
+	}
+	want, err := base64.StdEncoding.DecodeString(parts[3])
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha1.New, salt)
+	_, _ = mac.Write([]byte(lookup))
+	return hmac.Equal(mac.Sum(nil), want)
+}
+
+func safeHostKeyAlgorithm(algorithm string) bool {
+	if len(algorithm) == 0 || len(algorithm) > 128 {
+		return false
+	}
+	for _, c := range []byte(algorithm) {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || strings.ContainsRune("@._+-", rune(c)) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // Exec runs command on host. ssh reserves exit 255 for its own transport
@@ -100,14 +429,21 @@ func (tr *OpenSSH) scpArgv(host, localPath, remotePath string) []string {
 // context deadline exceeded before the process finished maps to
 // TransportError{"timeout"} regardless of rc.
 func (tr *OpenSSH) Exec(host, command string, stdin []byte, timeout time.Duration) (Result, error) {
+	if err := tr.prepareAcceptedHostKey(host); err != nil {
+		return Result{}, newTransportError("ssh", "host key inspection failed")
+	}
 	argv := tr.sshArgv(host, command)
 	rc, out, timedOut := tr.Runner(argv, stdin, timeout)
+	tr.observeAcceptedHostKey(host)
 
 	if timedOut {
-		return Result{}, &TransportError{Reason: "timeout"}
+		return Result{}, newTransportError("timeout", "operation timed out")
 	}
-	if rc == 255 || rc == execStartFailedRC {
-		return Result{}, &TransportError{Reason: "ssh"}
+	if rc == execStartFailedRC {
+		return Result{}, newTransportError("ssh", "ssh process failed to start")
+	}
+	if rc == 255 {
+		return Result{}, NewTransportError("ssh", out)
 	}
 
 	// The default Runner's capWriter retains at most streamCap+1 bytes:
@@ -135,43 +471,45 @@ func (tr *OpenSSH) Exec(host, command string, stdin []byte, timeout time.Duratio
 // here — per the ported semantics, any non-zero rc from scp (255
 // included) is reported as TransportError{"scp"}.
 func (tr *OpenSSH) Put(host, localPath, remotePath string) error {
+	if err := tr.prepareAcceptedHostKey(host); err != nil {
+		return newTransportError("scp", "host key inspection failed")
+	}
 	argv := tr.scpArgv(host, localPath, remotePath)
-	rc, _, timedOut := tr.Runner(argv, nil, defaultPutTimeout)
+	rc, out, timedOut := tr.Runner(argv, nil, defaultPutTimeout)
+	tr.observeAcceptedHostKey(host)
 
 	if timedOut {
-		return &TransportError{Reason: "timeout"}
+		return newTransportError("timeout", "operation timed out")
+	}
+	if rc == execStartFailedRC {
+		return newTransportError("scp", "scp process failed to start")
 	}
 	if rc != 0 {
-		return &TransportError{Reason: "scp"}
+		return NewTransportError("scp", out)
 	}
 	return nil
 }
 
 // run is the default Runner, backed by os/exec. It feeds stdin to the
-// child, captures combined stdout+stderr through a capWriter bounded at
-// tr.streamCap, and reports rc from the process's own exit status once
-// it has actually run.
+// child and captures combined stdout+stderr through tr.streamCap.
 func (tr *OpenSSH) run(argv []string, stdin []byte, timeout time.Duration) (int, []byte, bool) {
+	return runBounded(argv, stdin, timeout, tr.streamCap)
+}
+
+func runBounded(argv []string, stdin []byte, timeout time.Duration, streamCap int64) (int, []byte, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Stdin = bytes.NewReader(stdin)
 
-	w := newCapWriter(tr.streamCap, cancel)
+	w := newCapWriter(streamCap, cancel)
 	cmd.Stdout = w
 	cmd.Stderr = w
 
 	// cmd.Run()'s error is redundant with cmd.ProcessState/ctx.Err() below
-	// for every case except one: a non-zero exit, a kill triggered by
-	// capWriter on overflow, and a kill triggered by the context deadline
-	// all report themselves through those two regardless of what Run()
-	// returned. The one case they can't cover is the child never having
-	// started at all (missing binary, exec permission denied, ...): then
-	// ProcessState stays nil and there is no remote exit code whatsoever
-	// — that's the execStartFailedRC branch below, which Exec/Put escalate
-	// to a TransportError instead of passing through as a fabricated
-	// honest exit.
+	// except when the child never started. In that case ProcessState remains
+	// nil and execStartFailedRC preserves the absence of a remote exit code.
 	_ = cmd.Run()
 
 	rc := execStartFailedRC

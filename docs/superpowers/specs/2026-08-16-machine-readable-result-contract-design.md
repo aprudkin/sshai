@@ -107,6 +107,10 @@ The envelope is one JSON object on stdout, terminated by `\n`:
 }
 ```
 
+Transport-error entries may additionally carry
+`"transport_diagnostic": "host key verification failed"`. This is an optional, non-breaking v1
+addition and is omitted when no allowlisted diagnostic is available.
+
 ### Field reference
 
 | Field | Source | Type | Notes |
@@ -125,17 +129,20 @@ The envelope is one JSON object on stdout, terminated by `\n`:
 | `runs[].command` | `Meta.Command` | string | Already hash-only for `--body-file` / `--body-file -` runs (`"body:<sha256hex>[:16]"`); human-readable for inline `-- words`. Never the raw body. |
 | `runs[].exit` | `Meta.Exit` | int | `0` when `transport_error != ""` (the agent's contract: an unset exit is disambiguated by the presence of `transport_error`). |
 | `runs[].transport_error` | `Meta.TransportErr` | string | Empty when absent. Possible values today: `""`, `"timeout"`, `"ssh"`, `"scp"`. A policy denial is not a transport error and never reaches `runs[]` (see `summary.policy_denied`). |
-| `runs[].artifact_path` | `filepath.Join(root, "art", Meta.ID)` | string | Always present for every `runs[]` entry — including transport-error runs, whose empty artifact is saved by `handleTransportError` via `Store.Save` (run.go:778). A policy-denied host has no artifact and therefore no `runs[]` entry. |
-| `runs[].bytes` | `Meta.Bytes` | int64 | `0` for transport-error runs. |
-| `runs[].lines` | `Meta.Lines` | int64 | `0` for transport-error runs. |
-| `runs[].sha256` | `Meta.SHA256` | string | Empty string (""), not omitted, for transport-error runs. |
+| `runs[].transport_diagnostic` | `Meta.TransportDiagnostic` | string, optional | Canonical allowlisted cause derived from SSH/scp output. Omitted when absent; raw transport output is never exposed. |
+| `runs[].artifact_path` | `filepath.Join(root, "art", Meta.ID)` | string | Always present for every `runs[]` entry. A diagnosed transport error stores the canonical diagnostic as its artifact body; an unclassified transport error keeps an empty artifact. A policy-denied host has no artifact and therefore no `runs[]` entry. |
+| `runs[].bytes` | `Meta.Bytes` | int64 | Diagnostic body size for a classified transport error; otherwise `0` when its artifact is empty. |
+| `runs[].lines` | `Meta.Lines` | int64 | `1` for a classified transport diagnostic; otherwise `0` when its artifact is empty. |
+| `runs[].sha256` | `Meta.SHA256` | string | SHA-256 of the saved artifact, including an empty transport-error artifact when no diagnostic matched. |
 | `runs[].duration_ms` | `Meta.DurationMs` | int64 | Transport errors can record a partial duration (probe time). |
 | `runs[].ts` | `Meta.Ts` | string (RFC3339Nano) | UTC. |
 | `runs[].truncated` | `Meta.Truncated` | bool | |
 | `runs[].binary` | `Meta.Binary` | bool | |
 | `runs[].delta_base` | `Meta.DeltaBase` | string | Empty when not `--delta` or no previous run; otherwise the previous artifact id. |
 
-`sha256`, `transport_error`, `delta_base` are written as the empty string `""` when their zero value would otherwise have been dropped by encoding/json — never omitted — so consumers can `decode` straight into typed structs with no `omitempty` decisions to make. (`policy_denied` is a count in `summary`, not a per-run field.)
+`sha256`, `transport_error`, and `delta_base` are written as `""` rather than omitted. The additive
+`transport_diagnostic` field is intentionally omitted when empty so default v1 envelopes remain
+byte-compatible; consumers must treat it as optional.
 
 `json.Marshal` indents are off; the consumer decides formatting.
 
@@ -155,9 +162,11 @@ The envelope is one JSON object on stdout, terminated by `\n`:
 - When set in human mode: `exitUsage` + `run: --result-out requires --result-format=json`.
 - No `--result-out` in JSON mode: identical to today's behavior except for the envelope itself.
 
-### Unchanged flags
+### Flags independent of result format
 
-`--body-file`, `--delta`, `--budget`, `--timeout`, `--ctx` — exact same parsing, semantics, and dispatch. `--body-file -` (stdin) keeps the body entirely off argv and out of the envelope (the JSON `command` value is the `body:<sha256hex>[:16]` form, never the body text).
+`--body-file`, `--delta`, `--budget`, `--timeout`, `--ctx`, and `--powershell-host` retain the same
+semantics in human and JSON modes. `--body-file -` keeps the body entirely off argv and out of the
+envelope (the JSON `command` value is the `body:<sha256hex>[:16]` form, never the body text).
 
 ## Error handling
 
@@ -169,7 +178,7 @@ The envelope is one JSON object on stdout, terminated by `\n`:
 | Zero hosts / no `--` separator / bad `--ctx` | both | `exitUsage` + stderr note; no envelope |
 | Policy denial per host | JSON | Host is **not** in `runs[]` (no artifact is saved on that path). `summary.policy_denied++`; `summary.hosts` still includes the host, so `summary.hosts == len(runs) + summary.policy_denied`. Process exits `exitPolicy` (97). |
 | `Store.Save` failure | both | Single-host: human passport path (existing behavior); fan-out: drop the failing host from `runs[]` and continue (`summary.hosts` matches surviving length; an unenclosed host is preferable to a malformed envelope). |
-| `*transport.TransportError` (ssh, scp, timeout) | both | Routing through `handleTransportError` records the run with empty body; envelope entry has `transport_error: <reason>`, `exit: 0`. |
+| `*transport.TransportError` (ssh, scp, timeout) | both | Routing through `handleTransportError` records the run with `transport_error: <reason>` and `exit: 0`. If raw output matches the fixed safe allowlist, `transport_diagnostic` is present and the canonical phrase is the artifact body; otherwise the field is omitted and the artifact remains empty. |
 | `delta.Render` fail post-`Save` (previous artifact pruned underfoot) | both | Stderr `run: render delta for %s: ...`; envelope carries the saved meta as if `--delta` had no previous run (mirrors today's human-path fallback). |
 | Runlog `AppendAudit` fail post-`Save` | both | Stderr note; never fatal in either mode. |
 | Flag-set `-help` on `run` | both | Today's help text now lists the new flags. |

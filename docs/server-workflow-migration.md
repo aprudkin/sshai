@@ -4,6 +4,13 @@
 **Inventory date:** 2026-08-12
 **Legacy retirement:** [aimem#734](https://github.com/aprudkin/aimem/issues/734)
 
+> **Current capability note (2026-08-25, aimem#926):** source and the installed `sshai` artifact agree
+> on `--powershell-host pwsh|windows-powershell`: PowerShell 7 remains the default, while
+> `windows-powershell` selects Windows PowerShell 5.1. Hermetic local transport tests cover both
+> selectors; live Windows PowerShell 5.1 parity has not yet been recorded. The dated inventory and
+> evidence below therefore remain historical rather than proof of the new host selection on a fleet
+> target.
+
 This inventory separates command execution that `sshai` can own from surrounding server work that
 must keep an explicit fallback. It is based on current project behavior plus existing Windows
 diagnostics/deployment and Linux deployment runbooks. Runbooks are evidence of real workflow

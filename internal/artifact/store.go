@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS runs (
   key TEXT NOT NULL,
   exit INTEGER,
   transport_error TEXT NOT NULL DEFAULT '',
+  transport_diagnostic TEXT NOT NULL DEFAULT '',
+  accepted_host_key_algorithm TEXT NOT NULL DEFAULT '',
+  accepted_host_key_fingerprint TEXT NOT NULL DEFAULT '',
   bytes INTEGER NOT NULL, lines INTEGER NOT NULL,
   sha256 TEXT NOT NULL, duration_ms INTEGER NOT NULL,
   truncated INTEGER NOT NULL DEFAULT 0, binary INTEGER NOT NULL DEFAULT 0,
@@ -62,7 +65,65 @@ func OpenStore(root string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
+	if err := ensureRunColumns(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{Root: root, DB: db}, nil
+}
+
+// ensureRunColumns migrates databases created before optional transport
+// evidence fields were persisted. The post-error recheck makes concurrent
+// first-open migrations idempotent without matching driver error strings.
+func ensureRunColumns(db *sql.DB) error {
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{"transport_diagnostic", "transport_diagnostic TEXT NOT NULL DEFAULT ''"},
+		{"accepted_host_key_algorithm", "accepted_host_key_algorithm TEXT NOT NULL DEFAULT ''"},
+		{"accepted_host_key_fingerprint", "accepted_host_key_fingerprint TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, column := range columns {
+		exists, err := runColumnExists(db, column.name)
+		if err != nil {
+			return fmt.Errorf("inspect runs schema: %w", err)
+		}
+		if exists {
+			continue
+		}
+		if _, err := db.Exec(`ALTER TABLE runs ADD COLUMN ` + column.definition); err != nil {
+			exists, checkErr := runColumnExists(db, column.name)
+			if checkErr == nil && exists {
+				continue
+			}
+			return fmt.Errorf("add runs.%s: %w", column.name, err)
+		}
+	}
+	return nil
+}
+
+func runColumnExists(db *sql.DB, want string) (bool, error) {
+	rows, err := db.Query(`PRAGMA table_info(runs)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == want {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // Save inserts a new run row and writes its artifact data to
@@ -83,10 +144,11 @@ func (s *Store) Save(m Meta, key string, data []byte) (Meta, error) {
 	defer tx.Rollback()
 
 	res, err := tx.Exec(
-		`INSERT INTO runs (ts,host,ctx,command,key,exit,transport_error,bytes,lines,sha256,duration_ms,truncated,binary,delta_base)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		m.Ts.UTC().Format(time.RFC3339), m.Host, m.Ctx, m.Command, key, m.Exit, m.TransportErr,
-		m.Bytes, m.Lines, m.SHA256, m.DurationMs, boolToInt(m.Truncated), boolToInt(m.Binary), m.DeltaBase,
+		`INSERT INTO runs (ts,host,ctx,command,key,exit,transport_error,transport_diagnostic,accepted_host_key_algorithm,accepted_host_key_fingerprint,bytes,lines,sha256,duration_ms,truncated,binary,delta_base)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		m.Ts.UTC().Format(time.RFC3339), m.Host, m.Ctx, m.Command, key, m.Exit, m.TransportErr, m.TransportDiagnostic,
+		m.AcceptedHostKeyAlgorithm, m.AcceptedHostKeyFingerprint, m.Bytes, m.Lines, m.SHA256, m.DurationMs,
+		boolToInt(m.Truncated), boolToInt(m.Binary), m.DeltaBase,
 	)
 	if err != nil {
 		return Meta{}, fmt.Errorf("insert run: %w", err)
@@ -120,10 +182,11 @@ func (s *Store) Get(id string) (Meta, string, error) {
 	var tsStr string
 	var truncated, binary, pruned int
 	row := s.DB.QueryRow(
-		`SELECT art_id, ts, host, ctx, command, exit, transport_error, bytes, lines, sha256, duration_ms, truncated, binary, delta_base, pruned
+		`SELECT art_id, ts, host, ctx, command, exit, transport_error, transport_diagnostic, accepted_host_key_algorithm, accepted_host_key_fingerprint, bytes, lines, sha256, duration_ms, truncated, binary, delta_base, pruned
 		 FROM runs WHERE art_id=?`, id)
-	if err := row.Scan(&m.ID, &tsStr, &m.Host, &m.Ctx, &m.Command, &m.Exit, &m.TransportErr,
-		&m.Bytes, &m.Lines, &m.SHA256, &m.DurationMs, &truncated, &binary, &m.DeltaBase, &pruned); err != nil {
+	if err := row.Scan(&m.ID, &tsStr, &m.Host, &m.Ctx, &m.Command, &m.Exit, &m.TransportErr, &m.TransportDiagnostic,
+		&m.AcceptedHostKeyAlgorithm, &m.AcceptedHostKeyFingerprint, &m.Bytes, &m.Lines, &m.SHA256, &m.DurationMs,
+		&truncated, &binary, &m.DeltaBase, &pruned); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Meta{}, "", fmt.Errorf("run %s: not found", id)
 		}
@@ -154,10 +217,11 @@ func (s *Store) LastByKey(key string) (Meta, bool, error) {
 	var tsStr string
 	var truncated, binary int
 	row := s.DB.QueryRow(
-		`SELECT art_id, ts, host, ctx, command, exit, transport_error, bytes, lines, sha256, duration_ms, truncated, binary, delta_base
+		`SELECT art_id, ts, host, ctx, command, exit, transport_error, transport_diagnostic, accepted_host_key_algorithm, accepted_host_key_fingerprint, bytes, lines, sha256, duration_ms, truncated, binary, delta_base
 		 FROM runs WHERE key=? AND pruned=0 ORDER BY id DESC LIMIT 1`, key)
-	if err := row.Scan(&m.ID, &tsStr, &m.Host, &m.Ctx, &m.Command, &m.Exit, &m.TransportErr,
-		&m.Bytes, &m.Lines, &m.SHA256, &m.DurationMs, &truncated, &binary, &m.DeltaBase); err != nil {
+	if err := row.Scan(&m.ID, &tsStr, &m.Host, &m.Ctx, &m.Command, &m.Exit, &m.TransportErr, &m.TransportDiagnostic,
+		&m.AcceptedHostKeyAlgorithm, &m.AcceptedHostKeyFingerprint, &m.Bytes, &m.Lines, &m.SHA256, &m.DurationMs,
+		&truncated, &binary, &m.DeltaBase); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Meta{}, false, nil
 		}

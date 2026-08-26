@@ -68,10 +68,16 @@ func TestRunProbesFactsWhenNotCached(t *testing.T) {
 // probeFailsTr fakes a transport whose very first call (the probe's
 // "uname -s") fails with a TransportError — the host is unreachable
 // before anything about the actual command is even known.
-type probeFailsTr struct{ calls []string }
+type probeFailsTr struct {
+	calls     []string
+	rawOutput []byte
+}
 
 func (f *probeFailsTr) Exec(host, cmd string, stdin []byte, _ time.Duration) (transport.Result, error) {
 	f.calls = append(f.calls, cmd)
+	if len(f.rawOutput) != 0 {
+		return transport.Result{}, transport.NewTransportError("ssh", f.rawOutput)
+	}
 	return transport.Result{}, &transport.TransportError{Reason: "ssh"}
 }
 
@@ -86,20 +92,31 @@ func TestRunProbeTransportErrorProducesTransportErrorPassport(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("SSHAI_ROOT", root)
 
-	f := &probeFailsTr{}
+	f := &probeFailsTr{rawOutput: []byte("SHA256:TOPSECRET\nHost key verification failed.")}
 	var out, errB bytes.Buffer
 	rc := runWith(f, []string{"--ctx", "t1", "web01", "--", "echo", "hello"}, &out, &errB)
 	if rc != exitTransport {
 		t.Fatalf("rc=%d, want %d; stdout=%s stderr=%s", rc, exitTransport, out.String(), errB.String())
 	}
-	if !strings.Contains(out.String(), "transport-error=ssh") {
-		t.Fatalf("passport missing transport-error=ssh: %q", out.String())
+	if !strings.Contains(out.String(), "transport-error=ssh") ||
+		!strings.Contains(out.String(), "transport diagnostic: host key verification failed") {
+		t.Fatalf("passport missing safe transport diagnostic: %q", out.String())
+	}
+	if strings.Contains(out.String(), "TOPSECRET") {
+		t.Fatalf("raw SSH output leaked into passport: %q", out.String())
 	}
 	if len(f.calls) != 1 || f.calls[0] != "uname -s" {
 		t.Fatalf("expected exactly one \"uname -s\" probe call, got calls=%v", f.calls)
 	}
 	if _, ok, _ := session.LoadFacts(root, "web01"); ok {
 		t.Fatal("facts must not be cached when the probe itself fails")
+	}
+	body, err := os.ReadFile(filepath.Join(root, "art", "a1"))
+	if err != nil {
+		t.Fatalf("read transport artifact: %v", err)
+	}
+	if got, want := string(body), "transport diagnostic: host key verification failed\n"; got != want {
+		t.Fatalf("transport artifact=%q, want %q", got, want)
 	}
 }
 
@@ -182,6 +199,68 @@ func TestRunWindowsHappyPathAndStableSlug(t *testing.T) {
 	}
 	if f.putPaths[1] != f.putPaths[0] {
 		t.Fatalf("remote path changed across two runs of the identical command: %q != %q (BodySlug regression)", f.putPaths[1], f.putPaths[0])
+	}
+}
+
+func TestRunWindowsBodySelectsPowerShellHost(t *testing.T) {
+	body := []byte("Get-Host | Select-Object -ExpandProperty Version\n")
+	tests := []struct {
+		name       string
+		selector   string
+		executable string
+	}{
+		{name: "PowerShell 7", selector: powerShellHostPwsh, executable: shell.PwshDefaultShell},
+		{name: "Windows PowerShell 5.1", selector: powerShellHostWindowsPowerShell, executable: shell.WindowsPowerShellShell},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			t.Setenv("SSHAI_ROOT", root)
+			if err := session.SaveFacts(root, "sccm01", session.Facts{
+				OS: "windows", Shell: shell.PwshDefaultShell, Form: "pwsh",
+			}); err != nil {
+				t.Fatalf("SaveFacts: %v", err)
+			}
+			bodyPath := filepath.Join(root, "check.ps1")
+			if err := os.WriteFile(bodyPath, body, 0o600); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+
+			f := &pwshTr{}
+			var out, errB bytes.Buffer
+			rc := runWith(f, []string{
+				"--powershell-host", tt.selector,
+				"--body-file", bodyPath,
+				"sccm01",
+			}, &out, &errB)
+			if rc != 0 {
+				t.Fatalf("rc=%d stderr=%s", rc, errB.String())
+			}
+
+			wantPath := shell.RemoteDir + "/" + shell.BodySlug(body) + ".ps1"
+			if len(f.putPaths) != 1 || f.putPaths[0] != wantPath {
+				t.Fatalf("Put remotePath(s) = %v, want exactly [%q]", f.putPaths, wantPath)
+			}
+			if !strings.HasPrefix(f.lastCmd, `& "`+tt.executable+`"`) {
+				t.Fatalf("Exec command did not select %s: %q", tt.name, f.lastCmd)
+			}
+			if !strings.Contains(f.lastCmd, "-NoProfile -ExecutionPolicy Bypass -File "+wantPath) {
+				t.Fatalf("Exec command = %q, want body-file invocation for %s", f.lastCmd, wantPath)
+			}
+		})
+	}
+}
+
+func TestRunRejectsInvalidPowerShellHost(t *testing.T) {
+	t.Setenv("SSHAI_ROOT", t.TempDir())
+	var out, errB bytes.Buffer
+	rc := runWith(&fakeTr{}, []string{"--powershell-host", "powershell", "h1", "--", "true"}, &out, &errB)
+	if rc != exitUsage {
+		t.Fatalf("rc=%d, want %d", rc, exitUsage)
+	}
+	if !strings.Contains(errB.String(), `invalid --powershell-host="powershell"`) {
+		t.Fatalf("stderr=%q", errB.String())
 	}
 }
 
@@ -387,10 +466,11 @@ func TestRunLinuxPartialParseMergesWithPreviousState(t *testing.T) {
 // "hello") — used to prove classification can't be fooled by remote
 // output that happens to look like a status line.
 type multiHostTr struct {
-	rcs           map[string]int
-	transportErr  map[string]string
-	body          map[string]string
-	failStateSave bool
+	rcs              map[string]int
+	transportErr     map[string]string
+	body             map[string]string
+	failStateSave    bool
+	acceptedHostKeys map[string]transport.HostKey
 }
 
 func (f *multiHostTr) Exec(host, cmd string, stdin []byte, _ time.Duration) (transport.Result, error) {
@@ -413,6 +493,86 @@ func (f *multiHostTr) Exec(host, cmd string, stdin []byte, _ time.Duration) (tra
 }
 
 func (f *multiHostTr) Put(host, l, r string) error { return nil }
+
+func (f *multiHostTr) AcceptedHostKey(host string) (transport.HostKey, bool, error) {
+	key, ok := f.acceptedHostKeys[host]
+	return key, ok, nil
+}
+
+func TestRunAcceptNewHostKeyRequiresOneExactTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"missing target", []string{"--accept-new-host-key", "db01", "web01", "--", "true"}},
+		{"duplicate target", []string{"--accept-new-host-key", "web01", "web01", "web01", "--", "true"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SSHAI_ROOT", t.TempDir())
+			f := &probeThenRunTr{}
+			var out, errB bytes.Buffer
+			rc := runWith(f, tc.args, &out, &errB)
+			if rc != exitUsage ||
+				!strings.Contains(errB.String(), "must name exactly one host alias") {
+				t.Fatalf("rc=%d stdout=%q stderr=%q", rc, out.String(), errB.String())
+			}
+			if len(f.calls) != 0 {
+				t.Fatalf("transport ran for invalid scope: %v", f.calls)
+			}
+		})
+	}
+}
+
+func TestRunRejectsUnsupportedProxyJumpOverride(t *testing.T) {
+	t.Setenv("SSHAI_ROOT", t.TempDir())
+	f := &probeThenRunTr{}
+	var out, errB bytes.Buffer
+	rc := runWith(f, []string{"--proxy-jump", "jump01", "web01", "--", "true"}, &out, &errB)
+	if rc != exitUsage || !strings.Contains(errB.String(), "want none") {
+		t.Fatalf("rc=%d stdout=%q stderr=%q", rc, out.String(), errB.String())
+	}
+	if len(f.calls) != 0 {
+		t.Fatalf("transport ran for invalid route override: %v", f.calls)
+	}
+}
+
+func TestRunPersistsAndRendersAcceptedHostKeyEvidence(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	seedLinuxFacts(t, root, "new-host")
+	key := transport.HostKey{Algorithm: "ssh-ed25519", Fingerprint: "SHA256:abc123"}
+	f := &multiHostTr{
+		rcs:              map[string]int{"new-host": 0},
+		acceptedHostKeys: map[string]transport.HostKey{"new-host": key},
+	}
+	var out, errB bytes.Buffer
+	rc := runWith(f, []string{
+		"--accept-new-host-key", "new-host",
+		"new-host", "--", "true",
+	}, &out, &errB)
+	if rc != 0 {
+		t.Fatalf("rc=%d stdout=%q stderr=%q", rc, out.String(), errB.String())
+	}
+	for _, want := range []string{
+		"accepted-host-key-algorithm=ssh-ed25519",
+		"accepted-host-key-fingerprint=SHA256:abc123",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("passport missing %q: %q", want, out.String())
+		}
+	}
+
+	st, err := artifact.OpenStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	got, _, err := st.Get("a1")
+	if err != nil || got.AcceptedHostKeyAlgorithm != key.Algorithm ||
+		got.AcceptedHostKeyFingerprint != key.Fingerprint {
+		t.Fatalf("stored host-key evidence=%+v err=%v", got, err)
+	}
+}
 
 // seedLinuxFacts pre-seeds OS=linux facts for each host so runHost never
 // calls session.Probe — keeping multiHostTr's Exec to exactly one call

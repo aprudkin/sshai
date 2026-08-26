@@ -33,6 +33,9 @@ const (
 	exitUsage     = 96
 	exitPolicy    = 97
 	exitTransport = 98
+
+	powerShellHostPwsh              = "pwsh"
+	powerShellHostWindowsPowerShell = "windows-powershell"
 )
 
 // Deps bundles runHost's external dependencies. Tr is the only one worth
@@ -47,14 +50,27 @@ type Deps struct {
 // Opts holds one host's resolved run parameters, after flag parsing and
 // ctx/host validation.
 type Opts struct {
-	Host     string
-	Ctx      string
-	Command  string // the actual body run on the host (bash or pwsh)
-	FromFile bool   // true when Command came from --body-file/stdin rather than "-- words"
-	Readonly bool
-	Delta    bool // --delta: diff against the previous run of the same (host, ctx, command) key
-	Budget   int
-	Timeout  time.Duration
+	Host             string
+	Ctx              string
+	Command          string // the actual body run on the host (bash or PowerShell)
+	FromFile         bool   // true when Command came from --body-file/stdin rather than "-- words"
+	Readonly         bool
+	Delta            bool // --delta: diff against the previous run of the same (host, ctx, command) key
+	AcceptNewHostKey bool // explicit accept-new scope applies to this exact host only
+	Budget           int
+	Timeout          time.Duration
+	PowerShellHost   string // "" (default pwsh) | "pwsh" | "windows-powershell"
+}
+
+func powerShellExecutable(host string) (string, bool) {
+	switch host {
+	case "", powerShellHostPwsh:
+		return shell.PwshDefaultShell, true
+	case powerShellHostWindowsPowerShell:
+		return shell.WindowsPowerShellShell, true
+	default:
+		return "", false
+	}
 }
 
 // ctxRe is the safe charset for --ctx: no "/" (so a ctx value can never
@@ -130,6 +146,9 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	bodyFile := fs.String("body-file", "", `read the command body from a file ("-" for stdin) instead of the "-- command" form`)
+	powerShellHost := fs.String("powershell-host", "", `Windows interpreter: "pwsh" (default) or "windows-powershell"`)
+	acceptNewHostKey := fs.String("accept-new-host-key", "", "exact host alias allowed to add one previously unknown host key")
+	proxyJump := fs.String("proxy-jump", "", `one-invocation jump-route override: "none"`)
 	wantDelta := fs.Bool("delta", false, "print diff vs previous run of same (host, ctx, command)")
 	budget := fs.Int("budget", 0, "output budget in tokens (~bytes/4); default from config")
 	timeoutFlag := fs.Int("timeout", 0, "timeout in seconds; default from config")
@@ -147,6 +166,14 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 	}
 	if *resultOut != "" && *resultFormat != "json" {
 		fmt.Fprintln(stderr, "run: --result-out requires --result-format=json")
+		return exitUsage
+	}
+	if _, ok := powerShellExecutable(*powerShellHost); !ok {
+		fmt.Fprintf(stderr, "run: invalid --powershell-host=%q (want pwsh or windows-powershell)\n", *powerShellHost)
+		return exitUsage
+	}
+	if *proxyJump != "" && *proxyJump != "none" {
+		fmt.Fprintf(stderr, "run: invalid --proxy-jump=%q (want none)\n", *proxyJump)
 		return exitUsage
 	}
 
@@ -205,6 +232,18 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 		fmt.Fprintln(stderr, "run: at least one host is required")
 		return exitUsage
 	}
+	if *acceptNewHostKey != "" {
+		matches := 0
+		for _, host := range hosts {
+			if host == *acceptNewHostKey {
+				matches++
+			}
+		}
+		if matches != 1 {
+			fmt.Fprintln(stderr, "run: --accept-new-host-key must name exactly one host alias in this invocation")
+			return exitUsage
+		}
+	}
 
 	// Resolve the artifact store: a caller-injected one (runWithStore)
 	// is used as-is and never closed here — the caller owns its lifetime.
@@ -237,7 +276,10 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 			fmt.Fprintf(stderr, "run: create control dir: %v\n", err)
 			return exitUsage
 		}
-		tr = transport.NewOpenSSH(controlDir, cfg.ControlPersist, cfg.StreamCapBytes)
+		tr = transport.NewOpenSSH(controlDir, cfg.ControlPersist, cfg.StreamCapBytes, transport.OpenSSHOptions{
+			AcceptNewHostKey: *acceptNewHostKey,
+			ProxyJumpNone:    *proxyJump == "none",
+		})
 	}
 
 	deps := Deps{Tr: tr, Store: store}
@@ -249,14 +291,16 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 	hostOpts := make([]Opts, len(hosts))
 	for i, host := range hosts {
 		hostOpts[i] = Opts{
-			Host:     host,
-			Ctx:      ctx,
-			Command:  command,
-			FromFile: fromFile,
-			Readonly: cfg.Hosts[host].Readonly,
-			Delta:    *wantDelta,
-			Budget:   perHostBudget,
-			Timeout:  timeout,
+			Host:             host,
+			Ctx:              ctx,
+			Command:          command,
+			FromFile:         fromFile,
+			Readonly:         cfg.Hosts[host].Readonly,
+			Delta:            *wantDelta,
+			AcceptNewHostKey: host == *acceptNewHostKey,
+			Budget:           perHostBudget,
+			Timeout:          timeout,
+			PowerShellHost:   *powerShellHost,
 		}
 	}
 	rc, outcomes := runInvocation(deps, hostOpts, resultModeOptions{
@@ -457,6 +501,29 @@ func asTransportError(err error) (*transport.TransportError, bool) {
 	return te, ok
 }
 
+func acceptedHostKeyEvidence(tr transport.Transport, host string, enabled bool, stderr io.Writer) (string, string) {
+	if !enabled {
+		return "", ""
+	}
+	reporter, ok := tr.(transport.HostKeyReporter)
+	if !ok {
+		return "", ""
+	}
+	key, accepted, err := reporter.AcceptedHostKey(host)
+	if err != nil {
+		fmt.Fprintf(stderr, "run: accepted host-key evidence for %s is unavailable\n", host)
+		return "", ""
+	}
+	if !accepted {
+		return "", ""
+	}
+	if key.Algorithm == "" || key.Fingerprint == "" {
+		fmt.Fprintf(stderr, "run: accepted host-key evidence for %s is incomplete\n", host)
+		return "", ""
+	}
+	return key.Algorithm, key.Fingerprint
+}
+
 // runHost runs one host's command end to end: policy check, facts (cached or
 // freshly probed), state+baseline load, wrap, exec, parse, state/baseline save,
 // artifact store, passport render, and audit. Its RunOutcome explicitly
@@ -477,13 +544,19 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		return newPolicyDeniedOutcome()
 	}
 
+	selectedPowerShell, ok := powerShellExecutable(opts.PowerShellHost)
+	if !ok {
+		fmt.Fprintf(stderr, "run: invalid PowerShell host %q\n", opts.PowerShellHost)
+		return newInternalFailureOutcome(exitUsage)
+	}
+
 	facts, ok, err := session.LoadFacts(root, opts.Host)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: load facts for %s: %v\n", opts.Host, err)
 		return newInternalFailureOutcome(exitUsage)
 	}
 	if !ok {
-		facts, err = session.Probe(deps.Tr, opts.Host, shell.PwshDefaultShell, opts.Timeout)
+		facts, err = session.Probe(deps.Tr, opts.Host, selectedPowerShell, opts.Timeout)
 		if err != nil {
 			if te, isTE := asTransportError(err); isTE {
 				return handleTransportError(deps, opts, te, stdout, stderr)
@@ -521,6 +594,10 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 	start := time.Now()
 
 	if facts.OS == "windows" {
+		powerShell := facts.Shell
+		if opts.PowerShellHost != "" || powerShell == "" {
+			powerShell = selectedPowerShell
+		}
 		script := shell.PwshScript(opts.Command, st, restore, sentinel)
 
 		tmp, err := os.CreateTemp("", "sshai-*.ps1")
@@ -555,7 +632,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 			return newInternalFailureOutcome(exitUsage)
 		}
 
-		invocation := shell.PwshInvocation(facts.Form, facts.Shell, "-NoProfile -ExecutionPolicy Bypass -File "+remotePath)
+		invocation := shell.PwshInvocation(facts.Form, powerShell, "-NoProfile -ExecutionPolicy Bypass -File "+remotePath)
 		res, err := deps.Tr.Exec(opts.Host, invocation, nil, opts.Timeout)
 		if err != nil {
 			if te, isTE := asTransportError(err); isTE {
@@ -614,11 +691,15 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 	}
 
 	binary := bytes.IndexByte(out[:min(8192, len(out))], 0) >= 0
+	acceptedHostKeyAlgorithm, acceptedHostKeyFingerprint := acceptedHostKeyEvidence(
+		deps.Tr, opts.Host, opts.AcceptNewHostKey, stderr)
 
 	meta := artifact.Meta{
 		Host: opts.Host, Ctx: opts.Ctx, Command: deltaKeyCommand(opts),
 		Exit: remoteExit, DurationMs: durationMs, Truncated: truncated, Binary: binary,
-		Ts: time.Now(),
+		AcceptedHostKeyAlgorithm:   acceptedHostKeyAlgorithm,
+		AcceptedHostKeyFingerprint: acceptedHostKeyFingerprint,
+		Ts:                         time.Now(),
 	}
 	key := delta.Key(opts.Host, opts.Ctx, deltaKeyCommand(opts))
 
@@ -712,30 +793,39 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 	return newSavedRunOutcome(savedMeta)
 }
 
-// handleTransportError records a failed delivery (the body may not have
-// run at all) the same way a completed run is recorded, minus any output:
-// Meta.Exit stays 0 (the zero value), disambiguated from an honest exit 0
-// by TransportErr being non-empty — the Store/Meta contract laid out in
-// artifact/passport.go's StatusLine. The artifact is empty; the passport
-// and audit entry are still written so the failure itself is traceable.
+// handleTransportError records a failed delivery (the body may not have run
+// at all) the same way a completed run is recorded. A safe allowlisted
+// diagnostic, when available, becomes both the stored artifact body and
+// human/JSON metadata; raw SSH output is never persisted or rendered.
+// Meta.Exit stays 0 (the zero value), disambiguated from an honest exit 0 by
+// TransportErr being non-empty.
 // A Save failure becomes an explicit internal failure while retaining the
 // transport process exit used by the existing human-mode path.
 func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, stdout, stderr io.Writer) RunOutcome {
 	root := deps.Store.Root
 
+	diagnostic := te.Diagnostic()
+	acceptedHostKeyAlgorithm, acceptedHostKeyFingerprint := acceptedHostKeyEvidence(
+		deps.Tr, opts.Host, opts.AcceptNewHostKey, stderr)
 	meta := artifact.Meta{
 		Host: opts.Host, Ctx: opts.Ctx, Command: deltaKeyCommand(opts),
-		TransportErr: te.Reason, Ts: time.Now(),
+		TransportErr: te.Reason, TransportDiagnostic: diagnostic, Ts: time.Now(),
+		AcceptedHostKeyAlgorithm:   acceptedHostKeyAlgorithm,
+		AcceptedHostKeyFingerprint: acceptedHostKeyFingerprint,
 	}
 	key := delta.Key(opts.Host, opts.Ctx, deltaKeyCommand(opts))
-	savedMeta, err := deps.Store.Save(meta, key, nil)
+	var body []byte
+	if diagnostic != "" {
+		body = []byte("transport diagnostic: " + diagnostic + "\n")
+	}
+	savedMeta, err := deps.Store.Save(meta, key, body)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: save artifact after transport error: %v\n", err)
 		return newInternalFailureOutcome(exitTransport)
 	}
 
 	artPath := filepath.Join(deps.Store.Root, "art", savedMeta.ID)
-	passport := artifact.RenderPassport(savedMeta, artPath, nil, opts.Budget)
+	passport := artifact.RenderPassport(savedMeta, artPath, body, opts.Budget)
 	fmt.Fprintln(stdout, passport)
 
 	if auditErr := runlog.AppendAudit(root, runlog.AuditEntry{

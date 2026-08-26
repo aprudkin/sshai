@@ -8,15 +8,18 @@ import (
 )
 
 type Meta struct {
-	ID, Host, Ctx, Command string
-	Exit                   int
-	TransportErr           string
-	Bytes, Lines           int64
-	SHA256                 string
-	DurationMs             int64
-	Truncated, Binary      bool
-	DeltaBase              string
-	Ts                     time.Time
+	ID, Host, Ctx, Command     string
+	Exit                       int
+	TransportErr               string
+	TransportDiagnostic        string
+	AcceptedHostKeyAlgorithm   string
+	AcceptedHostKeyFingerprint string
+	Bytes, Lines               int64
+	SHA256                     string
+	DurationMs                 int64
+	Truncated, Binary          bool
+	DeltaBase                  string
+	Ts                         time.Time
 }
 
 func EstTokens(b []byte) int { return (len(b) + 3) / 4 }
@@ -46,6 +49,10 @@ func StatusLine(m Meta) string {
 		fmt.Fprintf(&b, " transport-error=%s", m.TransportErr)
 	} else {
 		fmt.Fprintf(&b, " exit=%d", m.Exit)
+	}
+	if m.AcceptedHostKeyAlgorithm != "" && m.AcceptedHostKeyFingerprint != "" {
+		fmt.Fprintf(&b, " accepted-host-key-algorithm=%s accepted-host-key-fingerprint=%s",
+			m.AcceptedHostKeyAlgorithm, m.AcceptedHostKeyFingerprint)
 	}
 	fmt.Fprintf(&b, " lines=%d bytes=%s time=%s", m.Lines, HumanBytes(m.Bytes), HumanDuration(m.DurationMs))
 	if m.Truncated {

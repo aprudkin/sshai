@@ -67,3 +67,51 @@ func TestGetUnknownAndPruned(t *testing.T) {
 		t.Fatalf("pruned run's metadata must still be returned (audit history), got %+v", got)
 	}
 }
+
+func TestOpenStoreMigratesAndPersistsOptionalTransportEvidence(t *testing.T) {
+	root := t.TempDir()
+	legacy, err := OpenStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range []string{
+		"transport_diagnostic",
+		"accepted_host_key_algorithm",
+		"accepted_host_key_fingerprint",
+	} {
+		if _, err := legacy.DB.Exec(`ALTER TABLE runs DROP COLUMN ` + column); err != nil {
+			legacy.Close()
+			t.Fatalf("drop legacy column %s: %v", column, err)
+		}
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := OpenStore(root)
+	if err != nil {
+		t.Fatalf("migrate store: %v", err)
+	}
+	defer st.Close()
+	diagnostic := "host key verification failed"
+	algorithm := "ssh-ed25519"
+	fingerprint := "SHA256:abc123"
+	saved, err := st.Save(Meta{
+		Host: "h1", Ctx: "default", Command: "true", TransportErr: "ssh",
+		TransportDiagnostic: diagnostic, AcceptedHostKeyAlgorithm: algorithm,
+		AcceptedHostKeyFingerprint: fingerprint, Ts: time.Now(),
+	}, "k1", []byte("transport diagnostic: "+diagnostic+"\n"))
+	if err != nil {
+		t.Fatalf("save migrated evidence: %v", err)
+	}
+	got, _, err := st.Get(saved.ID)
+	if err != nil || got.TransportDiagnostic != diagnostic ||
+		got.AcceptedHostKeyAlgorithm != algorithm || got.AcceptedHostKeyFingerprint != fingerprint {
+		t.Fatalf("Get evidence=%+v err=%v", got, err)
+	}
+	last, ok, err := st.LastByKey("k1")
+	if err != nil || !ok || last.TransportDiagnostic != diagnostic ||
+		last.AcceptedHostKeyAlgorithm != algorithm || last.AcceptedHostKeyFingerprint != fingerprint {
+		t.Fatalf("LastByKey=%+v ok=%v err=%v", last, ok, err)
+	}
+}

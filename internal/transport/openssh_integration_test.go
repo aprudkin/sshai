@@ -26,7 +26,7 @@ func TestExecAgainstRealLinuxHost(t *testing.T) {
 	}
 	t.Cleanup(func() { os.RemoveAll(controlDir) })
 
-	tr := NewOpenSSH(controlDir, "5m", 1<<20)
+	tr := NewOpenSSH(controlDir, "5m", 1<<20, OpenSSHOptions{})
 	res, err := tr.Exec(host, "echo sshai-$((6*7))", nil, 30*time.Second)
 	if err != nil || res.ExitCode != 0 || !strings.Contains(string(res.Output), "sshai-42") {
 		t.Fatalf("res=%+v err=%v", res, err)

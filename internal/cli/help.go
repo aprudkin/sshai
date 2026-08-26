@@ -50,13 +50,28 @@ reads the body from stdin instead of a file).
 Output is a compact passport, not raw output: a status line carrying
 exactly one of exit=N or transport-error=R, then "file=<path>" pointing
 at the captured result on disk, then either the full captured body (when
-it fits the budget) or its last 3 lines ("tail3:"). Query the file locally
-with ` + "`sshai q`" + ` or your own tools. Only captured output up to the configured stream cap
-is retained; output beyond that cap is discarded and marked truncated=1.
+it fits the budget) or its last 3 lines ("tail3:"). Recognized SSH failures
+store only a safe canonical diagnostic in that artifact; raw SSH error text
+is never exposed. Only captured output up to the configured stream cap is
+retained; output beyond that cap is discarded and marked truncated=1.
+Query the file locally with ` + "`sshai q`" + ` or your own tools.
 
 Flags:
   --body-file FILE   read the command body from FILE ("-" for stdin)
                       instead of the "-- command" form
+  --powershell-host HOST
+                      Windows interpreter: "pwsh" (PowerShell 7, default)
+                      or "windows-powershell" (Windows PowerShell 5.1).
+                      Linux hosts in the same fan-out are unaffected
+  --accept-new-host-key HOST
+                      only after direct user authorization for this exact
+                      alias: add a previously unknown key for HOST, while
+                      still refusing changed known keys. HOST must occur
+                      exactly once in this invocation; a newly added key's
+                      algorithm and SHA256 fingerprint are returned
+  --proxy-jump none   disable the configured ProxyJump for this invocation
+                      only. ssh_config is not modified; omitting the flag
+                      preserves the configured route
   --delta             print a diff against the previous run of the same
                       (host, ctx, command) key instead of this run's own
                       output; the new run is still stored in full either
@@ -75,8 +90,10 @@ Flags:
                           "json" emits one versioned (schema_version=v1)
                           machine-readable envelope on stdout — run id,
                           host, exit, artifact path, byte/line counts,
-                          duration, sha256 — with no human tail/preview
-                          text. Default "human" is unchanged.
+                          duration, sha256, optional safe transport
+                          diagnostic, and optional explicitly accepted host
+                          key algorithm/fingerprint — with no human
+                          tail/preview text. Default "human" is unchanged.
   --result-out FILE       only with --result-format=json: atomically replace
                           FILE with one private envelope (mode 0600).
                           Existing regular files are replaced; symlinks and
@@ -92,10 +109,11 @@ is the source of truth, not the process exit code alone.
 `,
 	"q": `sshai q [--budget N] <id> -- <tool> <args...>
 
-Run a local tool (grep, jq, awk, cat, ...) against a stored artifact's
-file, without pulling the raw artifact back into context: <id>'s file
-path is appended as the tool's final argument. stdout and stderr are
-each budget-trimmed independently. The tool's own exit code is mirrored,
+Run a local tool against a stored artifact without pulling its raw bytes
+back into context. The artifact is not sent on stdin. q invokes:
+  <tool> <args...> <artifact-path>
+so the artifact path is always the final argv element. stdout and stderr
+are each budget-trimmed independently. The tool's own exit code is mirrored,
 except when the tool cannot be found on PATH, or dies from a signal
 (negative exit code) — both fall back to exit 96 (usage), since neither
 is a real exit status to mirror.
@@ -104,7 +122,8 @@ Flags:
   --budget N   output budget in tokens (~bytes/4); default 500 —
                independent of ` + "`run`" + `'s own --budget/config default
 
-Example: sshai q a17 -- grep -iE 'fatal'
+Example (Python consumes the final argv path):
+  sshai q a17 -- python3 -c 'import sys; print(open(sys.argv[-1]).readline())'
 `,
 	"diff": `sshai diff [--budget N] <id1> <id2>
 
