@@ -27,6 +27,14 @@ func shq(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// POSIXShellInvocation builds the remote bootstrap for an explicitly selected
+// POSIX shell. The wrapped command remains on stdin: the bootstrap uses -c
+// only to exec the selected shell again with -s, so no command body enters SSH
+// argv.
+func POSIXShellInvocation(path string) string {
+	return shq(path) + " -c " + shq("exec "+shq(path)+" -s")
+}
+
 // NewSentinel returns a fresh, unpredictable marker line used to
 // delimit a wrapped script's real output from the state its epilogue
 // appends (see BashWrap, BashParse). The random suffix keeps a sentinel

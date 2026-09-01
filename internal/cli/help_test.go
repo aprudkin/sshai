@@ -50,15 +50,25 @@ func TestHelpRunShowsFullFlagReference(t *testing.T) {
 		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
 	}
 	s := out.String()
-	for _, flag := range []string{"--body-file", "--powershell-host", "--accept-new-host-key", "--proxy-jump", "--delta", "--budget", "--timeout", "--ctx", "--result-format", "--result-out"} {
+	for _, flag := range []string{"--body-file", "--posix-shell", "--powershell-host", "--accept-new-host-key", "--proxy-jump", "--delta", "--budget", "--timeout", "--ctx", "--result-format", "--result-out"} {
 		if !strings.Contains(s, flag) {
 			t.Fatalf("help run missing flag %q: %q", flag, s)
 		}
 	}
-	for _, want := range []string{"captured output up to the configured stream cap", "factory default 500", "factory default 60"} {
+	for _, want := range []string{
+		"captured output up to the configured stream cap",
+		"factory default 500",
+		"factory default 60",
+		"/bin/ash",
+		"Bash remains the default when omitted",
+		"Windows hosts are unaffected",
+	} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("help run missing accuracy qualifier %q: %q", want, s)
 		}
+	}
+	if body, posix, powerShell := strings.Index(s, "--body-file"), strings.Index(s, "--posix-shell"), strings.Index(s, "--powershell-host"); !(body < posix && posix < powerShell) {
+		t.Fatalf("run help flag order must be body-file, posix-shell, powershell-host: %q", s)
 	}
 }
 

@@ -59,6 +59,9 @@ Query the file locally with ` + "`sshai q`" + ` or your own tools.
 Flags:
   --body-file FILE   read the command body from FILE ("-" for stdin)
                       instead of the "-- command" form
+  --posix-shell PATH select the Linux interpreter, for example /bin/ash
+                      on OpenWrt. Bash remains the default when omitted;
+                      Windows hosts are unaffected
   --powershell-host HOST
                       Windows interpreter: "pwsh" (PowerShell 7, default)
                       or "windows-powershell" (Windows PowerShell 5.1).

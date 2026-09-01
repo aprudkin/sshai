@@ -4,10 +4,10 @@
 
 <p align="center"><img src="assets/readme/banner.svg" width="100%" alt="sshai: remote commands in, compact evidence out"></p>
 
-`sshai` is a Go CLI for AI agents that runs non-interactive Linux bash and Windows PowerShell
-commands over SSH. PowerShell 7 (`pwsh`) is the default; Windows PowerShell 5.1 is selectable per
-invocation. It keeps captured command output in a local artifact and returns a compact passport
-instead of flooding agent context.
+`sshai` is a Go CLI for AI agents that runs non-interactive Linux commands through Bash by default
+or an explicitly selected POSIX shell, and Windows PowerShell commands over SSH. PowerShell 7
+(`pwsh`) is the default; Windows PowerShell 5.1 is selectable per invocation. It keeps captured
+command output in a local artifact and returns a compact passport instead of flooding agent context.
 
 Remote commands in. Compact evidence out.
 
@@ -19,8 +19,9 @@ It keeps transport, evidence, and operational authority separate.
 
 ## Capabilities
 
-- Run commands on one or more Linux/bash or Windows/PowerShell SSH aliases, with PowerShell 7 as
-  the default and Windows PowerShell 5.1 selectable per invocation.
+- Run commands on one or more Linux SSH aliases through Bash by default or a selected POSIX shell.
+- Run commands on one or more Windows/PowerShell SSH aliases with PowerShell 7 as the default and
+  Windows PowerShell 5.1 selectable per invocation.
 - Store output locally and return a bounded passport with outcome and artifact location.
 - Query, diff, and search artifacts without replaying whole command results.
 - Use `--body-file` for multiline commands, JSON result envelopes, `--delta`, and named contexts.
@@ -60,6 +61,17 @@ Keep a multiline body out of process arguments:
 ```bash
 sshai run --body-file check.ps1 win01
 ```
+
+Linux uses Bash by default. On a Linux host such as OpenWrt that lacks Bash, select its POSIX shell
+explicitly:
+
+```bash
+sshai run --posix-shell /bin/ash openwrt01 -- uname -s
+```
+
+`--posix-shell` accepts one path/token without whitespace or control characters. It affects Linux
+hosts only; Windows hosts in a mixed fan-out retain their PowerShell selection. A missing selected
+shell is a remote error—`sshai` never falls back to Bash.
 
 PowerShell 7 remains the Windows default. Select Windows PowerShell 5.1 when a command requires it:
 
@@ -130,9 +142,9 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the
 ### Project status
 
 Version 1 provides `run`, `q`, `diff`, `log`, `hosts`, `gc`, and `help`, including selectable
-Windows PowerShell hosts, sanitized transport diagnostics, scoped host-key acceptance, and a
-one-invocation direct-route override. Linux and PowerShell 7 acceptance evidence is recorded in
-this repository; live Windows PowerShell 5.1 evidence is still pending.
+Linux POSIX shells and Windows PowerShell hosts, sanitized transport diagnostics, scoped host-key
+acceptance, and a one-invocation direct-route override. Linux and PowerShell 7 acceptance evidence
+is recorded in this repository; live Windows PowerShell 5.1 evidence is still pending.
 
 ### Controlled v1.1 benchmark
 

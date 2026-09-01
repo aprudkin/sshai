@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/aprudkin/sshai/internal/artifact"
 	"github.com/aprudkin/sshai/internal/config"
@@ -60,6 +61,7 @@ type Opts struct {
 	Budget           int
 	Timeout          time.Duration
 	PowerShellHost   string // "" (default pwsh) | "pwsh" | "windows-powershell"
+	PosixShell       string // optional Linux shell path/token; empty keeps the bash default
 }
 
 func powerShellExecutable(host string) (string, bool) {
@@ -71,6 +73,18 @@ func powerShellExecutable(host string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func validatePOSIXShell(path string) error {
+	if path == "" {
+		return fmt.Errorf("invalid --posix-shell=%q (want one path without whitespace or control characters)", path)
+	}
+	for _, r := range path {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return fmt.Errorf("invalid --posix-shell=%q (want one path without whitespace or control characters)", path)
+		}
+	}
+	return nil
 }
 
 // ctxRe is the safe charset for --ctx: no "/" (so a ctx value can never
@@ -146,6 +160,7 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	bodyFile := fs.String("body-file", "", `read the command body from a file ("-" for stdin) instead of the "-- command" form`)
+	posixShell := fs.String("posix-shell", "", "Linux shell path; empty keeps bash")
 	powerShellHost := fs.String("powershell-host", "", `Windows interpreter: "pwsh" (default) or "windows-powershell"`)
 	acceptNewHostKey := fs.String("accept-new-host-key", "", "exact host alias allowed to add one previously unknown host key")
 	proxyJump := fs.String("proxy-jump", "", `one-invocation jump-route override: "none"`)
@@ -160,6 +175,12 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 		return exitUsage
 	}
 
+	posixShellSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "posix-shell" {
+			posixShellSet = true
+		}
+	})
 	if *resultFormat != "human" && *resultFormat != "json" {
 		fmt.Fprintf(stderr, "run: invalid --result-format=%q (want human or json)\n", *resultFormat)
 		return exitUsage
@@ -171,6 +192,12 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 	if _, ok := powerShellExecutable(*powerShellHost); !ok {
 		fmt.Fprintf(stderr, "run: invalid --powershell-host=%q (want pwsh or windows-powershell)\n", *powerShellHost)
 		return exitUsage
+	}
+	if posixShellSet {
+		if err := validatePOSIXShell(*posixShell); err != nil {
+			fmt.Fprintf(stderr, "run: %v\n", err)
+			return exitUsage
+		}
 	}
 	if *proxyJump != "" && *proxyJump != "none" {
 		fmt.Fprintf(stderr, "run: invalid --proxy-jump=%q (want none)\n", *proxyJump)
@@ -301,6 +328,7 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 			Budget:           perHostBudget,
 			Timeout:          timeout,
 			PowerShellHost:   *powerShellHost,
+			PosixShell:       *posixShell,
 		}
 	}
 	rc, outcomes := runInvocation(deps, hostOpts, resultModeOptions{
@@ -645,7 +673,11 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		out, parsedSt, parseOK = shell.PwshParse(res.Output, sentinel)
 	} else {
 		wrapped := shell.BashWrap(opts.Command, st, restore, sentinel)
-		res, err := deps.Tr.Exec(opts.Host, "bash -s", wrapped, opts.Timeout)
+		invocation := "bash -s"
+		if opts.PosixShell != "" {
+			invocation = shell.POSIXShellInvocation(opts.PosixShell)
+		}
+		res, err := deps.Tr.Exec(opts.Host, invocation, wrapped, opts.Timeout)
 		if err != nil {
 			if te, isTE := asTransportError(err); isTE {
 				return handleTransportError(deps, opts, te, stdout, stderr)

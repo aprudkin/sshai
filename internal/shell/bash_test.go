@@ -27,6 +27,24 @@ func TestBashWrapShape(t *testing.T) {
 	}
 }
 
+func TestPOSIXShellInvocation(t *testing.T) {
+	if got, want := POSIXShellInvocation("/bin/ash"), `'/bin/ash' -c 'exec '\''/bin/ash'\'' -s'`; got != want {
+		t.Fatalf("POSIXShellInvocation()=%q, want %q", got, want)
+	}
+
+	path := `/opt/ash;$(id)'`
+	got := POSIXShellInvocation(path)
+	if !strings.HasPrefix(got, shq(path)+" -c ") {
+		t.Fatalf("selected shell is not quoted as one executable word: %q", got)
+	}
+	if !strings.Contains(got, shq("exec "+shq(path)+" -s")) {
+		t.Fatalf("bootstrap does not safely exec the selected shell with -s: %q", got)
+	}
+	if strings.Contains(got, "bash") {
+		t.Fatalf("POSIX bootstrap must not invoke bash: %q", got)
+	}
+}
+
 func TestBashParseRoundTrip(t *testing.T) {
 	envDump := "PATH=/usr/bin\x00NEW=hello\x00"
 	raw := []byte("real output\n\n__SSHAI_x__\n/var/tmp\n" +

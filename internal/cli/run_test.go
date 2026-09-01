@@ -4,6 +4,7 @@ package cli
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -252,6 +253,31 @@ func TestRunWindowsBodySelectsPowerShellHost(t *testing.T) {
 	}
 }
 
+func TestRunWindowsIgnoresPOSIXShell(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SSHAI_ROOT", root)
+	if err := session.SaveFacts(root, "dc01", session.Facts{
+		OS: "windows", Shell: shell.PwshDefaultShell, Form: "pwsh",
+	}); err != nil {
+		t.Fatalf("SaveFacts: %v", err)
+	}
+
+	f := &pwshTr{}
+	var out, errB bytes.Buffer
+	rc := runWith(f, []string{"--posix-shell", "/bin/ash", "dc01", "--", "Get-Date"}, &out, &errB)
+	if rc != 0 {
+		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
+	}
+	wantPath := shell.RemoteDir + "/" + shell.BodySlug([]byte("Get-Date")) + ".ps1"
+	if len(f.putPaths) != 1 || f.putPaths[0] != wantPath {
+		t.Fatalf("Put remotePath(s) = %v, want exactly [%q]", f.putPaths, wantPath)
+	}
+	if !strings.HasPrefix(f.lastCmd, `& "`+shell.PwshDefaultShell+`"`) ||
+		strings.Contains(f.lastCmd, "/bin/ash") {
+		t.Fatalf("Windows Exec must retain the PowerShell path: %q", f.lastCmd)
+	}
+}
+
 func TestRunRejectsInvalidPowerShellHost(t *testing.T) {
 	t.Setenv("SSHAI_ROOT", t.TempDir())
 	var out, errB bytes.Buffer
@@ -272,6 +298,7 @@ func TestRunRejectsInvalidPowerShellHost(t *testing.T) {
 // test free of any coordination between "capture the sentinel" and "build
 // the response" phases.
 type fakeTr struct {
+	calls     int
 	lastCmd   string
 	lastStdin []byte
 	rc        int
@@ -295,6 +322,7 @@ func sentinelFromStdin(stdin []byte) string {
 }
 
 func (f *fakeTr) Exec(host, cmd string, stdin []byte, _ time.Duration) (transport.Result, error) {
+	f.calls++
 	f.lastCmd, f.lastStdin = cmd, stdin
 	sent := sentinelFromStdin(stdin)
 	env := base64.StdEncoding.EncodeToString([]byte("PATH=/usr/bin\x00"))
@@ -306,32 +334,83 @@ func (f *fakeTr) Exec(host, cmd string, stdin []byte, _ time.Duration) (transpor
 	return transport.Result{ExitCode: f.rc, Output: out}, nil
 }
 
-func (f *fakeTr) Put(host, l, r string) error { return nil }
+func (f *fakeTr) Put(host, l, r string) error {
+	f.calls++
+	return nil
+}
 
-func TestRunLinuxHappyPath(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("SSHAI_ROOT", root)
-	// Pre-seed facts so runHost never calls Probe — leaves f.lastCmd/lastStdin
-	// holding the actual run's exec, not a preceding "uname -s" probe call.
-	if err := session.SaveFacts(root, "web01", session.Facts{OS: "linux"}); err != nil {
-		t.Fatalf("SaveFacts: %v", err)
+func TestRunLinuxShellSelection(t *testing.T) {
+	tests := []struct {
+		name       string
+		posixShell string
+		wantCmd    string
+	}{
+		{name: "default bash", wantCmd: "bash -s"},
+		{name: "explicit ash", posixShell: "/bin/ash", wantCmd: shell.POSIXShellInvocation("/bin/ash")},
+		{name: "metacharacter path remains quoted", posixShell: "/opt/ash;$(id)'", wantCmd: shell.POSIXShellInvocation("/opt/ash;$(id)'")},
 	}
 
-	f := &fakeTr{rc: 0}
-	var out, errB bytes.Buffer
-	rc := runWith(f, []string{"--ctx", "t1", "web01", "--", "echo", "hello"}, &out, &errB)
-	if rc != 0 {
-		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			t.Setenv("SSHAI_ROOT", root)
+			if err := session.SaveFacts(root, "web01", session.Facts{OS: "linux"}); err != nil {
+				t.Fatalf("SaveFacts: %v", err)
+			}
+
+			args := []string{"--ctx", "t1"}
+			if tt.posixShell != "" {
+				args = append(args, "--posix-shell", tt.posixShell)
+			}
+			args = append(args, "web01", "--", "echo", "hello")
+			f := &fakeTr{}
+			var out, errB bytes.Buffer
+			rc := runWith(f, args, &out, &errB)
+			if rc != 0 {
+				t.Fatalf("rc=%d stderr=%s", rc, errB.String())
+			}
+			if f.lastCmd != tt.wantCmd {
+				t.Fatalf("Exec command=%q, want %q", f.lastCmd, tt.wantCmd)
+			}
+			if tt.posixShell != "" && strings.Contains(f.lastCmd, "bash") {
+				t.Fatalf("explicit POSIX shell command must not invoke bash: %q", f.lastCmd)
+			}
+			if strings.Contains(f.lastCmd, "echo hello") || !strings.Contains(string(f.lastStdin), "echo hello") {
+				t.Fatalf("body must travel only on stdin: command=%q stdin=%q", f.lastCmd, f.lastStdin)
+			}
+			if !strings.Contains(out.String(), "a1 host=web01 exit=0") {
+				t.Fatalf("passport: %q", out.String())
+			}
+		})
 	}
-	p := out.String()
-	if !strings.Contains(p, "a1 host=web01 exit=0") || !strings.Contains(p, "hello") {
-		t.Fatalf("passport: %q", p)
-	}
-	if !strings.Contains(f.lastCmd, "bash -s") {
-		t.Fatalf("command must be bash -s, got %q", f.lastCmd)
-	}
-	if !strings.Contains(string(f.lastStdin), "echo hello") {
-		t.Fatal("body must travel on stdin, not argv")
+}
+
+func TestRunRejectsInvalidPOSIXShellBeforeTransport(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		value string
+	}{
+		{name: "explicit empty", value: ""},
+		{name: "whitespace", value: "/bin/ash bad"},
+		{name: "newline", value: "/bin/ash\nbad"},
+		{name: "control", value: "/bin/ash\x00bad"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("SSHAI_ROOT", t.TempDir())
+			f := &fakeTr{}
+			var out, errB bytes.Buffer
+			rc := runWith(f, []string{"--posix-shell=" + tt.value, "web01", "--", "echo", "hello"}, &out, &errB)
+			if rc != exitUsage {
+				t.Fatalf("rc=%d, want %d; stderr=%q", rc, exitUsage, errB.String())
+			}
+			want := fmt.Sprintf(`run: invalid --posix-shell=%q (want one path without whitespace or control characters)`, tt.value)
+			if !strings.Contains(errB.String(), want) {
+				t.Fatalf("stderr=%q, want %q", errB.String(), want)
+			}
+			if f.calls != 0 {
+				t.Fatalf("transport calls=%d, want none", f.calls)
+			}
+		})
 	}
 }
 
