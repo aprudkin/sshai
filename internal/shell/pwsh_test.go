@@ -4,6 +4,11 @@ package shell
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -22,6 +27,60 @@ func TestPwshScriptStartsWithBOMAndPreamble(t *testing.T) {
 			t.Errorf("script missing %q", want)
 		}
 	}
+}
+
+func TestPwshScriptGuardsLastExitCodeUnderStrictMode(t *testing.T) {
+	body := "Set-StrictMode -Version Latest\n$ErrorActionPreference = 'Stop'\n[pscustomobject]@{ ok = $true } | ConvertTo-Json -Compress"
+	txt := string(PwshScript(body, State{}, nil, "__SSHAI_x__"))
+
+	if !strings.Contains(txt, body) {
+		t.Fatal("script changed the caller body")
+	}
+	if strings.Contains(txt, "if ($LASTEXITCODE -ne $null)") {
+		t.Fatal("script reads an undefined $LASTEXITCODE before checking it")
+	}
+	if want := "if (Test-Path Variable:LASTEXITCODE) { $__sshai_rc = $LASTEXITCODE }"; !strings.Contains(txt, want) {
+		t.Fatalf("script missing guarded native exit propagation %q", want)
+	}
+}
+
+func TestPwshScriptStrictModeExitBehavior(t *testing.T) {
+	powerShell, err := exec.LookPath("pwsh")
+	if err != nil {
+		t.Skip("pwsh is not installed")
+	}
+
+	run := func(t *testing.T, body string) ([]byte, error) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "script.ps1")
+		if err := os.WriteFile(path, PwshScript(body, State{}, nil, "__SSHAI_x__"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return exec.Command(powerShell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path).CombinedOutput()
+	}
+
+	t.Run("no native process", func(t *testing.T) {
+		body := "Set-StrictMode -Version Latest\n$ErrorActionPreference = 'Stop'\n[pscustomobject]@{ ok = $true } | ConvertTo-Json -Compress"
+		out, err := run(t, body)
+		if err != nil {
+			t.Fatalf("script failed: %v\n%s", err, out)
+		}
+		if !strings.Contains(string(out), `{"ok":true}`) {
+			t.Fatalf("body output missing or changed: %q", out)
+		}
+	})
+
+	t.Run("native nonzero", func(t *testing.T) {
+		body := "Set-StrictMode -Version Latest\n$ErrorActionPreference = 'Stop'\n/bin/sh -c 'exit 5'"
+		if runtime.GOOS == "windows" {
+			body = "Set-StrictMode -Version Latest\n$ErrorActionPreference = 'Stop'\n& \"$env:WINDIR\\System32\\cmd.exe\" /c exit 5"
+		}
+		out, err := run(t, body)
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 5 {
+			t.Fatalf("exit = %v, want 5; output=%q", err, out)
+		}
+	})
 }
 
 func TestPwshInvocationForms(t *testing.T) {
