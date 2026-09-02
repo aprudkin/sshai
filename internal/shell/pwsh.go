@@ -84,7 +84,7 @@ func PwshScript(body string, st State, restore map[string]string, sentinel strin
 		b.WriteString("\n")
 	}
 	b.WriteString("  }\n")
-	b.WriteString("  if ($LASTEXITCODE -ne $null) { $__sshai_rc = $LASTEXITCODE }\n")
+	b.WriteString("  if (Test-Path Variable:LASTEXITCODE) { $__sshai_rc = $LASTEXITCODE }\n")
 	b.WriteString("} catch {\n")
 	b.WriteString("  $_ | Out-String | Write-Output\n")
 	b.WriteString("  $__sshai_rc = 1\n")
