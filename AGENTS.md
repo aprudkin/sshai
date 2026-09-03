@@ -144,6 +144,19 @@ scripts/install.sh                           # atomic install to ~/.local/bin/ss
 - Do not add secrets to argv, logs, prompts, fixtures, or durable artifacts. Runtime OpenSSH uses
   batch mode and existing user SSH configuration; do not invent alternate credential plumbing.
 
+## Coupled Agent Skill
+
+When a change to this repository affects sshai's user-facing CLI, commands, flags, output
+contracts, supported shells, transport or safety behavior, or recommended usage, review the local
+Pi skill at `~/.pi/agent/skills/sshai/SKILL.md` in the same task when that file exists. Update it
+when its guidance would otherwise become incomplete or stale; internal-only changes that do not
+affect agent usage do not require a skill edit. The skill update itself does not trigger another
+review. Report whether the skill was reviewed and whether it changed.
+
+Treat the skill's owning Git working tree as separate from this repository: preserve unrelated
+work, stage and commit only skill-related files there, and do not push it unless explicitly
+requested.
+
 ## Testing & QA
 
 Go tests are colocated `*_test.go` files using the standard `testing` package. Follow the existing
