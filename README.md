@@ -4,6 +4,12 @@
 
 <p align="center"><img src="assets/readme/banner.svg" width="100%" alt="sshai: remote commands in, compact evidence out"></p>
 
+[![CI](https://github.com/aprudkin/sshai/actions/workflows/ci.yml/badge.svg)](https://github.com/aprudkin/sshai/actions/workflows/ci.yml)
+[![Go 1.26.5](https://img.shields.io/badge/Go-1.26.5-00ADD8?logo=go&logoColor=white)](go.mod)
+[![MIT license](https://img.shields.io/github/license/aprudkin/sshai)](LICENSE)
+[![Agent Skill included](https://img.shields.io/badge/Agent_Skill-included-6f42c1)](skills/sshai/SKILL.md)
+[![OpenSSH required](https://img.shields.io/badge/OpenSSH-required-2E8B57)](https://www.openssh.com/)
+
 `sshai` is a Go CLI for AI agents that runs non-interactive Linux commands through Bash by default
 or an explicitly selected POSIX shell, and Windows PowerShell commands over SSH. PowerShell 7
 (`pwsh`) is the default; Windows PowerShell 5.1 is selectable per invocation. It keeps captured
@@ -17,13 +23,14 @@ Use `sshai` for already-authorized, non-interactive commands on hosts reachable 
 `ssh_config`, when you need evidence without replaying large results into an agent conversation.
 It keeps transport, evidence, and operational authority separate.
 
-## Pi agent skill
+## Agent skill
 
-When using `sshai` through Pi, pair the CLI with the purpose-built
-[`sshai` agent skill](https://github.com/aprudkin/pi-config/blob/main/skills/sshai/SKILL.md).
-The skill gives the agent recommended invocation patterns, shell-selection guidance,
-bounded-output and local-artifact workflows, safety boundaries, and follow-mode usage. The skill
-is optional; the CLI also works without it.
+For agent-driven use, install the bundled [`sshai` skill](skills/sshai/SKILL.md) together with the
+CLI. The CLI works on its own, but the skill teaches an agent when to use `sshai`, how to keep large
+output out of context, how to query saved artifacts, and where the safety boundaries are.
+
+The skill follows the Agent Skills specification and is not tied to Pi. Pi and other compatible
+agent harnesses can load the same skill.
 
 ## Capabilities
 
@@ -48,16 +55,51 @@ The execution path keeps captured output local and returns only bounded evidence
     alt="Sequence diagram showing an AI agent calling sshai through OpenSSH, sshai saving captured output locally, and only bounded passport or queried evidence returning to agent context">
 </picture>
 
-## Quick start
+## Install
 
-Requirements: Go `1.26.5` or newer in the `1.26` line, OpenSSH, and a locally configured SSH
-alias.
+`sshai` requires OpenSSH and a configured SSH alias. Building from source also requires Go `1.26.5`
+or newer in the `1.26` line.
+
+### Homebrew
+
+The Homebrew package is prepared for v1.0.0 but is not published yet. After the release and tap are
+published, install the CLI and its bundled skill with:
+
+```bash
+brew install aprudkin/tap/sshai
+```
+
+Pi users can then enable the installed skill explicitly:
+
+```bash
+pi install "$(brew --prefix sshai)/share/sshai"
+```
+
+Other Agent Skills-compatible harnesses can load `skills/sshai/SKILL.md` from the package share
+directory reported by `brew --prefix sshai`.
+
+### From source
 
 ```bash
 git clone https://github.com/aprudkin/sshai.git
 cd sshai
 go test ./...
 scripts/install.sh
+```
+
+The installer copies the skill to `${SSHAI_SHARE_DIR:-$HOME/.local/share/sshai}`. Pi can load that
+directory as a local package:
+
+```bash
+pi install "${SSHAI_SHARE_DIR:-$HOME/.local/share/sshai}"
+```
+
+Other compatible harnesses can load or copy its `skills/sshai/` directory into their configured
+skill location.
+
+## Quick start
+
+```bash
 sshai run web01 -- df -h
 ```
 
@@ -149,56 +191,43 @@ go test -tags=integration ./...
 Read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the
 [Code of Conduct](CODE_OF_CONDUCT.md) before opening an issue or pull request.
 
-## Project status and benchmarks
+## Measured results
 
-### Project status
-
-Version 1 provides `run`, `q`, `diff`, `log`, `hosts`, `gc`, and `help`, including selectable
-Linux POSIX shells and Windows PowerShell hosts, sanitized transport diagnostics, scoped host-key
-acceptance, and a one-invocation direct-route override. Linux and PowerShell 7 acceptance evidence
-is recorded in this repository; live Windows PowerShell 5.1 evidence is still pending.
+The figures below come from two completed measurements: a controlled comparison and a separate
+production collection. Estimated token counts use `ceil(UTF-8 bytes / 4)`.
 
 ### Controlled v1.1 benchmark
 
-The controlled v1.1 benchmark completed on 2026-08-13 with 36 read-only observations across two
-Linux hosts and one Windows host, using fresh raw-SSH and `sshai` Codex sessions.
+The controlled benchmark ran on 2026-08-13 with 36 read-only observations across two Linux hosts
+and one Windows host running PowerShell 7.6.3. The raw-SSH and `sshai` branches each used a fresh
+Codex session.
 
-| Measurement | Raw SSH | `sshai` | Result |
+| Measurement | Raw SSH | `sshai` | Difference |
 | --- | ---: | ---: | ---: |
-| Agent-visible marked tool output, total estimated tokens | 855,806 | 1,227 | **99.86% lower** |
-| Agent-visible marked tool output, p95 estimated tokens | 262,152 | 50 | **99.98% lower** |
+| Total agent-visible marked output, estimated tokens | 855,806 | 1,227 | **99.86% lower** |
+| Agent-visible marked output p95, estimated tokens | 262,152 | 50 | **99.98% lower** |
 | Actual Codex input tokens | 2,896,077 | 1,601,293 | **44.71% lower** |
 | Successful observations | 34 / 36 | 34 / 36 | equal (94.44%) |
 
-The p95, compaction, success, and quoting-debug targets passed. The primary target of at least 80%
-lower actual input tokens did not, so the recorded decision is **needs work**, not confirmed. Read
-the [full result and its boundaries](docs/benchmarks/v1.1-results-2026-08-13.md).
+Four of the five predefined targets passed. The primary target of at least 80% lower actual input
+tokens did not; the recorded decision is **needs work**. The two runs had the same success rate but
+failed on different observations, so this measurement does not compare transport reliability.
+The method, data boundaries, and failure details are documented in the
+[v1.1 benchmark report](docs/benchmarks/v1.1-results-2026-08-13.md).
 
-### Production fleet collection
+### Production collection
 
-A separate, anonymized production run on 2026-08-25 used `sshai` as its primary control plane for
-an approved PCI DSS collection across 79 Windows servers. The run produced 158 raw report files;
-archives were retrieved separately, and every retrieved archive matched the SHA-256 reported by
-its source.
+An anonymized production run on 2026-08-25 used `sshai` for an approved PCI DSS collection across
+79 Windows servers. It produced 158 raw report files. Archives were retrieved separately, and the
+SHA-256 of every retrieved archive matched the value reported by its source.
 
-| Production measurement | Bytes | Estimated context |
+| Measurement | Bytes | Estimated tokens |
 | --- | ---: | ---: |
-| Full 158-file report set | 8,123,158 | ~2.03M tokens |
-| Agent-visible orchestration, status, and receipt stream | 49,846 | ~12.5K tokens |
+| Full set of 158 reports | 8,123,158 | ~2.03M |
+| Agent-visible orchestration, status, and receipt stream | 49,846 | ~12.5K |
 
-The control stream was 0.61% of the raw evidence size—about **163× smaller**, a **99.39% reduction**
-in bytes visible during orchestration.
-
-This is evidence from a real workflow, not a controlled head-to-head token benchmark. Token counts
-use `ceil(bytes / 4)`. The run predated scoped host-key acceptance and direct-route support; those
-paths are now available without weakening the strict defaults.
-
-### Follow-up fan-out experiment
-
-The historical v2.1 fan-out study ended **inconclusive**. Amendment 2 is an approved measurement
-candidate, not a result, and has not been frozen for measurement. See the
-[protocol](docs/benchmarks/v2.1-protocol.md) and
-[analyzer definition](docs/benchmarks/v2.1-analyzer.md).
+The agent-visible stream was 0.61% of the report data: about **163× smaller**, or **99.39% fewer
+bytes**. This was an operational measurement, not a controlled comparison with raw SSH.
 
 ## License
 

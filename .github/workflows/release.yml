@@ -1,0 +1,35 @@
+name: Release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semantic version to package
+        required: true
+        default: v1.0.0
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+      - name: Verify source
+        run: |
+          go test ./...
+          go vet ./...
+      - name: Build release archives
+        run: scripts/package-release.sh "${{ inputs.version }}"
+      - name: Upload release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: sshai-${{ inputs.version }}-candidate
+          path: dist/
+          if-no-files-found: error

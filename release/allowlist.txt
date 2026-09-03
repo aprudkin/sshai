@@ -11,6 +11,7 @@ assets/readme/hero.svg
 assets/readme/banner.svg
 assets/readme/banner-ru.svg
 .github/workflows/ci.yml
+.github/workflows/release.yml
 cmd/sshai/main.go
 docs/agent-usage.md
 docs/windows-parity.md
@@ -21,7 +22,11 @@ docs/benchmarks/v2.1-analyzer.md
 docs/public-release/sanitization-report.md
 release/allowlist.txt
 release/release-manifest.yaml
+release/homebrew/sshai.rb.tmpl
+skills/sshai/SKILL.md
 scripts/install.sh
+scripts/package-release.sh
+scripts/render-homebrew-formula.sh
 scripts/benchmark_v1_1.py
 scripts/benchmark_v2_1.py
 scripts/benchmark_v2_1_noop.py

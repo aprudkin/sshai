@@ -21,6 +21,14 @@ included_bundles:
     paths: [assets/readme/]
     provenance: repository-owned SVG artwork
     decision: candidate
+  - id: agent-skill
+    paths: [skills/sshai/]
+    provenance: repository-authored Agent Skills instructions
+    decision: candidate
+  - id: release-automation
+    paths: [.github/workflows/release.yml, release/homebrew/, scripts/package-release.sh, scripts/render-homebrew-formula.sh]
+    provenance: repository-authored release packaging and formula generation
+    decision: candidate-after-staging-scan
 excluded_bundles:
   - paths: [CLAUDE.md, docs/superpowers/]
     reason: internal agent instructions, plans, and design history
