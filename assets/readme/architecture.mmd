@@ -1,0 +1,19 @@
+sequenceDiagram
+    actor Agent as AI agent
+    participant CLI as sshai
+    participant SSH as system OpenSSH
+    participant Host as Linux bash or selected Windows PowerShell
+    participant Store as local artifact store
+
+    Agent->>Agent: prepare authorized request
+    Agent->>CLI: sshai run
+    CLI->>SSH: stage and execute on one or more hosts
+    SSH->>Host: run in the selected shell
+    Host-->>SSH: stdout, stderr, and exit status
+    SSH-->>CLI: captured streams and outcome
+    CLI->>Store: persist captured output and metadata
+    CLI-->>Agent: bounded passport or JSON
+    Agent->>CLI: q, diff, log, or --delta
+    CLI->>Store: request selected evidence
+    Store-->>CLI: requested slice
+    CLI-->>Agent: bounded evidence
