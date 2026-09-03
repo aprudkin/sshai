@@ -42,11 +42,8 @@ func pwq(s string) string {
 // run on every exit path out of the try — normal return, a thrown
 // exception, or `exit` inside body — printing, after body's own output:
 // a blank line, the sentinel, the remote cwd, and a base64-encoded env
-// dump, all consumed by PwshParse. (This environment has no pwsh host to
-// run the script against, so that guarantee is stated as the template's
-// design intent, not as something exercised here — the try/finally
-// state epilogue itself is new to sshai, not part of ps_ssh.py, which
-// never captured state this way.)
+// dump, all consumed by PwshParse. The try/finally state epilogue itself is
+// new to sshai, not part of ps_ssh.py, which never captured state this way.
 // The returned bytes
 // are meant to be scp-staged to <RemoteDir>/<slug>.ps1 and invoked with
 // -File — body is never placed in argv, so it can carry arbitrary
@@ -54,6 +51,12 @@ func pwq(s string) string {
 // Ported from ps_ssh.py (BOM + encoding preamble; the try/finally state
 // epilogue is new to sshai, matching BashWrap's trap-EXIT epilogue).
 func PwshScript(body string, st State, restore map[string]string, sentinel string) []byte {
+	return PwshScriptFollow(body, st, restore, sentinel, "")
+}
+
+// PwshScriptFollow emits marker directly before the user's script block.
+// An empty marker keeps PwshScript byte-compatible.
+func PwshScriptFollow(body string, st State, restore map[string]string, sentinel, marker string) []byte {
 	var b strings.Builder
 
 	// pwsh over OpenSSH defaults console encoding to cp437; non-cp437 glyphs
@@ -79,9 +82,19 @@ func PwshScript(body string, st State, restore map[string]string, sentinel strin
 	b.WriteString("$__sshai_rc = 0\n")
 	b.WriteString("try {\n")
 	b.WriteString("  . {\n")
+	if marker != "" {
+		b.WriteString("  Write-Output '" + pwq(marker) + "'\n")
+		// Follow only: route PowerShell's logical streams together. The
+		// transport also combines forwarded remote stdout/stderr while keeping
+		// local OpenSSH diagnostics out of live events.
+		b.WriteString("  & {\n")
+	}
 	b.WriteString(body)
 	if !strings.HasSuffix(body, "\n") {
 		b.WriteString("\n")
+	}
+	if marker != "" {
+		b.WriteString("  } *>&1\n")
 	}
 	b.WriteString("  }\n")
 	b.WriteString("  if (Test-Path Variable:LASTEXITCODE) { $__sshai_rc = $LASTEXITCODE }\n")

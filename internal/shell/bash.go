@@ -58,6 +58,12 @@ func NewSentinel() string {
 // carry arbitrary content including secrets without leaking through the
 // process table.
 func BashWrap(body string, st State, restore map[string]string, sentinel string) []byte {
+	return BashWrapFollow(body, st, restore, sentinel, "")
+}
+
+// BashWrapFollow adds a control line immediately before the user body. The
+// empty marker preserves BashWrap's historical bytes exactly.
+func BashWrapFollow(body string, st State, restore map[string]string, sentinel, marker string) []byte {
 	var b strings.Builder
 
 	b.WriteString("__sshai_epilogue() {\n")
@@ -83,6 +89,18 @@ func BashWrap(body string, st State, restore map[string]string, sentinel string)
 		b.WriteString("export " + name + "=" + shq(restore[name]) + "\n")
 	}
 
+	if marker != "" {
+		b.WriteString("printf '%s\\n' " + shq(marker) + "\n")
+		// In follow mode local SSH stderr is deliberately not streamed. Combine
+		// the body's stderr remotely so user output still arrives on stdout.
+		b.WriteString("{\n")
+		b.WriteString(body)
+		if !strings.HasSuffix(body, "\n") {
+			b.WriteString("\n")
+		}
+		b.WriteString("} 2>&1\n")
+		return []byte(b.String())
+	}
 	b.WriteString(body)
 
 	return []byte(b.String())

@@ -466,6 +466,139 @@ func (tr *OpenSSH) Exec(host, command string, stdin []byte, timeout time.Duratio
 	}, nil
 }
 
+// ExecStream is Exec with live delivery of the remote combined stream. SSH's
+// own diagnostics are diverted to a private log so they cannot enter events.
+func (tr *OpenSSH) ExecStream(host, command string, stdin []byte, timeout time.Duration, output func([]byte)) (Result, error) {
+	if err := tr.prepareAcceptedHostKey(host); err != nil {
+		return Result{}, newTransportError("ssh", "host key inspection failed")
+	}
+	logDir, err := os.MkdirTemp("", "sshai-ssh-*")
+	if err != nil {
+		return Result{}, newTransportError("ssh", "ssh diagnostics unavailable")
+	}
+	defer os.Remove(logDir)
+	logName := filepath.Join(logDir, "diagnostic.log")
+	log, err := os.OpenFile(logName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return Result{}, newTransportError("ssh", "ssh diagnostics unavailable")
+	}
+	if err := log.Close(); err != nil {
+		_ = os.Remove(logName)
+		return Result{}, newTransportError("ssh", "ssh diagnostics unavailable")
+	}
+	defer os.Remove(logName)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	argv := tr.sshArgv(host, command)
+	argv = append([]string{argv[0], "-E", logName}, argv[1:]...)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Stdin = bytes.NewReader(stdin)
+	w := newObservingWriter(newStreamCapWriter(tr.streamCap, cancel), output)
+	// Identical writers make os/exec retain one pipe and its actual byte order.
+	cmd.Stdout, cmd.Stderr = w, w
+	_ = cmd.Run()
+	tr.observeAcceptedHostKey(host)
+	if ctx.Err() == context.DeadlineExceeded {
+		return Result{}, newTransportError("timeout", "operation timed out")
+	}
+	rc := execStartFailedRC
+	if cmd.ProcessState != nil {
+		rc = cmd.ProcessState.ExitCode()
+	}
+	if rc == execStartFailedRC {
+		return Result{}, newTransportError("ssh", "ssh process failed to start")
+	}
+	if rc == 255 {
+		diagnostic, err := boundedSSHLog(logName)
+		if err != nil {
+			return Result{}, newTransportError("ssh", "ssh diagnostics unavailable")
+		}
+		return Result{}, NewTransportError("ssh", diagnostic)
+	}
+	out, truncated := w.Bytes()
+	return Result{ExitCode: rc, Output: out, Truncated: truncated}, nil
+}
+
+const sshDiagnosticLogCap = 64 << 10
+
+func boundedSSHLog(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, sshDiagnosticLogCap))
+}
+
+type streamCapWriter struct {
+	mu     sync.Mutex
+	max    int64
+	buf    []byte
+	killed bool
+	cancel context.CancelFunc
+}
+
+func newStreamCapWriter(max int64, cancel context.CancelFunc) *streamCapWriter {
+	return &streamCapWriter{max: max, cancel: cancel}
+}
+
+// Write retains at most max bytes and uses a private overflow sentinel only to
+// cancel the process. The callback receives no sentinel byte.
+func (w *streamCapWriter) Write(p []byte) (int, []byte, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(p) == 0 || w.killed {
+		if w.killed {
+			return 0, nil, errStreamCapExceeded
+		}
+		return 0, nil, nil
+	}
+	room := w.max - int64(len(w.buf))
+	if room < 0 {
+		room = 0
+	}
+	take := int64(len(p))
+	if take > room {
+		take = room
+	}
+	if take > 0 {
+		w.buf = append(w.buf, p[:take]...)
+	}
+	if int64(len(p)) > take {
+		w.killed = true
+		if w.cancel != nil {
+			w.cancel()
+		}
+		return int(take), append([]byte(nil), p[:take]...), errStreamCapExceeded
+	}
+	return int(take), append([]byte(nil), p[:take]...), nil
+}
+
+func (w *streamCapWriter) Bytes() ([]byte, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]byte(nil), w.buf...), w.killed
+}
+
+type observingWriter struct {
+	w      *streamCapWriter
+	output func([]byte)
+}
+
+func newObservingWriter(w *streamCapWriter, output func([]byte)) *observingWriter {
+	return &observingWriter{w: w, output: output}
+}
+
+func (w *observingWriter) Write(p []byte) (int, error) {
+	n, observed, err := w.w.Write(p)
+	if len(observed) > 0 && w.output != nil {
+		w.output(observed)
+	}
+	return n, err
+}
+
+func (w *observingWriter) Bytes() ([]byte, bool) { return w.w.Bytes() }
+
 // Put copies the local file at localPath to remotePath on host via scp.
 // Unlike ssh's Exec discrimination, scp's exit 255 is not special-cased
 // here — per the ported semantics, any non-zero rc from scp (255

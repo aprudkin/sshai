@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -362,6 +363,71 @@ func TestCapWriterOverCapAcrossWrites(t *testing.T) {
 
 // --- Exec's truncation derivation from capWriter's sentinel-inclusive
 // output (task-7 review finding 1, consumer side). ---
+
+func TestObservingWriterStreamsCombinedRemoteOrderAndHidesSentinel(t *testing.T) {
+	cap := newStreamCapWriter(5, nil)
+	var observed []byte
+	w := newObservingWriter(cap, func(p []byte) { observed = append(observed, p...) })
+	if _, err := w.Write([]byte("out")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("err")); err == nil {
+		t.Fatal("shared cap overflow must cancel")
+	}
+	if got := string(observed); got != "outer" {
+		t.Fatalf("callback included overflow sentinel or lost order: %q", got)
+	}
+	captured, truncated := w.Bytes()
+	if !truncated || string(captured) != "outer" {
+		t.Fatalf("capture=%q truncated=%v", captured, truncated)
+	}
+}
+
+func TestExecStreamUsesUnifiedRemotePipeAndPrivateDiagnosticLog(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX fake ssh fixture")
+	}
+
+	dir := t.TempDir()
+	ssh := filepath.Join(dir, "ssh")
+	writeSSH := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(ssh, []byte("#!/bin/sh\n"+body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	t.Run("remote streams", func(t *testing.T) {
+		writeSSH("printf out\nprintf err >&2\nexit 0\n")
+		tr := NewOpenSSH(t.TempDir(), "15m", 64, OpenSSHOptions{})
+		var observed []byte
+		res, err := tr.ExecStream("h", "true", nil, time.Second, func(p []byte) { observed = append(observed, p...) })
+		if err != nil || string(res.Output) != "outerr" || string(observed) != "outerr" {
+			t.Fatalf("res=%+v observed=%q err=%v", res, observed, err)
+		}
+	})
+
+	t.Run("transport diagnostic", func(t *testing.T) {
+		trace := filepath.Join(t.TempDir(), "trace")
+		t.Setenv("SSHAI_TEST_TRACE", trace)
+		writeSSH("while [ $# -gt 0 ]; do\n  if [ \"$1\" = -E ]; then\n    printf %s \"$2\" >\"$SSHAI_TEST_TRACE\"\n    printf 'Permission denied for secret-host.example\\n' >\"$2\"\n    exit 255\n  fi\n  shift\ndone\nexit 255\n")
+		tr := NewOpenSSH(t.TempDir(), "15m", 64, OpenSSHOptions{})
+		var observed []byte
+		_, err := tr.ExecStream("h", "true", nil, time.Second, func(p []byte) { observed = append(observed, p...) })
+		var te *TransportError
+		if !errors.As(err, &te) || te.Diagnostic() != "permission denied" || len(observed) != 0 || strings.Contains(te.Error(), "secret-host") {
+			t.Fatalf("err=%v observed=%q", err, observed)
+		}
+		logPath, readErr := os.ReadFile(trace)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if _, statErr := os.Stat(string(logPath)); !os.IsNotExist(statErr) {
+			t.Fatalf("diagnostic log remains: %q err=%v", logPath, statErr)
+		}
+	})
+}
 
 func TestExecExactCapOutputNotTruncated(t *testing.T) {
 	tr := NewOpenSSH(t.TempDir(), "15m", 5, OpenSSHOptions{}) // streamCap=5

@@ -4,6 +4,7 @@ package shell
 import (
 	"bytes"
 	"encoding/base64"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -24,6 +25,36 @@ func TestBashWrapShape(t *testing.T) {
 	}
 	if strings.Index(w, "make test") < strings.Index(w, "export FOO") {
 		t.Error("body must come after env restore")
+	}
+}
+
+func TestBashWrapFollowCombinesBodyStderrOnlyInFollowMode(t *testing.T) {
+	body := "echo out; echo err >&2"
+	plain := BashWrap(body, State{}, nil, "S")
+	if !bytes.Equal(plain, BashWrapFollow(body, State{}, nil, "S", "")) {
+		t.Fatal("non-follow wrapper bytes changed")
+	}
+	follow := string(BashWrapFollow(body, State{}, nil, "S", "MARK"))
+	if !strings.Contains(follow, "printf '%s\\n' 'MARK'\n{\n"+body+"\n} 2>&1") {
+		t.Fatalf("follow wrapper lacks body-only stderr redirect:\n%s", follow)
+	}
+}
+
+func TestBashWrapFollowExecutesRedirectAndPreservesExit(t *testing.T) {
+	cmd := exec.Command("bash")
+	cmd.Stdin = bytes.NewReader(BashWrapFollow("printf out; printf err >&2; exit 5", State{}, nil, "S", "MARK"))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if code := cmd.ProcessState.ExitCode(); err == nil || code != 5 {
+		t.Fatalf("err=%v exit=%d", err, code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("body stderr was not combined remotely: %q", stderr.String())
+	}
+	out, _, ok := BashParse(stdout.Bytes(), "S")
+	if !ok || !strings.Contains(string(out), "MARK\nouterr") {
+		t.Fatalf("parse=%q ok=%v", out, ok)
 	}
 }
 
