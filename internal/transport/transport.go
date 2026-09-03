@@ -66,6 +66,14 @@ func (e *TransportError) Error() string {
 // itself failed rather than the remote command; a non-nil Result paired
 // with a nil error means the remote command ran and ExitCode is its
 // honest exit status, whatever that status is.
+// StreamingTransport is an optional additive capability for transports that can
+// deliver the remote combined stream as it arrives. Implementations must
+// preserve its pipe order for wrapper parsing. Transport remains unchanged so
+// existing callers and fakes do not need to implement streaming.
+type StreamingTransport interface {
+	ExecStream(host, command string, stdin []byte, timeout time.Duration, output func([]byte)) (Result, error)
+}
+
 type Transport interface {
 	// Exec runs command on host, feeding it stdin, and returns once the
 	// command exits, timeout elapses, or the transport fails outright.

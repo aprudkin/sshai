@@ -44,8 +44,9 @@ const (
 // real SQLite file and a real filesystem, which a t.TempDir()-rooted
 // SSHAI_ROOT already gives a test for free, without touching the network.
 type Deps struct {
-	Tr    transport.Transport
-	Store *artifact.Store
+	Tr     transport.Transport
+	Store  *artifact.Store
+	Follow *followEmitter // nil outside --follow
 }
 
 // Opts holds one host's resolved run parameters, after flag parsing and
@@ -170,6 +171,8 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 	ctxFlag := fs.String("ctx", "", `named state context; default $SSHAI_CTX or "default"`)
 	resultFormat := fs.String("result-format", "human", `output format: "human" (default) or "json"`)
 	resultOut := fs.String("result-out", "", `write the JSON envelope to FILE (requires --result-format=json)`)
+	follow := fs.Bool("follow", false, "write live JSONL progress events to stderr")
+	followInterval := fs.Int("follow-interval", 10, "seconds between --follow heartbeat events (minimum 1)")
 
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -183,6 +186,20 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 	})
 	if *resultFormat != "human" && *resultFormat != "json" {
 		fmt.Fprintf(stderr, "run: invalid --result-format=%q (want human or json)\n", *resultFormat)
+		return exitUsage
+	}
+	if *followInterval < 1 {
+		fmt.Fprintln(stderr, "run: --follow-interval must be at least 1")
+		return exitUsage
+	}
+	followIntervalSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "follow-interval" {
+			followIntervalSet = true
+		}
+	})
+	if followIntervalSet && !*follow {
+		fmt.Fprintln(stderr, "run: --follow-interval requires --follow")
 		return exitUsage
 	}
 	if *resultOut != "" && *resultFormat != "json" {
@@ -259,6 +276,10 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 		fmt.Fprintln(stderr, "run: at least one host is required")
 		return exitUsage
 	}
+	if *follow && len(hosts) != 1 {
+		fmt.Fprintln(stderr, "run: --follow supports exactly one host")
+		return exitUsage
+	}
 	if *acceptNewHostKey != "" {
 		matches := 0
 		for _, host := range hosts {
@@ -331,10 +352,17 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 			PosixShell:       *posixShell,
 		}
 	}
-	rc, outcomes := runInvocation(deps, hostOpts, resultModeOptions{
-		format:    *resultFormat,
-		resultOut: *resultOut,
-	}, stdout, stderr)
+	mode := resultModeOptions{format: *resultFormat, resultOut: *resultOut}
+	var rc int
+	var outcomes []RunOutcome
+	if *follow {
+		sentinel := shell.NewSentinel()
+		marker := sentinel + "_FOLLOW"
+		deps.Follow = newFollowEmitter(stderr, hosts[0], marker, sentinel)
+		rc, outcomes = runInvocationFollow(deps, hostOpts, mode, stdout, stderr, time.Duration(*followInterval)*time.Second)
+	} else {
+		rc, outcomes = runInvocation(deps, hostOpts, mode, stdout, stderr)
+	}
 	ids := make([]string, len(outcomes))
 	for i, outcome := range outcomes {
 		ids[i] = outcome.ArtifactID()
@@ -461,6 +489,42 @@ func runInvocation(deps Deps, hostOpts []Opts, mode resultModeOptions, stdout, s
 	return writeRunResults(deps.Store.Root, runs, mode, stdout, stderr), outcomes
 }
 
+// runInvocationFollow keeps normal final rendering untouched while emitting its
+// ephemeral terminal event after persistence and before that rendering.
+func runInvocationFollow(deps Deps, hostOpts []Opts, mode resultModeOptions, stdout, stderr io.Writer, interval time.Duration) (int, []RunOutcome) {
+	deps.Follow.setHeartbeatInterval(interval)
+	var r hostRunResult
+	done := make(chan struct{})
+	go func() { r.outcome = runHost(deps, hostOpts[0], &r.stdout, &r.stderr); close(done) }()
+	var ticker *time.Ticker
+	var heartbeat <-chan time.Time
+	started := deps.Follow.startedSignal
+	defer func() {
+		if ticker != nil {
+			ticker.Stop()
+		}
+	}()
+	for {
+		select {
+		case <-done:
+			// Final rendering/publication must complete before the terminal
+			// follow record so --result-out failures are represented without
+			// contaminating follow stderr with plain diagnostics.
+			var finalOut, diagnostics bytes.Buffer
+			rc := writeRunResults(deps.Store.Root, []hostRunResult{r}, mode, &finalOut, &diagnostics)
+			deps.Follow.completed(deps.Store.Root, r.outcome, rc, diagnostics.String())
+			_, _ = stdout.Write(finalOut.Bytes())
+			return rc, []RunOutcome{r.outcome}
+		case <-started:
+			ticker = time.NewTicker(interval)
+			heartbeat = ticker.C
+			started = nil
+		case <-heartbeat:
+			deps.Follow.heartbeat()
+		}
+	}
+}
+
 // loadBody reads the command body from path — "-" means stdin, matching
 // the CLI surface doc's "body from file or stdin (never argv)".
 func loadBody(path string) (string, error) {
@@ -497,6 +561,18 @@ func splitAtDashDash(args []string) (before, after []string, found bool) {
 // "body:"+sha256hex(body)[:16], exactly the convention delta.Key's own doc
 // comment specifies for its callers, and matching the design doc's Deltas
 // section ("body-file runs key on the body's sha256").
+// stripFollowMarker removes only the wrapper control line from final output;
+// the random marker cannot collide with normal user output in practice.
+func stripFollowMarker(out []byte, marker string) []byte {
+	for _, ending := range []string{"\n", "\r\n"} {
+		needle := []byte(marker + ending)
+		if i := bytes.Index(out, needle); i >= 0 {
+			return append(append([]byte(nil), out[:i]...), out[i+len(needle):]...)
+		}
+	}
+	return out
+}
+
 func deltaKeyCommand(opts Opts) string {
 	if !opts.FromFile {
 		return opts.Command
@@ -610,6 +686,9 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 	}
 	restore := shell.EnvRestoreSet(baseline, st.Env)
 	sentinel := shell.NewSentinel()
+	if deps.Follow != nil {
+		sentinel = deps.Follow.sentinel
+	}
 
 	var (
 		remoteExit int
@@ -620,13 +699,22 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 	)
 
 	start := time.Now()
+	if deps.Follow != nil {
+		if _, ok := deps.Tr.(transport.StreamingTransport); !ok {
+			return newInternalFailureOutcome(followUnavailable(stderr))
+		}
+	}
 
 	if facts.OS == "windows" {
 		powerShell := facts.Shell
 		if opts.PowerShellHost != "" || powerShell == "" {
 			powerShell = selectedPowerShell
 		}
-		script := shell.PwshScript(opts.Command, st, restore, sentinel)
+		marker := ""
+		if deps.Follow != nil {
+			marker = deps.Follow.marker
+		}
+		script := shell.PwshScriptFollow(opts.Command, st, restore, sentinel, marker)
 
 		tmp, err := os.CreateTemp("", "sshai-*.ps1")
 		if err != nil {
@@ -661,7 +749,12 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		}
 
 		invocation := shell.PwshInvocation(facts.Form, powerShell, "-NoProfile -ExecutionPolicy Bypass -File "+remotePath)
-		res, err := deps.Tr.Exec(opts.Host, invocation, nil, opts.Timeout)
+		var res transport.Result
+		if deps.Follow != nil {
+			res, err = deps.Tr.(transport.StreamingTransport).ExecStream(opts.Host, invocation, nil, opts.Timeout, deps.Follow.output)
+		} else {
+			res, err = deps.Tr.Exec(opts.Host, invocation, nil, opts.Timeout)
+		}
 		if err != nil {
 			if te, isTE := asTransportError(err); isTE {
 				return handleTransportError(deps, opts, te, stdout, stderr)
@@ -671,13 +764,25 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		}
 		remoteExit, truncated = res.ExitCode, res.Truncated
 		out, parsedSt, parseOK = shell.PwshParse(res.Output, sentinel)
+		if deps.Follow != nil {
+			out = stripFollowMarker(out, deps.Follow.marker)
+		}
 	} else {
-		wrapped := shell.BashWrap(opts.Command, st, restore, sentinel)
+		marker := ""
+		if deps.Follow != nil {
+			marker = deps.Follow.marker
+		}
+		wrapped := shell.BashWrapFollow(opts.Command, st, restore, sentinel, marker)
 		invocation := "bash -s"
 		if opts.PosixShell != "" {
 			invocation = shell.POSIXShellInvocation(opts.PosixShell)
 		}
-		res, err := deps.Tr.Exec(opts.Host, invocation, wrapped, opts.Timeout)
+		var res transport.Result
+		if deps.Follow != nil {
+			res, err = deps.Tr.(transport.StreamingTransport).ExecStream(opts.Host, invocation, wrapped, opts.Timeout, deps.Follow.output)
+		} else {
+			res, err = deps.Tr.Exec(opts.Host, invocation, wrapped, opts.Timeout)
+		}
 		if err != nil {
 			if te, isTE := asTransportError(err); isTE {
 				return handleTransportError(deps, opts, te, stdout, stderr)
@@ -687,6 +792,9 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		}
 		remoteExit, truncated = res.ExitCode, res.Truncated
 		out, parsedSt, parseOK = shell.BashParse(res.Output, sentinel)
+		if deps.Follow != nil {
+			out = stripFollowMarker(out, deps.Follow.marker)
+		}
 	}
 
 	durationMs := time.Since(start).Milliseconds()

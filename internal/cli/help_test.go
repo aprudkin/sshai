@@ -50,7 +50,7 @@ func TestHelpRunShowsFullFlagReference(t *testing.T) {
 		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
 	}
 	s := out.String()
-	for _, flag := range []string{"--body-file", "--posix-shell", "--powershell-host", "--accept-new-host-key", "--proxy-jump", "--delta", "--budget", "--timeout", "--ctx", "--result-format", "--result-out"} {
+	for _, flag := range []string{"--body-file", "--posix-shell", "--powershell-host", "--accept-new-host-key", "--proxy-jump", "--delta", "--budget", "--timeout", "--ctx", "--result-format", "--result-out", "--follow", "--follow-interval"} {
 		if !strings.Contains(s, flag) {
 			t.Fatalf("help run missing flag %q: %q", flag, s)
 		}

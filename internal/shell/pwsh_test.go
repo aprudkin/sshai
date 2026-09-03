@@ -29,6 +29,17 @@ func TestPwshScriptStartsWithBOMAndPreamble(t *testing.T) {
 	}
 }
 
+func TestPwshScriptFollowCombinesAllBodyStreamsOnlyInFollowMode(t *testing.T) {
+	body := "Write-Error 'err'"
+	if !bytes.Equal(PwshScript(body, State{}, nil, "S"), PwshScriptFollow(body, State{}, nil, "S", "")) {
+		t.Fatal("non-follow script bytes changed")
+	}
+	follow := string(PwshScriptFollow(body, State{}, nil, "S", "MARK"))
+	if !strings.Contains(follow, "Write-Output 'MARK'\n  & {\n"+body+"\n  } *>&1") {
+		t.Fatalf("follow script lacks all-stream redirect:\n%s", follow)
+	}
+}
+
 func TestPwshScriptGuardsLastExitCodeUnderStrictMode(t *testing.T) {
 	body := "Set-StrictMode -Version Latest\n$ErrorActionPreference = 'Stop'\n[pscustomobject]@{ ok = $true } | ConvertTo-Json -Compress"
 	txt := string(PwshScript(body, State{}, nil, "__SSHAI_x__"))
@@ -81,6 +92,42 @@ func TestPwshScriptStrictModeExitBehavior(t *testing.T) {
 			t.Fatalf("exit = %v, want 5; output=%q", err, out)
 		}
 	})
+}
+
+func TestPwshScriptFollowExitStreamsAndState(t *testing.T) {
+	powerShell, err := exec.LookPath("pwsh")
+	if err != nil {
+		t.Skip("pwsh is not installed")
+	}
+
+	dir := t.TempDir()
+	body := "Set-StrictMode -Version Latest\nSet-Location -LiteralPath '" + pwq(dir) + "'\n$env:SSHAI_FOLLOW_TEST = 'kept'\n/bin/sh -c 'printf follow-stderr >&2; exit 5'"
+	if runtime.GOOS == "windows" {
+		body = "Set-StrictMode -Version Latest\nSet-Location -LiteralPath '" + pwq(dir) + "'\n$env:SSHAI_FOLLOW_TEST = 'kept'\n& \"$env:WINDIR\\System32\\cmd.exe\" /c \"echo follow-stderr 1>&2 & exit 5\""
+	}
+	const sentinel = "__SSHAI_follow_state__"
+	const marker = "__SSHAI_follow_started__"
+	path := filepath.Join(t.TempDir(), "follow.ps1")
+	if err := os.WriteFile(path, PwshScriptFollow(body, State{}, nil, sentinel, marker), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var combined bytes.Buffer
+	cmd := exec.Command(powerShell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path)
+	// ExecStream assigns one writer to both pipes so os/exec retains their
+	// order; native PowerShell stderr is therefore part of remote output.
+	cmd.Stdout, cmd.Stderr = &combined, &combined
+	err = cmd.Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 5 {
+		t.Fatalf("exit=%v, want 5; output=%q", err, combined.Bytes())
+	}
+	out, st, ok := PwshParse(combined.Bytes(), sentinel)
+	if !ok || !strings.Contains(string(out), marker) || !strings.Contains(string(out), "follow-stderr") {
+		t.Fatalf("out=%q ok=%v", out, ok)
+	}
+	if filepath.Clean(st.Cwd) != filepath.Clean(dir) || st.Env["SSHAI_FOLLOW_TEST"] != "kept" {
+		t.Fatalf("state=%+v, want cwd=%q and env continuity", st, dir)
+	}
 }
 
 func TestPwshInvocationForms(t *testing.T) {

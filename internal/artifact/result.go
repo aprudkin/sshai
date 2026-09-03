@@ -22,7 +22,8 @@ type Summary struct {
 // field names are the frozen v1 contract. Empty strings remain present except
 // for transport_diagnostic, an additive error-only field omitted when no safe
 // diagnostic is available so default envelopes remain byte-compatible.
-type runEntry struct {
+// ResultEntry is the stable v1 per-run result schema.
+type ResultEntry struct {
 	ID                         string `json:"id"`
 	Host                       string `json:"host"`
 	Ctx                        string `json:"ctx"`
@@ -44,10 +45,15 @@ type runEntry struct {
 }
 
 type envelope struct {
-	SchemaVersion string     `json:"schema_version"`
-	BatchID       string     `json:"batch_id"`
-	Summary       Summary    `json:"summary"`
-	Runs          []runEntry `json:"runs"`
+	SchemaVersion string        `json:"schema_version"`
+	BatchID       string        `json:"batch_id"`
+	Summary       Summary       `json:"summary"`
+	Runs          []ResultEntry `json:"runs"`
+}
+
+// ResultEntryForMeta maps artifact metadata to the canonical v1 run schema.
+func ResultEntryForMeta(root string, m Meta) ResultEntry {
+	return ResultEntry{ID: m.ID, Host: m.Host, Ctx: m.Ctx, Command: m.Command, Exit: m.Exit, TransportError: m.TransportErr, TransportDiagnostic: m.TransportDiagnostic, AcceptedHostKeyAlgorithm: m.AcceptedHostKeyAlgorithm, AcceptedHostKeyFingerprint: m.AcceptedHostKeyFingerprint, ArtifactPath: filepath.Join(root, "art", m.ID), Bytes: m.Bytes, Lines: m.Lines, SHA256: m.SHA256, DurationMs: m.DurationMs, Ts: m.Ts.UTC().Format(time.RFC3339Nano), Truncated: m.Truncated, Binary: m.Binary, DeltaBase: m.DeltaBase}
 }
 
 // RenderResult builds the v1 machine-readable envelope as a single JSON
@@ -56,28 +62,9 @@ type envelope struct {
 // field is a JSON-serializable scalar, so the error is swallowed defensively
 // rather than returned.
 func RenderResult(root string, metas []Meta, summary Summary, batchID string) []byte {
-	runs := make([]runEntry, 0, len(metas))
+	runs := make([]ResultEntry, 0, len(metas))
 	for _, m := range metas {
-		runs = append(runs, runEntry{
-			ID:                         m.ID,
-			Host:                       m.Host,
-			Ctx:                        m.Ctx,
-			Command:                    m.Command,
-			Exit:                       m.Exit,
-			TransportError:             m.TransportErr,
-			TransportDiagnostic:        m.TransportDiagnostic,
-			AcceptedHostKeyAlgorithm:   m.AcceptedHostKeyAlgorithm,
-			AcceptedHostKeyFingerprint: m.AcceptedHostKeyFingerprint,
-			ArtifactPath:               filepath.Join(root, "art", m.ID),
-			Bytes:                      m.Bytes,
-			Lines:                      m.Lines,
-			SHA256:                     m.SHA256,
-			DurationMs:                 m.DurationMs,
-			Ts:                         m.Ts.UTC().Format(time.RFC3339Nano),
-			Truncated:                  m.Truncated,
-			Binary:                     m.Binary,
-			DeltaBase:                  m.DeltaBase,
-		})
+		runs = append(runs, ResultEntryForMeta(root, m))
 	}
 	env := envelope{
 		SchemaVersion: "v1",

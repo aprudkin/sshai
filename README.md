@@ -97,6 +97,13 @@ For automation, request a versioned JSON envelope:
 sshai run --result-format=json web01 -- uname -a
 ```
 
+For one long-running host command, opt into bounded JSONL events on stderr while preserving the
+normal final stdout result:
+
+```bash
+sshai run --follow --follow-interval 5 web01 -- long-running-check
+```
+
 Recognized SSH failures expose only a canonical `transport_diagnostic`; raw SSH stderr remains
 private. An explicitly authorized host-key acceptance also returns the accepted algorithm and
 SHA-256 fingerprint.

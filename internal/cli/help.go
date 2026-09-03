@@ -101,6 +101,14 @@ Flags:
                           FILE with one private envelope (mode 0600).
                           Existing regular files are replaced; symlinks and
                           other non-regular paths are refused.
+  --follow                for exactly one host, write ephemeral live JSONL v1
+                          events to stderr. Output is combined UTF-8, capped at
+                          64 KiB/256 lines and 4 KiB per raw data payload, with
+                          at most one output event per 100ms. Final stdout and
+                          --result-out remain unchanged
+                          and are written only on completion
+  --follow-interval N     heartbeat interval in seconds while following;
+                          default 10, minimum 1, requires --follow
 
 
 sshai's own process exit mirrors the remote command's exit code.

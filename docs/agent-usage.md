@@ -90,6 +90,31 @@ algorithm and SHA256 fingerprint of the newly persisted key.
 same envelope bytes plus its trailing newline. The destination is mode
 `0600`; symlinks, directories, and other non-regular paths are refused.
 
+## Live follow events
+
+For one host, `sshai run --follow --follow-interval 10 ...` writes ephemeral
+JSONL v1 progress events to stderr. It emits `started` only after the remote
+wrapper has begun the user body, then periodic `heartbeat` events and bounded
+combined-output previews. Output events have `stream: "combined"` and UTF-8
+`data`; preview payload is capped at 64 KiB and 256 lines, each event's raw
+UTF-8 `data` payload is at most 4 KiB, and output events are rate-limited to
+one per 100 ms. Only `heartbeat` events may be coalesced; all accepted output
+precedes a possible single suppression event and then `completed`. The follow
+transport combines remote stdout and stderr; the wrappers also route Bash
+stderr and PowerShell logical streams into that combined output. Local OpenSSH
+diagnostics are diverted to a private log and never previewed live, so
+transport diagnostics remain sanitized. Result publication (including
+`--result-out`) completes before the final `completed` event so its outcome
+and diagnostics are truthful; that event still precedes the unchanged final
+stdout result. Its `outcome` carries the result fields (including exit,
+transport error, and artifact metadata when saved) plus the normal summary,
+actual `process_exit`, and bounded local `diagnostics` (for example result
+publication failures). Follow
+previews are never stored, may be suppressed for binary/invalid UTF-8 or
+preview limits, and do not replace the authoritative artifact.
+`--follow-interval` is in whole seconds (default 10, minimum 1) and requires
+`--follow`; fan-out is rejected.
+
 
 ## Explicit fallbacks
 
