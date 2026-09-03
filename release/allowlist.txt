@@ -10,6 +10,9 @@ go.sum
 assets/readme/hero.svg
 assets/readme/banner.svg
 assets/readme/banner-ru.svg
+assets/readme/architecture-dark.svg
+assets/readme/architecture-light.svg
+assets/readme/architecture.mmd
 .github/workflows/ci.yml
 .github/workflows/release.yml
 cmd/sshai/main.go
@@ -23,8 +26,11 @@ docs/public-release/sanitization-report.md
 release/allowlist.txt
 release/release-manifest.yaml
 release/homebrew/sshai.rb.tmpl
+release/licenses/go-LICENSE
+release/licenses/go-PATENTS
 skills/sshai/SKILL.md
 scripts/install.sh
+scripts/collect-third-party-licenses.py
 scripts/package-release.sh
 scripts/render-homebrew-formula.sh
 scripts/benchmark_v1_1.py
@@ -40,6 +46,9 @@ internal/artifact/store.go
 internal/artifact/store_test.go
 internal/cli/help.go
 internal/cli/help_test.go
+internal/cli/follow.go
+internal/cli/follow_emitter_test.go
+internal/cli/follow_test.go
 internal/cli/misc.go
 internal/cli/misc_test.go
 internal/cli/query.go

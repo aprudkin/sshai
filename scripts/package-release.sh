@@ -26,6 +26,9 @@ mkdir -p -- "$dist_dir"
 find "$dist_dir" -maxdepth 1 -type f -name 'sshai_*' -delete
 rm -f -- "$dist_dir/checksums.txt" "$dist_dir/sshai.rb"
 
+licenses="$stage_root/THIRD_PARTY_LICENSES"
+(cd "$repo_dir" && python3 scripts/collect-third-party-licenses.py "$licenses")
+
 while read -r goos goarch archive; do
   name="sshai_${version}_${goos}_${goarch}"
   stage="$stage_root/$name"
@@ -43,6 +46,7 @@ while read -r goos goarch archive; do
   )
   cp "$repo_dir/README.md" "$repo_dir/README.ru.md" "$repo_dir/LICENSE" "$stage/"
   cp -R "$repo_dir/skills/sshai" "$stage/skills/"
+  cp -R "$licenses" "$stage/"
 
   if [ "$archive" = zip ]; then
     (cd "$stage_root" && zip -qr "$dist_dir/$name.zip" "$name")
