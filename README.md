@@ -17,6 +17,14 @@ Use `sshai` for already-authorized, non-interactive commands on hosts reachable 
 `ssh_config`, when you need evidence without replaying large results into an agent conversation.
 It keeps transport, evidence, and operational authority separate.
 
+## Pi agent skill
+
+When using `sshai` through Pi, pair the CLI with the purpose-built
+[`sshai` agent skill](https://github.com/aprudkin/pi-config/blob/main/skills/sshai/SKILL.md).
+The skill gives the agent recommended invocation patterns, shell-selection guidance,
+bounded-output and local-artifact workflows, safety boundaries, and follow-mode usage. The skill
+is optional; the CLI also works without it.
+
 ## Capabilities
 
 - Run commands on one or more Linux SSH aliases through Bash by default or a selected POSIX shell.
