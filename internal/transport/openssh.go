@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +71,8 @@ var transportDiagnosticPatterns = []struct {
 	{[]byte("connection closed"), "connection closed"},
 }
 
+var openSSHControlMasterSupported = runtime.GOOS != "windows"
+
 func safeTransportDiagnostic(output []byte) string {
 	if len(output) > maxTransportDiagnosticBytes {
 		output = output[len(output)-maxTransportDiagnosticBytes:]
@@ -84,8 +87,8 @@ func safeTransportDiagnostic(output []byte) string {
 }
 
 // OpenSSH is a Transport that shells out to the system ssh(1) and scp(1)
-// binaries, sharing one ControlMaster socket per host to avoid paying a
-// fresh TCP+auth handshake on every call.
+// binaries, using one ControlMaster socket per host on clients that support
+// connection sharing to avoid paying a fresh TCP+auth handshake on every call.
 type OpenSSH struct {
 	controlDir     string
 	controlPersist string
@@ -114,13 +117,15 @@ type OpenSSHOptions struct {
 	ProxyJumpNone    bool
 }
 
-// NewOpenSSH builds an OpenSSH transport whose every Exec and Put call
-// carries the same ControlMaster options — each its own argv element —
-// pointed at a socket directory under controlDir and persisted for
-// controlPersist after the last client disconnects. streamCap bounds the
-// combined stdout+stderr captured per call; a remote command that writes
-// past it is killed and its Result reports Truncated. options apply only to
-// this transport instance.
+// NewOpenSSH builds an OpenSSH transport. On OpenSSH clients that support
+// connection sharing, every Exec and Put call carries the same ControlMaster
+// options — each its own argv element — pointed at a socket directory under
+// controlDir and persisted for controlPersist after the last client
+// disconnects. Windows OpenSSH clients do not support that Unix socket shape,
+// so they keep the same transport semantics without ControlMaster options.
+// streamCap bounds the combined stdout+stderr captured per call; a remote
+// command that writes past it is killed and its Result reports Truncated.
+// options apply only to this transport instance.
 func NewOpenSSH(controlDir, controlPersist string, streamCap int64, options OpenSSHOptions) *OpenSSH {
 	tr := &OpenSSH{
 		controlDir:     controlDir,
@@ -141,9 +146,13 @@ func (tr *OpenSSH) sshOpts(host string) []string {
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=10",
 		"-o", "LogLevel=ERROR",
-		"-o", "ControlMaster=auto",
-		"-o", "ControlPath=" + tr.controlDir + "/%C",
-		"-o", "ControlPersist=" + tr.controlPersist,
+	}
+	if openSSHControlMasterSupported {
+		opts = append(opts,
+			"-o", "ControlMaster=auto",
+			"-o", "ControlPath="+tr.controlDir+"/%C",
+			"-o", "ControlPersist="+tr.controlPersist,
+		)
 	}
 	if tr.options.ProxyJumpNone {
 		opts = append(opts, "-o", "ProxyJump=none")
@@ -423,11 +432,12 @@ func safeHostKeyAlgorithm(algorithm string) bool {
 // exit 255 is indistinguishable at this layer and treated the same way
 // ps_ssh.py treats it: as a transport failure, not an honest exit. The
 // local ssh process failing to start at all (missing binary, exec
-// permission denied — see run's execStartFailedRC) is reported the same
-// way, since there is no remote exit code to speak of either. Any other
-// exit code, including 0, is the remote command's own honest status. A
-// context deadline exceeded before the process finished maps to
-// TransportError{"timeout"} regardless of rc.
+// permission denied — see run's execStartFailedRC) or ending without a
+// clean local process exit is reported the same way, since there is no
+// remote exit code to speak of either. Any other exit code, including 0,
+// is the remote command's own honest status. A context deadline exceeded
+// before the process finished maps to TransportError{"timeout"} regardless
+// of rc.
 func (tr *OpenSSH) Exec(host, command string, stdin []byte, timeout time.Duration) (Result, error) {
 	if err := tr.prepareAcceptedHostKey(host); err != nil {
 		return Result{}, newTransportError("ssh", "host key inspection failed")
@@ -457,6 +467,9 @@ func (tr *OpenSSH) Exec(host, command string, stdin []byte, timeout time.Duratio
 	if tr.streamCap > 0 && int64(len(out)) > tr.streamCap {
 		truncated = true
 		out = out[:tr.streamCap]
+	}
+	if rc < 0 && !truncated {
+		return Result{}, NewTransportError("ssh", out)
 	}
 
 	return Result{
@@ -516,6 +529,13 @@ func (tr *OpenSSH) ExecStream(host, command string, stdin []byte, timeout time.D
 		return Result{}, NewTransportError("ssh", diagnostic)
 	}
 	out, truncated := w.Bytes()
+	if rc < 0 && !truncated {
+		diagnostic, err := boundedSSHLog(logName)
+		if err != nil {
+			return Result{}, newTransportError("ssh", "ssh diagnostics unavailable")
+		}
+		return Result{}, NewTransportError("ssh", diagnostic)
+	}
 	return Result{ExitCode: rc, Output: out, Truncated: truncated}, nil
 }
 
@@ -616,6 +636,9 @@ func (tr *OpenSSH) Put(host, localPath, remotePath string) error {
 	}
 	if rc == execStartFailedRC {
 		return newTransportError("scp", "scp process failed to start")
+	}
+	if rc < 0 {
+		return NewTransportError("scp", out)
 	}
 	if rc != 0 {
 		return NewTransportError("scp", out)

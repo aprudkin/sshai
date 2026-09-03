@@ -28,6 +28,26 @@ func argvContains(argv []string, want string) bool {
 	return false
 }
 
+func withControlMasterSupport(t *testing.T, supported bool) {
+	t.Helper()
+	original := openSSHControlMasterSupported
+	openSSHControlMasterSupported = supported
+	t.Cleanup(func() { openSSHControlMasterSupported = original })
+}
+
+func setTransportTestUserHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if runtime.GOOS == "windows" {
+		volume := filepath.VolumeName(home)
+		if volume != "" {
+			t.Setenv("HOMEDRIVE", volume)
+			t.Setenv("HOMEPATH", strings.TrimPrefix(home, volume))
+		}
+	}
+}
+
 func TestExecMirrorsRemoteExit(t *testing.T) {
 	tr := NewOpenSSH(t.TempDir(), "15m", 1<<20, OpenSSHOptions{})
 	tr.Runner = fake(3, "boom\n", false)
@@ -85,6 +105,7 @@ func TestExecTimeout(t *testing.T) {
 }
 
 func TestArgvDiscipline(t *testing.T) {
+	withControlMasterSupport(t, true)
 	tr := NewOpenSSH("/tmp/cm", "15m", 1<<20, OpenSSHOptions{})
 	var captured []string
 	tr.Runner = func(argv []string, _ []byte, _ time.Duration) (int, []byte, bool) {
@@ -106,7 +127,32 @@ func TestArgvDiscipline(t *testing.T) {
 	}
 }
 
+func TestControlMasterOptionsOmittedWhenUnsupported(t *testing.T) {
+	withControlMasterSupport(t, false)
+	tr := NewOpenSSH("/tmp/cm", "15m", 1<<20, OpenSSHOptions{})
+	var captured []string
+	tr.Runner = func(argv []string, _ []byte, _ time.Duration) (int, []byte, bool) {
+		captured = argv
+		return 0, nil, false
+	}
+
+	if _, err := tr.Exec("h1", "true", nil, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"ControlMaster=auto", "ControlPath=/tmp/cm/%C", "ControlPersist=15m"} {
+		if argvContains(captured, forbidden) {
+			t.Fatalf("unsupported ControlMaster option leaked into argv: %q", captured)
+		}
+	}
+	for _, want := range []string{"BatchMode=yes", "ConnectTimeout=10", "LogLevel=ERROR"} {
+		if !argvContains(captured, want) {
+			t.Fatalf("base ssh option %q missing: %q", want, captured)
+		}
+	}
+}
+
 func TestInvocationOverridesAreScopedToConfiguredAlias(t *testing.T) {
+	withControlMasterSupport(t, true)
 	tr := NewOpenSSH("/tmp/cm", "15m", 1<<20, OpenSSHOptions{
 		AcceptNewHostKey: "new-host",
 		ProxyJumpNone:    true,
@@ -161,6 +207,7 @@ func TestInvocationOverridesAreScopedToConfiguredAlias(t *testing.T) {
 }
 
 func TestInvocationOverridesApplyToSCP(t *testing.T) {
+	withControlMasterSupport(t, true)
 	tr := NewOpenSSH("/tmp/cm", "15m", 1<<20, OpenSSHOptions{
 		AcceptNewHostKey: "win01",
 		ProxyJumpNone:    true,
@@ -228,7 +275,7 @@ func TestReadKnownHostKeysMatchesPlainAndHashedAliases(t *testing.T) {
 
 func TestParseKnownHostsConfigUsesAliasAndNonDefaultPort(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTransportTestUserHome(t, home)
 	lookup, paths, err := parseKnownHostsConfig([]byte(
 		"hostname private.example\nport 2222\nuserknownhostsfile ~/.ssh/known_hosts\n",
 	))
@@ -479,6 +526,26 @@ func TestExecStartFailureIsTransportError(t *testing.T) {
 	var te *TransportError
 	if !errors.As(err, &te) || te.Reason != "ssh" {
 		t.Fatalf("want TransportError{ssh}, got %v", err)
+	}
+}
+
+func TestExecNegativeLocalExitIsTransportError(t *testing.T) {
+	tr := NewOpenSSH(t.TempDir(), "15m", 1<<20, OpenSSHOptions{})
+	tr.Runner = fake(-1, "Read from remote host h1: Unknown error", false)
+	_, err := tr.Exec("h1", "true", nil, time.Minute)
+	var te *TransportError
+	if !errors.As(err, &te) || te.Reason != "ssh" {
+		t.Fatalf("want TransportError{ssh}, got %v", err)
+	}
+}
+
+func TestPutNegativeLocalExitIsTransportError(t *testing.T) {
+	tr := NewOpenSSH(t.TempDir(), "15m", 1<<20, OpenSSHOptions{})
+	tr.Runner = fake(-1, "Read from remote host h1: Unknown error", false)
+	err := tr.Put("h1", "/local/script.sh", "/remote/script.sh")
+	var te *TransportError
+	if !errors.As(err, &te) || te.Reason != "scp" {
+		t.Fatalf("want TransportError{scp}, got %v", err)
 	}
 }
 

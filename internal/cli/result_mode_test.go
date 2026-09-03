@@ -413,15 +413,9 @@ func TestRunResultFormatJSONSaveFailure(t *testing.T) {
 		t.Fatalf("OpenStore: %v", err)
 	}
 	t.Cleanup(func() {
-		// Restore write permission so t.TempDir's automatic cleanup can
-		// remove <root>/art; without this the dir is left behind on some
-		// filesystems (and any post-test debugging is harder).
-		_ = os.Chmod(filepath.Join(root, "art"), 0o700)
 		store.Close()
 	})
-	if err := os.Chmod(filepath.Join(root, "art"), 0o500); err != nil {
-		t.Fatalf("chmod art: %v", err)
-	}
+	poisonArtifactDir(t, root)
 
 	f := &fakeTr{rc: 0}
 	var out, errB bytes.Buffer
@@ -458,12 +452,9 @@ func TestRunResultFormatJSONFanOutSaveFailure(t *testing.T) {
 		t.Fatalf("OpenStore: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = os.Chmod(filepath.Join(root, "art"), 0o700)
 		store.Close()
 	})
-	if err := os.Chmod(filepath.Join(root, "art"), 0o500); err != nil {
-		t.Fatalf("chmod art: %v", err)
-	}
+	poisonArtifactDir(t, root)
 
 	f := &multiHostTr{rcs: map[string]int{"h1": 0, "h2": 0}}
 	var out, errB bytes.Buffer

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,19 @@ import (
 	"github.com/aprudkin/sshai/internal/artifact"
 	"github.com/aprudkin/sshai/internal/session"
 )
+
+func setTestUserHome(t *testing.T, home string) {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if runtime.GOOS == "windows" {
+		volume := filepath.VolumeName(home)
+		if volume != "" {
+			t.Setenv("HOMEDRIVE", volume)
+			t.Setenv("HOMEPATH", strings.TrimPrefix(home, volume))
+		}
+	}
+}
 
 // ---- log ----
 
@@ -139,7 +153,7 @@ func TestParseSinceDurationsAndDate(t *testing.T) {
 
 func TestHostsParsesSSHConfigSkipsWildcardsAndMerges(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestUserHome(t, home)
 	root := t.TempDir()
 	t.Setenv("SSHAI_ROOT", root)
 
@@ -174,7 +188,7 @@ func TestHostsParsesSSHConfigSkipsWildcardsAndMerges(t *testing.T) {
 
 func TestHostsOSFallbackOrder(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestUserHome(t, home)
 	root := t.TempDir()
 	t.Setenv("SSHAI_ROOT", root)
 
@@ -213,7 +227,7 @@ func TestHostsOSFallbackOrder(t *testing.T) {
 
 func TestHostsNoSSHConfigFileIsNotAnError(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestUserHome(t, home)
 	root := t.TempDir()
 	t.Setenv("SSHAI_ROOT", root)
 	toml := "[hosts.onlyhost]\nos = \"linux\"\n"

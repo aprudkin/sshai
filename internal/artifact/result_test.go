@@ -2,6 +2,7 @@ package artifact
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -47,7 +48,7 @@ func TestRenderResultSchemaShape(t *testing.T) {
 		t.Fatalf("len(runs)=%d, want 2", len(runs))
 	}
 	r0, _ := runs[0].(map[string]any)
-	if r0["artifact_path"] != "/root/art/a17" {
+	if r0["artifact_path"] != filepath.Join("/root", "art", "a17") {
 		t.Fatalf("artifact_path=%v", r0["artifact_path"])
 	}
 	// empty-string-not-omitted: transport_error on a success must be "".

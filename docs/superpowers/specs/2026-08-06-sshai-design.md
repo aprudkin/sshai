@@ -61,10 +61,12 @@ the intersection still does not exist.
 One static Go binary, `sshai`. **No daemon of its own.** The two things a broker seemed necessary
 for are already solved by existing mechanisms:
 
-- *Connection persistence* — ssh ControlMaster/ControlPersist. sshai passes
-  `-o ControlMaster=auto -o ControlPath=~/.sshai/cm/%C -o ControlPersist=15m` on every call.
-  The ssh client manages the background master process itself; reconnection is transparent; the
-  user's `ssh_config` needs no edits.
+- *Connection persistence* — ssh ControlMaster/ControlPersist where the local OpenSSH client
+  supports it. sshai passes
+  `-o ControlMaster=auto -o ControlPath=~/.sshai/cm/%C -o ControlPersist=15m` on supported
+  clients; Windows OpenSSH clients keep the same one-shot transport semantics without these
+  Unix-socket options. The ssh client manages the background master process itself where present;
+  reconnection is transparent; the user's `ssh_config` needs no edits.
 - *State persistence* (cwd/env, artifacts, run-log) — files and SQLite under `~/.sshai/`, safe for
   concurrent agent sessions (WAL + write-once artifact files via temp+rename).
 
@@ -173,7 +175,7 @@ art/<id>             # raw artifact bytes, write-once (temp+rename)
 db.sqlite            # run-log + artifact index + host facts (WAL mode)
 audit.jsonl          # append-only audit (S3)
 state/<host>/<ctx>.json
-cm/                  # ControlMaster sockets
+cm/                  # ControlMaster sockets on clients that support them
 config.toml          # budgets, retention, timeouts, per-host: os override, readonly
 ```
 
@@ -217,7 +219,8 @@ never lost to delta mode.
   as-is. Artifacts store raw bytes.
 - Binary output: NUL detection → `binary=1`, tail suppressed in the passport.
 - Stream cap (default 64 MB) → `truncated=1`.
-- ControlMaster death: `auto` re-establishes on the next call; host-facts cache is not invalidated.
+- ControlMaster death: `auto` re-establishes on the next call when connection sharing is enabled;
+  host-facts cache is not invalidated.
 - SSH/scp failure → stable `transport-error=ssh|scp|timeout`; recognized raw errors are reduced to
   an allowlisted canonical diagnostic. Key material, configuration, algorithm offers, paths, and
   other raw error text are never persisted or rendered. The explicit accept-new path is the sole
@@ -285,7 +288,7 @@ Landscape check before writing this spec; searches over GitHub/web via Exa.
 
 1. **Form:** "no daemon, no state between calls" → the tool still runs no daemon of its own, but
    on-disk state (artifacts, run-log, session state) and the ssh-managed ControlMaster background
-   process are in scope by design.
+   process, where supported by the local client, are in scope by design.
 2. **Language:** resolved — Go. The follow-ups owed on that decision (CLAUDE.md commands section,
    layout, `/sshai` in `.gitignore`) are applied.
 3. **Repo language:** English everywhere; the tool is intended to be open-sourced.

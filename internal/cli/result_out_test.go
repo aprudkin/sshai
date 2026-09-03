@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -49,9 +50,7 @@ func TestRunResultFormatJSONResultOutToFile(t *testing.T) {
 	if string(data) != out.String() {
 		t.Fatalf("result-out != stdout\nstdout: %s\nfile: %s", out.String(), data)
 	}
-	if fi, _ := os.Stat(outFile); fi.Mode().Perm() != 0o600 {
-		t.Fatalf("mode=%o, want 600", fi.Mode().Perm())
-	}
+	assertPOSIXPrivateFileMode(t, outFile)
 }
 
 // Existing --result-out files are atomically replaced by one private JSON
@@ -80,7 +79,15 @@ func TestRunResultFormatJSONResultOutReplacesExistingFile(t *testing.T) {
 	if string(data) != out.String() {
 		t.Fatalf("result-out != stdout\nstdout: %s\nfile: %s", out.String(), data)
 	}
-	fi, err := os.Stat(outFile)
+	assertPOSIXPrivateFileMode(t, outFile)
+}
+
+func assertPOSIXPrivateFileMode(t *testing.T, path string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
+	}
+	fi, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat result-out: %v", err)
 	}
