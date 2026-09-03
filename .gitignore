@@ -11,7 +11,9 @@ Thumbs.db
 
 # --- Agent tooling (per-user; CLAUDE.md and .claude/commands/ stay tracked) ---
 .claude/settings.local.json
+.memory/
 .serena/
+.superpowers/
 ANTIGRAVITY.md
 
 # --- Secrets and local state ---
