@@ -48,9 +48,6 @@ The execution path keeps captured output local and returns only bounded evidence
     alt="Sequence diagram showing an AI agent calling sshai through OpenSSH, sshai saving captured output locally, and only bounded passport or queried evidence returning to agent context">
 </picture>
 
-For a responsive walkthrough of this execution and evidence model, see the
-[visual execution guide](https://aprudkin.github.io/sshai/execution-model.html).
-
 ## Quick start
 
 Requirements: Go `1.26.5` or newer in the `1.26` line, OpenSSH, and a locally configured SSH
