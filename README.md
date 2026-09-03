@@ -5,10 +5,11 @@
 <p align="center"><img src="assets/readme/banner.svg" width="100%" alt="sshai: remote commands in, compact evidence out"></p>
 
 [![CI](https://github.com/aprudkin/sshai/actions/workflows/ci.yml/badge.svg)](https://github.com/aprudkin/sshai/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/aprudkin/sshai?display_name=tag&sort=semver)](https://github.com/aprudkin/sshai/releases/latest)
+[![Homebrew](https://img.shields.io/badge/Homebrew-aprudkin%2Ftap-FBB040?logo=homebrew&logoColor=black)](https://github.com/aprudkin/homebrew-tap)
 [![Go 1.26.5](https://img.shields.io/badge/Go-1.26.5-00ADD8?logo=go&logoColor=white)](go.mod)
 [![MIT license](https://img.shields.io/github/license/aprudkin/sshai)](LICENSE)
 [![Agent Skill included](https://img.shields.io/badge/Agent_Skill-included-6f42c1)](skills/sshai/SKILL.md)
-[![OpenSSH required](https://img.shields.io/badge/OpenSSH-required-2E8B57)](https://www.openssh.com/)
 
 `sshai` is a Go CLI for AI agents that runs non-interactive Linux commands through Bash by default
 or an explicitly selected POSIX shell, and Windows PowerShell commands over SSH. PowerShell 7
@@ -62,8 +63,7 @@ or newer in the `1.26` line.
 
 ### Homebrew
 
-The Homebrew package is prepared for v1.0.0 but is not published yet. After the release and tap are
-published, install the CLI and its bundled skill with:
+Install the CLI and its bundled skill from the `aprudkin/tap` repository:
 
 ```bash
 brew install aprudkin/tap/sshai

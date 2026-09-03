@@ -5,10 +5,11 @@ English version: [README.md](README.md).
 <p align="center"><img src="assets/readme/banner-ru.svg" width="100%" alt="sshai: удалённые команды и компактные доказательства"></p>
 
 [![CI](https://github.com/aprudkin/sshai/actions/workflows/ci.yml/badge.svg)](https://github.com/aprudkin/sshai/actions/workflows/ci.yml)
+[![Релиз](https://img.shields.io/github/v/release/aprudkin/sshai?display_name=tag&sort=semver)](https://github.com/aprudkin/sshai/releases/latest)
+[![Homebrew](https://img.shields.io/badge/Homebrew-aprudkin%2Ftap-FBB040?logo=homebrew&logoColor=black)](https://github.com/aprudkin/homebrew-tap)
 [![Go 1.26.5](https://img.shields.io/badge/Go-1.26.5-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Лицензия MIT](https://img.shields.io/github/license/aprudkin/sshai)](LICENSE)
 [![Навык агента включён](https://img.shields.io/badge/Agent_Skill-included-6f42c1)](skills/sshai/SKILL.md)
-[![Требуется OpenSSH](https://img.shields.io/badge/OpenSSH-required-2E8B57)](https://www.openssh.com/)
 
 `sshai` — утилита командной строки на `Go` для ИИ-агентов, запускающая неинтерактивные команды
 `Linux` через `Bash` по умолчанию или через явно выбранную `POSIX`-оболочку, а команды
@@ -67,8 +68,7 @@ English version: [README.md](README.md).
 
 ### Через Homebrew
 
-Пакет Homebrew подготовлен для версии v1.0.0, но пока не опубликован. После публикации релиза и
-репозитория Homebrew tap установите утилиту вместе с вложенным навыком:
+Установите утилиту вместе с вложенным навыком из репозитория `aprudkin/tap`:
 
 ```bash
 brew install aprudkin/tap/sshai

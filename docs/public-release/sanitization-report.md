@@ -10,9 +10,11 @@ The reviewed distribution set contains the 88 regular files listed in
 [`release/allowlist.txt`](../../release/allowlist.txt). The release target is
 `github:aprudkin/sshai`; the Homebrew formula target is `github:aprudkin/homebrew-tap`.
 
-**Result:** `PACKAGE-READY`. Publication of the exact `v1.0.0` artifact set recorded in
-[`release/release-manifest.yaml`](../../release/release-manifest.yaml) was explicitly authorized on
-2026-09-03.
+**Result:** `PUBLISHED`. The exact `v1.0.0` artifact set recorded in
+[`release/release-manifest.yaml`](../../release/release-manifest.yaml) was explicitly authorized and
+published on 2026-09-03. The release is available from
+[`aprudkin/sshai`](https://github.com/aprudkin/sshai/releases/tag/v1.0.0), and the formula is in
+[`aprudkin/homebrew-tap`](https://github.com/aprudkin/homebrew-tap).
 
 ## Inventory classification
 

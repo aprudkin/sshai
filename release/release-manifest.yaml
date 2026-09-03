@@ -8,7 +8,7 @@ target:
   release: v1.0.0
   homebrew_tap: github:aprudkin/homebrew-tap
   license: MIT
-  publication: authorized-2026-09-03
+  publication: published-2026-09-03
 artifacts:
   - sshai_1.0.0_darwin_amd64.tar.gz
   - sshai_1.0.0_darwin_arm64.tar.gz
@@ -48,8 +48,9 @@ excluded_bundles:
   - paths: [.git/, .env*, secrets/, state.json, logs/, tmp/, build/, dist/, '*.log', '*.test', sshai]
     reason: repository metadata, runtime state, credentials, logs, or generated output
 release_gate:
-  status: package-ready
+  status: published
   approved_at: 2026-09-03T04:45:04Z
+  published_at: 2026-09-03T04:53:53Z
   required_before_publication:
     - build a clean staging tree from release/allowlist.txt
     - re-run security and environment-path scans on the staging tree
