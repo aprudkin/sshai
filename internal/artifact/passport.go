@@ -12,6 +12,7 @@ type Meta struct {
 	Exit                       int
 	TransportErr               string
 	TransportDiagnostic        string
+	LocalError                 string
 	AcceptedHostKeyAlgorithm   string
 	AcceptedHostKeyFingerprint string
 	Bytes, Lines               int64
@@ -45,7 +46,9 @@ func HumanDuration(ms int64) string {
 func StatusLine(m Meta) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s host=%s", m.ID, m.Host)
-	if m.TransportErr != "" {
+	if m.LocalError != "" {
+		fmt.Fprintf(&b, " local-error=%s", m.LocalError)
+	} else if m.TransportErr != "" {
 		fmt.Fprintf(&b, " transport-error=%s", m.TransportErr)
 	} else {
 		fmt.Fprintf(&b, " exit=%d", m.Exit)

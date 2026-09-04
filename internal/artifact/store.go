@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS runs (
   exit INTEGER,
   transport_error TEXT NOT NULL DEFAULT '',
   transport_diagnostic TEXT NOT NULL DEFAULT '',
+  local_error TEXT NOT NULL DEFAULT '',
   accepted_host_key_algorithm TEXT NOT NULL DEFAULT '',
   accepted_host_key_fingerprint TEXT NOT NULL DEFAULT '',
   bytes INTEGER NOT NULL, lines INTEGER NOT NULL,
@@ -107,6 +108,7 @@ func ensureRunColumns(db *sql.DB) error {
 		definition string
 	}{
 		{"transport_diagnostic", "transport_diagnostic TEXT NOT NULL DEFAULT ''"},
+		{"local_error", "local_error TEXT NOT NULL DEFAULT ''"},
 		{"accepted_host_key_algorithm", "accepted_host_key_algorithm TEXT NOT NULL DEFAULT ''"},
 		{"accepted_host_key_fingerprint", "accepted_host_key_fingerprint TEXT NOT NULL DEFAULT ''"},
 	}
@@ -170,9 +172,9 @@ func (s *Store) Save(m Meta, key string, data []byte) (Meta, error) {
 	defer tx.Rollback()
 
 	res, err := tx.Exec(
-		`INSERT INTO runs (ts,host,ctx,command,key,exit,transport_error,transport_diagnostic,accepted_host_key_algorithm,accepted_host_key_fingerprint,bytes,lines,sha256,duration_ms,truncated,binary,delta_base)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		m.Ts.UTC().Format(time.RFC3339), m.Host, m.Ctx, m.Command, key, m.Exit, m.TransportErr, m.TransportDiagnostic,
+		`INSERT INTO runs (ts,host,ctx,command,key,exit,transport_error,transport_diagnostic,local_error,accepted_host_key_algorithm,accepted_host_key_fingerprint,bytes,lines,sha256,duration_ms,truncated,binary,delta_base)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		m.Ts.UTC().Format(time.RFC3339), m.Host, m.Ctx, m.Command, key, m.Exit, m.TransportErr, m.TransportDiagnostic, m.LocalError,
 		m.AcceptedHostKeyAlgorithm, m.AcceptedHostKeyFingerprint, m.Bytes, m.Lines, m.SHA256, m.DurationMs,
 		boolToInt(m.Truncated), boolToInt(m.Binary), m.DeltaBase,
 	)
@@ -208,9 +210,9 @@ func (s *Store) Get(id string) (Meta, string, error) {
 	var tsStr string
 	var truncated, binary, pruned int
 	row := s.DB.QueryRow(
-		`SELECT art_id, ts, host, ctx, command, exit, transport_error, transport_diagnostic, accepted_host_key_algorithm, accepted_host_key_fingerprint, bytes, lines, sha256, duration_ms, truncated, binary, delta_base, pruned
+		`SELECT art_id, ts, host, ctx, command, exit, transport_error, transport_diagnostic, local_error, accepted_host_key_algorithm, accepted_host_key_fingerprint, bytes, lines, sha256, duration_ms, truncated, binary, delta_base, pruned
 		 FROM runs WHERE art_id=?`, id)
-	if err := row.Scan(&m.ID, &tsStr, &m.Host, &m.Ctx, &m.Command, &m.Exit, &m.TransportErr, &m.TransportDiagnostic,
+	if err := row.Scan(&m.ID, &tsStr, &m.Host, &m.Ctx, &m.Command, &m.Exit, &m.TransportErr, &m.TransportDiagnostic, &m.LocalError,
 		&m.AcceptedHostKeyAlgorithm, &m.AcceptedHostKeyFingerprint, &m.Bytes, &m.Lines, &m.SHA256, &m.DurationMs,
 		&truncated, &binary, &m.DeltaBase, &pruned); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -243,9 +245,9 @@ func (s *Store) LastByKey(key string) (Meta, bool, error) {
 	var tsStr string
 	var truncated, binary int
 	row := s.DB.QueryRow(
-		`SELECT art_id, ts, host, ctx, command, exit, transport_error, transport_diagnostic, accepted_host_key_algorithm, accepted_host_key_fingerprint, bytes, lines, sha256, duration_ms, truncated, binary, delta_base
+		`SELECT art_id, ts, host, ctx, command, exit, transport_error, transport_diagnostic, local_error, accepted_host_key_algorithm, accepted_host_key_fingerprint, bytes, lines, sha256, duration_ms, truncated, binary, delta_base
 		 FROM runs WHERE key=? AND pruned=0 ORDER BY id DESC LIMIT 1`, key)
-	if err := row.Scan(&m.ID, &tsStr, &m.Host, &m.Ctx, &m.Command, &m.Exit, &m.TransportErr, &m.TransportDiagnostic,
+	if err := row.Scan(&m.ID, &tsStr, &m.Host, &m.Ctx, &m.Command, &m.Exit, &m.TransportErr, &m.TransportDiagnostic, &m.LocalError,
 		&m.AcceptedHostKeyAlgorithm, &m.AcceptedHostKeyFingerprint, &m.Bytes, &m.Lines, &m.SHA256, &m.DurationMs,
 		&truncated, &binary, &m.DeltaBase); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

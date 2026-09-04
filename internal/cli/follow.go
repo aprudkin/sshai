@@ -402,6 +402,8 @@ func followOutcomeKindName(k runOutcomeKind) string {
 		return "success"
 	case runOutcomeRemoteNonZero:
 		return "remote_nonzero"
+	case runOutcomeLocalFailure:
+		return "local_failure"
 	case runOutcomeTransportFailure:
 		return "transport_failure"
 	case runOutcomePolicyDenied:

@@ -81,6 +81,7 @@ type AuditEntry struct {
 	Host, Ctx, Subcommand, CommandPreview, BodySHA256, Verdict string
 	Exit                                                       int
 	TransportErr                                               string
+	LocalError                                                 string `json:",omitempty"`
 }
 
 // AppendAudit appends e as one JSON line to <root>/audit.jsonl, creating

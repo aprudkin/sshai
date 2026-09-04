@@ -75,6 +75,16 @@ func TestRunHostOutcomeRemoteNonZero(t *testing.T) {
 	}
 }
 
+func TestSavedLocalErrorOutcome(t *testing.T) {
+	outcome := newSavedRunOutcome(artifact.Meta{ID: "a1", Host: "web01", LocalError: "output-limit", TransportErr: "timeout", Exit: 23})
+	if outcome.Kind() != runOutcomeLocalFailure {
+		t.Fatalf("kind=%v, want local-failure", outcome.Kind())
+	}
+	if outcome.ExitCode() != exitUsage {
+		t.Fatalf("exit=%d, want %d", outcome.ExitCode(), exitUsage)
+	}
+}
+
 func TestRunHostOutcomeTransportFailure(t *testing.T) {
 	root := t.TempDir()
 	deps := Deps{Tr: &probeFailsTr{}, Store: openOutcomeTestStore(t, root)}
@@ -166,18 +176,19 @@ func TestSummarizeRunOutcomesUsesTypedClasses(t *testing.T) {
 		newSavedRunOutcome(artifact.Meta{ID: "a1", Host: "ok", Exit: 0}),
 		newSavedRunOutcome(artifact.Meta{ID: "a2", Host: "remote", Exit: 23}),
 		newSavedRunOutcome(artifact.Meta{ID: "a3", Host: "transport", TransportErr: "ssh"}),
+		newSavedRunOutcome(artifact.Meta{ID: "a4", Host: "local", LocalError: "timeout"}),
 		newPolicyDeniedOutcome(),
 	}
 
 	summary, metas := summarizeRunOutcomes(outcomes)
 
 	wantSummary := artifact.Summary{
-		Hosts: 4, OK: 1, Failed: 1, TransportErrors: 1, PolicyDenied: 1, WorstExit: 23,
+		Hosts: 5, OK: 1, Failed: 2, TransportErrors: 1, PolicyDenied: 1, LocalErrors: 1, WorstExit: exitUsage,
 	}
 	if summary != wantSummary {
 		t.Fatalf("summary=%+v, want %+v", summary, wantSummary)
 	}
-	if len(metas) != 3 || metas[0].ID != "a1" || metas[1].ID != "a2" || metas[2].ID != "a3" {
+	if len(metas) != 4 || metas[0].ID != "a1" || metas[1].ID != "a2" || metas[2].ID != "a3" || metas[3].ID != "a4" {
 		t.Fatalf("metas=%+v, want saved metas in input order", metas)
 	}
 }

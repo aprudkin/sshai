@@ -1,8 +1,9 @@
 # sshai — agent usage
 
-`sshai` runs commands on remote Linux hosts through Bash by default or an explicitly selected POSIX shell, and on Windows hosts through PowerShell. It returns a compact passport plus an on-disk artifact path instead of raw output in context. Captured output stays on disk for local querying; overflow beyond the configured stream cap is discarded and marked `truncated=1`.
+`sshai` runs commands on remote Linux hosts through Bash by default or an explicitly selected POSIX shell, and on Windows hosts through PowerShell. `sshai local` explicitly runs local Bash or PowerShell 7 (`pwsh`) without SSH. It returns a compact passport plus an on-disk artifact path instead of raw output in context. Captured output stays on disk for local querying; overflow beyond the configured stream cap is discarded and marked `truncated=1`.
 
-- `sshai run <host> -- <command>` — execute; e.g. `sshai run web01 -- df -h`
+- `sshai run <host> -- <command>` — execute remotely; e.g. `sshai run web01 -- df -h`
+- `sshai local --shell <bash|pwsh> -- <command>` — execute through the selected local interpreter
 - `sshai q <id> -- <tool> <args>` — query a stored artifact; its path is appended as the tool's final argv argument, never sent on stdin
 - `sshai diff <id1> <id2>` — diff two artifacts, e.g. `sshai diff a12 a17`
 - `sshai log [--host H] [--grep P]` — search the run-log, e.g. `sshai log --host web01 --grep nginx`
@@ -62,14 +63,41 @@ Two narrow SSH exceptions remain inside `sshai`:
 
 Omitting either flag preserves the strict host-key and managed-route defaults.
 
+## Explicit local execution
+
+Use `sshai local` only when the task explicitly calls for execution on the machine running `sshai`:
+
+```bash
+sshai local --shell bash --body-file check.sh
+sshai local --shell pwsh -- Get-Date
+```
+
+`--shell bash` and `--shell pwsh` are the only values, and each interpreter must be available on
+`PATH`. Local PowerShell runs only `pwsh`; it does not fall back to Windows PowerShell 5.1. Use
+`--body-file <file|->` rather than the inline form for a multiline body; the body stays out of the
+interpreter argv.
+
+This command is not SSH, a remote fallback, a readonly-policy check, an authorization layer, or a
+security sandbox. Remote-only flags and `--follow` are rejected. It uses the same bounded artifacts,
+passports, JSON v1 envelope, `--delta`, named state, history, local query, and retention machinery
+as `run`. Synthetic targets `local-bash` and `local-pwsh` isolate state by shell and context; they
+appear in results and `log`, but never in `hosts`.
+
+A normal local shell exit is stored and mirrored. Interpreter start failure, timeout, and output
+overflow are stored respectively as `local-error=start`, `local-error=timeout`, and
+`local-error=output-limit`, and `sshai` exits `96`. Overflow retains only the configured stream cap
+and marks `truncated=1`. A timeout or output overflow stops only the direct interpreter child;
+descendant-process cleanup is not guaranteed across platforms.
+
 ## Machine-readable mode
 
-`sshai run --result-format=json` emits exactly one versioned envelope
-(`schema_version: "v1"`) on stdout — run id, host, remote exit, artifact
-path, byte/line counts, sha256, duration, an optional
-`transport_diagnostic`, and optional `accepted_host_key_algorithm` /
-`accepted_host_key_fingerprint` evidence — with no human tail/preview text.
-Use it when a consumer must parse the result without regexing the human passport:
+`sshai run --result-format=json` and `sshai local --result-format=json` emit exactly one
+versioned envelope (`schema_version: "v1"`) on stdout. Each saved run includes its id, target,
+exit, artifact path, byte/line counts, SHA-256, and duration, with no human tail or preview text.
+Remote failures may add `transport_diagnostic` and explicit host-key evidence. Local runner failures
+add `runs[].local_error` and increment `summary.local_errors`; both additive fields are omitted from
+normal and remote results. Use JSON when a consumer must parse the result without regexing the human
+passport:
 
 ```bash
 sshai run --result-format=json --body-file - pg-prod-01 <<<'Get-Date' | jq '.runs[0].exit'      # remote exit code
@@ -117,10 +145,9 @@ preview limits, and do not replace the authoritative artifact.
 `--follow-interval` is in whole seconds (default 10, minimum 1) and requires
 `--follow`; fan-out is rejected.
 
-
 ## Explicit fallbacks
 
-Use an explicit purpose-built workflow instead of `sshai` when the task needs any of the following:
+Use an explicit purpose-built workflow instead of `sshai run` or `sshai local` when the task needs any of the following:
 
 - secret input streamed to the remote program (stdin is occupied by the script wrapper);
 - `scp`, `rsync`, backup download, or another file-transfer contract;

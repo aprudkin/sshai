@@ -33,6 +33,17 @@ func TestStatusLineReportsExplicitlyAcceptedHostKey(t *testing.T) {
 	}
 }
 
+func TestStatusLineLocalErrorTakesPrecedence(t *testing.T) {
+	m := meta()
+	m.LocalError = "output-limit"
+	m.TransportErr = "timeout"
+	m.Exit = 23
+	got := StatusLine(m)
+	if !strings.Contains(got, "local-error=output-limit") || strings.Contains(got, "transport-error=") || strings.Contains(got, "exit=") {
+		t.Fatalf("bad line: %q", got)
+	}
+}
+
 func TestStatusLineTransportFormAndFlags(t *testing.T) {
 	m := meta()
 	m.TransportErr = "timeout"

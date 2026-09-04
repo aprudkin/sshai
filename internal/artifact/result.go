@@ -15,6 +15,7 @@ type Summary struct {
 	Failed          int `json:"failed"`
 	TransportErrors int `json:"transport_errors"`
 	PolicyDenied    int `json:"policy_denied"`
+	LocalErrors     int `json:"local_errors,omitempty"`
 	WorstExit       int `json:"worst_exit"`
 }
 
@@ -31,6 +32,7 @@ type ResultEntry struct {
 	Exit                       int    `json:"exit"`
 	TransportError             string `json:"transport_error"`
 	TransportDiagnostic        string `json:"transport_diagnostic,omitempty"`
+	LocalError                 string `json:"local_error,omitempty"`
 	AcceptedHostKeyAlgorithm   string `json:"accepted_host_key_algorithm,omitempty"`
 	AcceptedHostKeyFingerprint string `json:"accepted_host_key_fingerprint,omitempty"`
 	ArtifactPath               string `json:"artifact_path"`
@@ -53,7 +55,7 @@ type envelope struct {
 
 // ResultEntryForMeta maps artifact metadata to the canonical v1 run schema.
 func ResultEntryForMeta(root string, m Meta) ResultEntry {
-	return ResultEntry{ID: m.ID, Host: m.Host, Ctx: m.Ctx, Command: m.Command, Exit: m.Exit, TransportError: m.TransportErr, TransportDiagnostic: m.TransportDiagnostic, AcceptedHostKeyAlgorithm: m.AcceptedHostKeyAlgorithm, AcceptedHostKeyFingerprint: m.AcceptedHostKeyFingerprint, ArtifactPath: filepath.Join(root, "art", m.ID), Bytes: m.Bytes, Lines: m.Lines, SHA256: m.SHA256, DurationMs: m.DurationMs, Ts: m.Ts.UTC().Format(time.RFC3339Nano), Truncated: m.Truncated, Binary: m.Binary, DeltaBase: m.DeltaBase}
+	return ResultEntry{ID: m.ID, Host: m.Host, Ctx: m.Ctx, Command: m.Command, Exit: m.Exit, TransportError: m.TransportErr, TransportDiagnostic: m.TransportDiagnostic, LocalError: m.LocalError, AcceptedHostKeyAlgorithm: m.AcceptedHostKeyAlgorithm, AcceptedHostKeyFingerprint: m.AcceptedHostKeyFingerprint, ArtifactPath: filepath.Join(root, "art", m.ID), Bytes: m.Bytes, Lines: m.Lines, SHA256: m.SHA256, DurationMs: m.DurationMs, Ts: m.Ts.UTC().Format(time.RFC3339Nano), Truncated: m.Truncated, Binary: m.Binary, DeltaBase: m.DeltaBase}
 }
 
 // RenderResult builds the v1 machine-readable envelope as a single JSON

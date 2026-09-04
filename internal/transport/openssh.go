@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/aprudkin/sshai/internal/runner"
 )
 
 // defaultPutTimeout bounds the underlying scp invocation for Put. Unlike
@@ -262,8 +264,12 @@ func (tr *OpenSSH) AcceptedHostKey(host string) (HostKey, bool, error) {
 func (tr *OpenSSH) lookupHostKeys(host string, sshOpts []string) (map[string]HostKey, error) {
 	argv := append([]string{"ssh", "-G"}, sshOpts...)
 	argv = append(argv, host)
-	rc, out, timedOut := runBounded(argv, nil, hostKeyLookupTimeout, hostKeyConfigCap)
-	if timedOut || rc != 0 || int64(len(out)) > hostKeyConfigCap {
+	result := runner.Run(argv, nil, hostKeyLookupTimeout, hostKeyConfigCap)
+	if result.StartErr != nil || result.TimedOut || result.Truncated || result.ExitCode != 0 {
+		return nil, errHostKeyInspection
+	}
+	out := result.Output
+	if int64(len(out)) > hostKeyConfigCap {
 		return nil, errHostKeyInspection
 	}
 	lookup, paths, err := parseKnownHostsConfig(out)
@@ -456,17 +462,14 @@ func (tr *OpenSSH) Exec(host, command string, stdin []byte, timeout time.Duratio
 		return Result{}, NewTransportError("ssh", out)
 	}
 
-	// The default Runner's capWriter retains at most streamCap+1 bytes:
-	// one byte past the advertised cap exists purely as an overflow
-	// sentinel (see capWriter.Write), so a write landing exactly at the
-	// cap is never mistaken for truncation. Output longer than streamCap
-	// here is proof of genuine overflow — trim the sentinel (and
-	// whatever else capWriter had buffered before the kill landed) back
-	// off so callers never see more than the cap they asked for.
+	// The injectable Runner predates runner.Result and reports truncation by
+	// returning more than the configured cap. The production runner itself
+	// retains exactly cap bytes; preserve this compatibility for test runners.
+	streamCap := max(tr.streamCap, 0)
 	truncated := false
-	if tr.streamCap > 0 && int64(len(out)) > tr.streamCap {
+	if int64(len(out)) > streamCap {
 		truncated = true
-		out = out[:tr.streamCap]
+		out = out[:streamCap]
 	}
 	if rc < 0 && !truncated {
 		return Result{}, NewTransportError("ssh", out)
@@ -540,6 +543,8 @@ func (tr *OpenSSH) ExecStream(host, command string, stdin []byte, timeout time.D
 }
 
 const sshDiagnosticLogCap = 64 << 10
+
+var errStreamCapExceeded = errors.New("transport: stream cap exceeded")
 
 func boundedSSHLog(path string) ([]byte, error) {
 	f, err := os.Open(path) // #nosec G304 -- caller passes the fixed log path created in ExecStream's private temp directory.
@@ -649,107 +654,14 @@ func (tr *OpenSSH) Put(host, localPath, remotePath string) error {
 // run is the default Runner, backed by os/exec. It feeds stdin to the
 // child and captures combined stdout+stderr through tr.streamCap.
 func (tr *OpenSSH) run(argv []string, stdin []byte, timeout time.Duration) (int, []byte, bool) {
-	return runBounded(argv, stdin, timeout, tr.streamCap)
-}
-
-func runBounded(argv []string, stdin []byte, timeout time.Duration, streamCap int64) (int, []byte, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- argv is constructed for fixed ssh/scp binaries and executed without a shell.
-	cmd.Stdin = bytes.NewReader(stdin)
-
-	w := newCapWriter(streamCap, cancel)
-	cmd.Stdout = w
-	cmd.Stderr = w
-
-	// cmd.Run()'s error is redundant with cmd.ProcessState/ctx.Err() below
-	// except when the child never started. In that case ProcessState remains
-	// nil and execStartFailedRC preserves the absence of a remote exit code.
-	_ = cmd.Run()
-
-	rc := execStartFailedRC
-	if cmd.ProcessState != nil {
-		rc = cmd.ProcessState.ExitCode()
+	result := runner.Run(argv, stdin, timeout, tr.streamCap)
+	if result.StartErr != nil {
+		return execStartFailedRC, result.Output, result.TimedOut
 	}
-	timedOut := ctx.Err() == context.DeadlineExceeded
-	return rc, w.Bytes(), timedOut
-}
-
-// errStreamCapExceeded is capWriter's sentinel Write error once the cap
-// is reached: it exists to stop os/exec's internal copy loop promptly
-// (a Write returning a non-nil error halts further copying), not to be
-// inspected by callers.
-var errStreamCapExceeded = errors.New("transport: stream cap exceeded")
-
-// capWriter accumulates combined stdout+stderr up to max+1 bytes: max is
-// the caller's advertised cap, and the one extra byte is kept purely as
-// an overflow sentinel — proof that real output exceeded max — so that a
-// write landing exactly at max is retained in full rather than mistaken
-// for truncation (that off-by-one was the bug: triggering on "reaches
-// max" rather than "exceeds max" killed processes whose output fit
-// exactly). The kill trigger is "buffered bytes exceed max", checked
-// after every write, so it fires the moment real output crosses the cap
-// regardless of whether that happens within one write or is spread
-// across several — including a single write of exactly max+1 bytes.
-// cancel is invoked exactly once. Exec derives the caller-visible
-// Truncated fact from output length (len(out) > max) and trims the
-// sentinel byte back off — see Exec. Each Exec/Put call constructs its
-// own capWriter inside run(), so there is no mutable state shared
-// between concurrent calls on one OpenSSH instance.
-type capWriter struct {
-	mu     sync.Mutex
-	max    int64
-	buf    []byte
-	killed bool
-	cancel context.CancelFunc
-}
-
-func newCapWriter(max int64, cancel context.CancelFunc) *capWriter {
-	return &capWriter{max: max, cancel: cancel}
-}
-
-func (w *capWriter) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	if len(p) == 0 {
-		return 0, nil
+	if result.Truncated {
+		// Runner's legacy function shape has no truncation result. Preserve it
+		// for OpenSSH callers with a private sentinel which Exec strips.
+		return result.ExitCode, append(result.Output, 0), result.TimedOut
 	}
-	if w.killed {
-		return 0, errStreamCapExceeded
-	}
-
-	hardCap := w.max + 1
-	room := hardCap - int64(len(w.buf))
-	if room < 0 {
-		room = 0
-	}
-	take := int64(len(p))
-	if take > room {
-		take = room
-	}
-	w.buf = append(w.buf, p[:take]...)
-
-	if int64(len(w.buf)) <= w.max {
-		// Still at or under the advertised cap: no overflow yet.
-		return int(take), nil
-	}
-
-	// Buffered output now exceeds max — genuine overflow, whether that
-	// happened within this write or was the last of several. Kill the
-	// process and stop accepting further output.
-	w.killed = true
-	if w.cancel != nil {
-		w.cancel()
-	}
-	return int(take), errStreamCapExceeded
-}
-
-func (w *capWriter) Bytes() []byte {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	out := make([]byte, len(w.buf))
-	copy(out, w.buf)
-	return out
+	return result.ExitCode, result.Output, result.TimedOut
 }

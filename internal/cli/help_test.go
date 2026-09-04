@@ -23,6 +23,7 @@ func TestHelpDefaultListsEverySubcommandUnderTokenBudget(t *testing.T) {
 	s := out.String()
 	for _, summaryPrefix := range []string{
 		"  run [flags] ",
+		"  local [flags] ",
 		"  q [--budget N] ",
 		"  diff [--budget N] ",
 		"  log [--host H] ",
@@ -69,6 +70,23 @@ func TestHelpRunShowsFullFlagReference(t *testing.T) {
 	}
 	if body, posix, powerShell := strings.Index(s, "--body-file"), strings.Index(s, "--posix-shell"), strings.Index(s, "--powershell-host"); !(body < posix && posix < powerShell) {
 		t.Fatalf("run help flag order must be body-file, posix-shell, powershell-host: %q", s)
+	}
+}
+
+func TestHelpLocalDocumentsFlagsAndSafetyBoundary(t *testing.T) {
+	var out, errB bytes.Buffer
+	if rc := Help([]string{"local"}, &out, &errB); rc != 0 {
+		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
+	}
+	s := out.String()
+	for _, want := range []string{
+		"--shell", "--body-file", "--delta", "--budget", "--timeout", "--ctx",
+		"--result-format", "--result-out", "security sandbox", "local-error=timeout",
+		"bash -s", "pwsh -NoProfile -File", "no Windows PowerShell 5.1 fallback",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("help local missing %q: %q", want, s)
+		}
 	}
 }
 
@@ -145,7 +163,7 @@ func TestHelpNeverTouchesStoreOrConfig(t *testing.T) {
 // lists also resolves via `sshai help <name>` — no topic advertised on the
 // summary screen that then 404s.
 func TestHelpAllSubcommandsHaveDetail(t *testing.T) {
-	for _, name := range []string{"run", "q", "diff", "log", "hosts", "gc", "help"} {
+	for _, name := range []string{"run", "local", "q", "diff", "log", "hosts", "gc", "help"} {
 		var out, errB bytes.Buffer
 		rc := Help([]string{name}, &out, &errB)
 		if rc != 0 {

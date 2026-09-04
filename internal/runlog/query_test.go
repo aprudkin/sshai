@@ -27,7 +27,7 @@ func seedSearchStore(t *testing.T) (st *artifact.Store, id1, id2, id3 string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m2, err := st.Save(artifact.Meta{Host: "db01", Ctx: "default", Command: "df -h", Ts: base.Add(time.Minute)}, "k2", []byte("out2"))
+	m2, err := st.Save(artifact.Meta{Host: "db01", Ctx: "default", Command: "df -h", LocalError: "output-limit", Ts: base.Add(time.Minute)}, "k2", []byte("out2"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,8 +51,8 @@ func TestSearchFiltersByHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].ID != id2 {
-		t.Fatalf("Search(host=db01) = %+v, want exactly [%s]", got, id2)
+	if len(got) != 1 || got[0].ID != id2 || got[0].LocalError != "output-limit" {
+		t.Fatalf("Search(host=db01) = %+v, want exactly [%s] with local error", got, id2)
 	}
 }
 

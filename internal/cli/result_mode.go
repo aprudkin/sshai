@@ -52,7 +52,7 @@ func writeRunResults(root string, runs []hostRunResult, mode resultModeOptions, 
 
 func writeHumanRunResults(runs []hostRunResult, stdout, stderr io.Writer) int {
 	var okCount, failedCount, transportErrCount int
-	var sawTransportErr, sawPolicyDenied bool
+	var sawLocalError, sawTransportErr, sawPolicyDenied bool
 	maxRemoteExit := 0
 
 	for i := range runs {
@@ -65,6 +65,10 @@ func writeHumanRunResults(runs []hostRunResult, stdout, stderr io.Writer) int {
 		switch runs[i].outcome.Kind() {
 		case runOutcomeSuccess:
 			okCount++
+		case runOutcomeLocalFailure:
+			failedCount++
+			sawLocalError = true
+			maxRemoteExit = max(maxRemoteExit, runs[i].outcome.ExitCode())
 		case runOutcomeTransportFailure:
 			transportErrCount++
 			sawTransportErr = true
@@ -81,6 +85,8 @@ func writeHumanRunResults(runs []hostRunResult, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "hosts=%d ok=%d failed=%d transport-errors=%d\n", len(runs), okCount, failedCount, transportErrCount)
 	}
 	switch {
+	case sawLocalError:
+		return exitUsage
 	case sawTransportErr:
 		return exitTransport
 	case sawPolicyDenied:
@@ -108,6 +114,10 @@ func summarizeRunOutcomes(outcomes []RunOutcome) (artifact.Summary, []artifact.M
 		case runOutcomeRemoteNonZero:
 			summary.Failed++
 			summary.WorstExit = max(summary.WorstExit, meta.Exit)
+		case runOutcomeLocalFailure:
+			summary.Failed++
+			summary.LocalErrors++
+			summary.WorstExit = max(summary.WorstExit, exitUsage)
 		case runOutcomeTransportFailure:
 			summary.TransportErrors++
 		case runOutcomePolicyDenied:
@@ -129,6 +139,8 @@ func renderResultEnvelope(root string, outcomes []RunOutcome, batchID string) ([
 
 func resultModeExitCode(summary artifact.Summary) int {
 	switch {
+	case summary.LocalErrors > 0:
+		return exitUsage
 	case summary.TransportErrors > 0:
 		return exitTransport
 	case summary.PolicyDenied > 0:

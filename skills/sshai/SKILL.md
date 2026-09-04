@@ -1,11 +1,11 @@
 ---
 name: sshai
-description: Execute non-interactive sshai commands on Windows PowerShell hosts and Linux-family Bash or explicitly selected POSIX-shell hosts with bounded output and local artifacts. Use for remote command execution through an AI coding agent.
+description: Execute non-interactive sshai commands on Windows PowerShell hosts and Linux-family Bash or explicitly selected POSIX-shell hosts, or explicitly selected local Bash or pwsh, with bounded output and local artifacts. Use for covered command execution through an AI coding agent.
 license: MIT
-compatibility: Requires the sshai CLI, system OpenSSH, and configured ssh_config aliases.
+compatibility: Requires the sshai CLI; remote execution needs system OpenSSH and configured ssh_config aliases, while local execution needs bash or pwsh on PATH.
 ---
 
-Use the installed `sshai` binary through the agent harness's non-interactive shell execution tool. It supports Windows PowerShell 7 or 5.1 and Linux-family hosts reachable through an `ssh_config` alias. Linux-family execution defaults to Bash; select an explicit POSIX shell when the host, such as OpenWrt, does not provide Bash. Confirm availability with `command -v sshai`. Read `sshai help` and `sshai help run` when a command, flag, or output contract is uncertain; the CLI does not provide a `--version` command.
+Use the installed `sshai` binary through the agent harness's non-interactive shell execution tool. It supports Windows PowerShell 7 or 5.1 and Linux-family hosts reachable through an `ssh_config` alias, plus explicit local Bash or PowerShell 7 (`pwsh`) execution. Linux-family remote execution defaults to Bash; select an explicit POSIX shell when the host, such as OpenWrt, does not provide Bash. Confirm availability with `command -v sshai`. Read `sshai help`, `sshai help run`, and `sshai help local` when a command, flag, or output contract is uncertain; the CLI does not provide a `--version` command.
 
 ## Execute
 
@@ -38,6 +38,16 @@ sshai run --powershell-host windows-powershell --body-file check.ps1 windows01
 ```
 
 The only supported values are `pwsh` and `windows-powershell`; an invalid selector is a usage error. The selector affects Windows body execution; Linux hosts in the same fan-out are unaffected. Do not describe Windows PowerShell 5.1 as unsupported.
+
+For explicitly authorized local execution, select exactly one local interpreter. Both `bash` and `pwsh` are resolved only through `PATH`; local PowerShell runs only `pwsh` and has no Windows PowerShell 5.1 fallback:
+
+```bash
+sshai local --shell bash -- <command>
+sshai local --shell bash --body-file -
+sshai local --shell pwsh --body-file check.ps1
+```
+
+Use `--body-file <file|->` for multiline bodies so the body stays out of interpreter argv. Local execution is not SSH, a remote fallback, a readonly-policy check, an authorization layer, or a security sandbox. It rejects remote-only flags and `--follow`. It retains the same bounded artifacts, passports, JSON v1 envelope, `--delta`, shell/context state, history, `q`, and retention behavior as remote `run`; synthetic targets `local-bash` and `local-pwsh` appear in results and `log`, but never `hosts`. A normal local shell exit is mirrored. Interpreter `start`, `timeout`, and `output-limit` failures are stored as `local-error=<value>` and return process exit `96`; overflow retains the stream cap and `truncated=1`. Timeout or output overflow stops only the direct interpreter child, so cross-platform descendant-process cleanup is not guaranteed.
 
 For one long-running host command, request an ephemeral structured event stream explicitly:
 

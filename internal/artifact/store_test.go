@@ -117,6 +117,7 @@ func TestOpenStoreMigratesAndPersistsOptionalTransportEvidence(t *testing.T) {
 	}
 	for _, column := range []string{
 		"transport_diagnostic",
+		"local_error",
 		"accepted_host_key_algorithm",
 		"accepted_host_key_fingerprint",
 	} {
@@ -138,7 +139,7 @@ func TestOpenStoreMigratesAndPersistsOptionalTransportEvidence(t *testing.T) {
 	algorithm := "ssh-ed25519"
 	fingerprint := "SHA256:abc123"
 	saved, err := st.Save(Meta{
-		Host: "h1", Ctx: "default", Command: "true", TransportErr: "ssh",
+		Host: "h1", Ctx: "default", Command: "true", TransportErr: "ssh", LocalError: "start",
 		TransportDiagnostic: diagnostic, AcceptedHostKeyAlgorithm: algorithm,
 		AcceptedHostKeyFingerprint: fingerprint, Ts: time.Now(),
 	}, "k1", []byte("transport diagnostic: "+diagnostic+"\n"))
@@ -146,12 +147,12 @@ func TestOpenStoreMigratesAndPersistsOptionalTransportEvidence(t *testing.T) {
 		t.Fatalf("save migrated evidence: %v", err)
 	}
 	got, _, err := st.Get(saved.ID)
-	if err != nil || got.TransportDiagnostic != diagnostic ||
+	if err != nil || got.TransportDiagnostic != diagnostic || got.LocalError != "start" ||
 		got.AcceptedHostKeyAlgorithm != algorithm || got.AcceptedHostKeyFingerprint != fingerprint {
 		t.Fatalf("Get evidence=%+v err=%v", got, err)
 	}
 	last, ok, err := st.LastByKey("k1")
-	if err != nil || !ok || last.TransportDiagnostic != diagnostic ||
+	if err != nil || !ok || last.TransportDiagnostic != diagnostic || last.LocalError != "start" ||
 		last.AcceptedHostKeyAlgorithm != algorithm || last.AcceptedHostKeyFingerprint != fingerprint {
 		t.Fatalf("LastByKey=%+v ok=%v err=%v", last, ok, err)
 	}

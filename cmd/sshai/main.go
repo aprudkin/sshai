@@ -15,11 +15,11 @@ const (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: sshai <run|q|diff|log|hosts|gc|help> ...")
+		fmt.Fprintln(os.Stderr, "usage: sshai <run|local|q|diff|log|hosts|gc|help> ...")
 		os.Exit(exitUsage)
 	}
 	cmds := map[string]func([]string) int{
-		"run": cmdRun, "q": cmdQ, "diff": cmdDiff, "log": cmdLog,
+		"run": cmdRun, "local": cmdLocal, "q": cmdQ, "diff": cmdDiff, "log": cmdLog,
 		"hosts": cmdHosts, "gc": cmdGc, "help": cmdHelp,
 	}
 	fn, ok := cmds[os.Args[1]]
@@ -31,6 +31,7 @@ func main() {
 }
 
 func cmdRun(a []string) int   { return cli.Run(a, os.Stdout, os.Stderr) }
+func cmdLocal(a []string) int { return cli.Local(a, os.Stdout, os.Stderr) }
 func cmdQ(a []string) int     { return cli.Q(a, os.Stdout, os.Stderr) }
 func cmdDiff(a []string) int  { return cli.Diff(a, os.Stdout, os.Stderr) }
 func cmdLog(a []string) int   { return cli.Log(a, os.Stdout, os.Stderr) }

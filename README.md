@@ -13,12 +13,13 @@
 [![Agent Skill included](https://img.shields.io/badge/Agent_Skill-included-6f42c1)](skills/sshai/SKILL.md)
 
 `sshai` is a Go CLI for AI agents that runs non-interactive Linux commands through Bash by default
-or an explicitly selected POSIX shell, and Windows PowerShell commands over SSH. By default it
-prefers PowerShell 7 (`pwsh`) and falls back to Windows PowerShell 5.1 when `pwsh` is unavailable;
-either host can be required explicitly per invocation. It keeps captured
-command output in a local artifact and returns a compact passport instead of flooding agent context.
+or an explicitly selected POSIX shell, and Windows PowerShell commands over SSH. It also runs an
+explicit local Bash or PowerShell 7 (`pwsh`) interpreter when no remote transport is intended.
+Remote Windows execution prefers PowerShell 7 and falls back to Windows PowerShell 5.1 when `pwsh`
+is unavailable; either host can be required explicitly per invocation. It keeps captured command
+output in a local artifact and returns a compact passport instead of flooding agent context.
 
-Remote commands in. Compact evidence out.
+Commands in. Compact evidence out.
 
 ## Who it is for
 
@@ -40,6 +41,7 @@ agent harnesses can load the same skill.
 - Run commands on one or more Linux SSH aliases through Bash by default or a selected POSIX shell.
 - Run commands on one or more Windows/PowerShell SSH aliases, preferring PowerShell 7 by default
   with a Windows PowerShell 5.1 fallback or an explicitly required host.
+- Run an explicitly selected local `bash` or `pwsh` through `sshai local`; it is not an SSH fallback.
 - Store output locally and return a bounded passport with outcome and artifact location.
 - Query, diff, and search artifacts without replaying whole command results.
 - Use `--body-file` for multiline commands, JSON result envelopes, `--delta`, and named contexts.
@@ -60,8 +62,8 @@ The execution path keeps captured output local and returns only bounded evidence
 
 ## Install
 
-`sshai` requires OpenSSH and a configured SSH alias. Building from source also requires Go `1.26.5`
-or newer in the `1.26` line.
+Remote execution requires OpenSSH and a configured SSH alias; local execution requires `bash` or
+`pwsh` on `PATH`. Building from source also requires Go `1.26.5` or newer in the `1.26` line.
 
 ### Homebrew
 
@@ -113,6 +115,19 @@ Keep a multiline body out of process arguments:
 ```bash
 sshai run --body-file check.ps1 win01
 ```
+
+Run a local command only when the task explicitly calls for local execution. Select the interpreter;
+`bash` and `pwsh` must be available on `PATH`:
+
+```bash
+sshai local --shell bash --body-file check.sh
+sshai local --shell pwsh -- Get-Date
+```
+
+Local results use the same bounded artifacts, passports, JSON v1 envelope, `--delta`, named state,
+history, `q`, and retention paths as remote results. They use synthetic targets `local-bash` and
+`local-pwsh`, which appear in results and logs but never in `sshai hosts`. Local PowerShell runs
+only `pwsh`; it has no Windows PowerShell 5.1 fallback.
 
 Linux uses Bash by default. On a Linux host such as OpenWrt that lacks Bash, select its POSIX shell
 explicitly:
@@ -176,7 +191,13 @@ host.
   `--proxy-jump=none` only for an explicitly selected direct-route invocation.
 - Use a separate approved workflow for secret stdin, file transfer, interactive programs,
   ad-hoc identity options, or unsupported two-hop execution.
-- A policy denial, transport failure, and remote non-zero exit are different outcomes.
+- A policy denial, transport failure, local failure, and remote non-zero exit are different outcomes.
+- `sshai local` is neither SSH nor a remote fallback, readonly-policy check, authorization layer, or
+  security sandbox. It rejects remote-only flags and `--follow`.
+- Local interpreter start failures, timeouts, and output limits are recorded as
+  `local-error=start`, `local-error=timeout`, and `local-error=output-limit`; each returns process
+  exit `96`. On timeout or output overflow, only the direct child interpreter is stopped;
+  descendant-process cleanup is not guaranteed across platforms.
 - The archived `ps_ssh.py` helper is not a fallback.
 
 See [agent usage](docs/agent-usage.md) for default-use and fallback rules.

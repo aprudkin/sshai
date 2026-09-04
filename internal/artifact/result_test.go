@@ -24,10 +24,10 @@ func TestRenderResultSchemaShape(t *testing.T) {
 		},
 		{
 			ID: "a18", Host: "web01", Ctx: "default", Command: "body:1a2b3c4d5e6f7a8b",
-			TransportErr: "ssh", TransportDiagnostic: "host key verification failed", DurationMs: 10, Ts: ts,
+			TransportErr: "ssh", TransportDiagnostic: "host key verification failed", LocalError: "start", DurationMs: 10, Ts: ts,
 		},
 	}
-	summary := Summary{Hosts: 2, OK: 1, TransportErrors: 1, WorstExit: 0}
+	summary := Summary{Hosts: 2, OK: 1, Failed: 1, LocalErrors: 1, WorstExit: 96}
 
 	var raw map[string]any
 	if err := json.Unmarshal(RenderResult("/root", metas, summary, "a12345678901234567890123456789012"), &raw); err != nil {
@@ -40,7 +40,7 @@ func TestRenderResultSchemaShape(t *testing.T) {
 		t.Fatalf("batch_id=%v", raw["batch_id"])
 	}
 	sum, _ := raw["summary"].(map[string]any)
-	if sum["hosts"].(float64) != 2 || sum["transport_errors"].(float64) != 1 {
+	if sum["hosts"].(float64) != 2 || sum["local_errors"].(float64) != 1 {
 		t.Fatalf("summary=%v", sum)
 	}
 	runs, _ := raw["runs"].([]any)
@@ -68,6 +68,9 @@ func TestRenderResultSchemaShape(t *testing.T) {
 	}
 	if r1["transport_diagnostic"] != "host key verification failed" {
 		t.Fatalf("runs[1] transport_diagnostic=%v", r1["transport_diagnostic"])
+	}
+	if r1["local_error"] != "start" {
+		t.Fatalf("runs[1] local_error=%v", r1["local_error"])
 	}
 	if r1["exit"].(float64) != 0 {
 		t.Fatalf("runs[1] exit must be 0 when transport_error set, got %v", r1["exit"])
@@ -105,6 +108,8 @@ func TestRenderResultNeverOmitsEmptyFields(t *testing.T) {
 		`"transport_diagnostic":`,
 		`"accepted_host_key_algorithm":`,
 		`"accepted_host_key_fingerprint":`,
+		`"local_error":`,
+		`"local_errors":`,
 	} {
 		if strings.Contains(string(body), optional) {
 			t.Fatalf("empty optional field %s changed default envelope: %s", optional, body)

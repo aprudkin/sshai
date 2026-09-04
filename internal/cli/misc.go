@@ -74,8 +74,9 @@ func Log(args []string, stdout, stderr io.Writer) int {
 }
 
 // formatLogLine renders one run the way `sshai log` prints it — the
-// brief's exact shape: "<id>  <ts>  <host>  exit=<n>|transport-error=<x>
-// <duration>  <command>", with the command clipped to
+// brief's exact shape: "<id>  <ts>  <host>
+// exit=<n>|transport-error=<x>|local-error=<x> <duration> <command>",
+// with the command clipped to
 // logCommandClipRunes runes. Body-file runs store Meta.Command as
 // "body:<hash> <preview>" (Task 11's contract, already redacted by
 // runlog.Preview at write time) — the clip here applies to whatever the
@@ -84,6 +85,9 @@ func formatLogLine(m artifact.Meta) string {
 	status := fmt.Sprintf("exit=%d", m.Exit)
 	if m.TransportErr != "" {
 		status = "transport-error=" + m.TransportErr
+	}
+	if m.LocalError != "" {
+		status = "local-error=" + m.LocalError
 	}
 	return fmt.Sprintf("%s  %s  %s  %s  %s  %s",
 		m.ID, m.Ts.UTC().Format(time.RFC3339), m.Host, status,

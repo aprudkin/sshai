@@ -11,7 +11,7 @@ import (
 // screen prints them — main.go's dispatch inventory (run, q, diff, log,
 // hosts, gc) plus help itself, so the R5 progressive-disclosure surface
 // (design doc) never drifts from what cmd/sshai/main.go actually wires.
-var helpOrder = []string{"run", "q", "diff", "log", "hosts", "gc", "help"}
+var helpOrder = []string{"run", "local", "q", "diff", "log", "hosts", "gc", "help"}
 
 // helpSummary is the one-line-each inventory `sshai help` prints with no
 // argument. Kept short and hand-written (not reflected off flag.FlagSet)
@@ -19,6 +19,7 @@ var helpOrder = []string{"run", "q", "diff", "log", "hosts", "gc", "help"}
 // token budget (see TestHelpDefaultListsEverySubcommandUnderTokenBudget).
 var helpSummary = map[string]string{
 	"run":   "run [flags] <host...> -- <command>      execute a command on one or more hosts (fan-out)",
+	"local": "local [flags] --shell S -- <command>     execute through an explicit local bash or pwsh",
 	"q":     "q [--budget N] <id> -- <tool> <args...>  run a local tool over a stored artifact",
 	"diff":  "diff [--budget N] <id1> <id2>            unified diff between two artifacts",
 	"log":   "log [--host H] [--since T] [--grep P]    search the run-log",
@@ -119,6 +120,42 @@ command may not have run at all). A genuine remote exit of 96/97/98 is
 never confused with these: the status line's exit=N vs transport-error=R
 is the source of truth, not the process exit code alone.
 `,
+	"local": `sshai local [flags] --shell <bash|pwsh> -- <command>
+sshai local [flags] --shell <bash|pwsh> --body-file <file|->
+
+Execute arbitrary code through the explicitly selected interpreter on the
+machine running sshai. This is not SSH, a remote fallback, an authorization
+layer, or a security sandbox. Only the direct interpreter process is stopped
+on timeout or output overflow; cross-platform descendant-process cleanup is
+outside this command's contract.
+
+The body never enters interpreter argv. Bash runs as "bash -s" with the
+wrapped body on stdin. PowerShell runs only "pwsh -NoProfile -File" with a
+private temporary script; there is no Windows PowerShell 5.1 fallback.
+Results use the same bounded artifacts, passports, JSON v1 envelope, state,
+delta, history, query, and retention machinery as remote runs. Stable targets
+"local-bash" and "local-pwsh" isolate shell state and appear in results and
+logs, but never in ` + "`hosts`" + `.
+
+Flags:
+  --shell SHELL       required: "bash" or "pwsh"
+  --body-file FILE    read body from FILE ("-" for stdin) instead of the
+                      "-- command" form; use this for multiline bodies that must stay out of argv
+  --delta             diff against the previous matching local shell/context/body
+  --budget N          passport output budget in tokens (~bytes/4); default from config
+  --timeout N         execution timeout in seconds; default from config
+  --ctx NAME          named state context; default $SSHAI_CTX or "default"
+  --result-format FORMAT
+                      "human" (default) or a JSON v1 envelope
+  --result-out FILE   atomically write the private JSON envelope; requires
+                      --result-format=json
+
+A normal shell exit is stored and mirrored. Start failure, timeout, and output
+overflow are stored as local-error=start, local-error=timeout, or
+local-error=output-limit and sshai exits 96. Overflow retains exactly the
+configured stream cap and marks truncated=1. Remote-only flags and --follow
+are rejected.
+`,
 	"q": `sshai q [--budget N] <id> -- <tool> <args...>
 
 Run a local tool against a stored artifact without pulling its raw bytes
@@ -156,9 +193,9 @@ Example: sshai diff a12 a17
 `,
 	"log": `sshai log [--host H] [--since T] [--grep P] [--limit N]
 
-Search the local run-log — every run recorded by ` + "`run`" + `, whether or not
-its artifact survived retention — newest first. One line per match:
-  <id>  <ts>  <host>  exit=N|transport-error=R  <duration>  <command>
+Search the local run-log — every run recorded by ` + "`run`" + ` or ` + "`local`" + `, whether
+or not its artifact survived retention — newest first. One line per match:
+  <id>  <ts>  <host>  exit=N|transport-error=R|local-error=R  <duration>  <command>
 <command> is clipped to 60 runes with a trailing "…" marker.
 
 Flags:
@@ -235,7 +272,7 @@ func Help(args []string, stdout, stderr io.Writer) int {
 // helpOrder entry, from helpSummary.
 func renderHelpDefault() string {
 	var b strings.Builder
-	b.WriteString("sshai — context-frugal remote execution for AI agents (SSH: Linux bash, Windows PowerShell)\n\n")
+	b.WriteString("sshai — context-frugal remote and explicit local execution for AI agents\n\n")
 	for _, name := range helpOrder {
 		b.WriteString("  " + helpSummary[name] + "\n")
 	}

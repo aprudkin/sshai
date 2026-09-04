@@ -8,6 +8,7 @@ const (
 	runOutcomeInvalid runOutcomeKind = iota
 	runOutcomeSuccess
 	runOutcomeRemoteNonZero
+	runOutcomeLocalFailure
 	runOutcomeTransportFailure
 	runOutcomePolicyDenied
 	runOutcomeInternalFailure
@@ -27,6 +28,8 @@ type RunOutcome struct {
 func newSavedRunOutcome(meta artifact.Meta) RunOutcome {
 	kind := runOutcomeSuccess
 	switch {
+	case meta.LocalError != "":
+		kind = runOutcomeLocalFailure
 	case meta.TransportErr != "":
 		kind = runOutcomeTransportFailure
 	case meta.Exit != 0:
@@ -60,6 +63,8 @@ func (o RunOutcome) ExitCode() int {
 		return 0
 	case runOutcomeRemoteNonZero:
 		return o.meta.Exit
+	case runOutcomeLocalFailure:
+		return exitUsage
 	case runOutcomeTransportFailure:
 		return exitTransport
 	case runOutcomePolicyDenied:

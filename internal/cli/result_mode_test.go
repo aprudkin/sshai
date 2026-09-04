@@ -564,6 +564,19 @@ func TestResultModeExitCodeOrdering(t *testing.T) {
 	}
 }
 
+func TestResultModeExitCodeUsesUsageForSavedLocalErrors(t *testing.T) {
+	summary, _ := summarizeRunOutcomes([]RunOutcome{
+		newSavedRunOutcome(artifact.Meta{ID: "a1", Host: "web01", LocalError: "timeout"}),
+		newSavedRunOutcome(artifact.Meta{ID: "a2", Host: "db01", TransportErr: "ssh"}),
+	})
+	if summary.Failed != 1 || summary.LocalErrors != 1 {
+		t.Fatalf("summary=%+v, want one failed local error", summary)
+	}
+	if got := resultModeExitCode(summary); got != exitUsage {
+		t.Fatalf("resultModeExitCode=%d, want %d", got, exitUsage)
+	}
+}
+
 func TestRenderResultEnvelopePreservesOutcomeOrder(t *testing.T) {
 	outcomes := []RunOutcome{
 		newSavedRunOutcome(artifact.Meta{ID: "a2", Host: "first", Exit: 7}),
