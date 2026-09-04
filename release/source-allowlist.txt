@@ -1,6 +1,7 @@
 .github/workflows/ci.yml
 .github/workflows/release.yml
 .github/workflows/security.yml
+.pi/APPEND_SYSTEM.md
 .gitignore
 AGENTS.md
 CODE_OF_CONDUCT.md
