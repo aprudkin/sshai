@@ -1,0 +1,33 @@
+name: Security Check
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.5"
+          check-latest: false
+      - name: Check reachable Go vulnerabilities
+        run: go tool govulncheck ./...
+      - name: Install gosec v2.29.0
+        env:
+          GOSEC_VERSION: v2.29.0
+        run: |
+          mkdir -p "${RUNNER_TEMP}/bin"
+          GOBIN="${RUNNER_TEMP}/bin" go install github.com/securego/gosec/v2/cmd/gosec@"${GOSEC_VERSION}"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+      - name: Run gosec
+        run: gosec ./...

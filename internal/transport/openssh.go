@@ -5,7 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- required to match OpenSSH's documented |1| hashed-host format.
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
@@ -332,7 +332,7 @@ func parseKnownHostsConfig(output []byte) (string, []string, error) {
 func readKnownHostKeys(lookup string, paths []string) (map[string]HostKey, error) {
 	keys := make(map[string]HostKey)
 	for _, path := range paths {
-		f, err := os.Open(path)
+		f, err := os.Open(path) // #nosec G304 -- paths come from parsed UserKnownHostsFile configuration.
 		if os.IsNotExist(err) {
 			continue
 		}
@@ -491,7 +491,7 @@ func (tr *OpenSSH) ExecStream(host, command string, stdin []byte, timeout time.D
 	}
 	defer os.Remove(logDir)
 	logName := filepath.Join(logDir, "diagnostic.log")
-	log, err := os.OpenFile(logName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	log, err := os.OpenFile(logName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) // #nosec G304 -- logName is fixed beneath a fresh private temp directory.
 	if err != nil {
 		return Result{}, newTransportError("ssh", "ssh diagnostics unavailable")
 	}
@@ -504,7 +504,7 @@ func (tr *OpenSSH) ExecStream(host, command string, stdin []byte, timeout time.D
 	defer cancel()
 	argv := tr.sshArgv(host, command)
 	argv = append([]string{argv[0], "-E", logName}, argv[1:]...)
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- argv is built for the fixed system ssh executable without a shell.
 	cmd.Stdin = bytes.NewReader(stdin)
 	w := newObservingWriter(newStreamCapWriter(tr.streamCap, cancel), output)
 	// Identical writers make os/exec retain one pipe and its actual byte order.
@@ -542,7 +542,7 @@ func (tr *OpenSSH) ExecStream(host, command string, stdin []byte, timeout time.D
 const sshDiagnosticLogCap = 64 << 10
 
 func boundedSSHLog(path string) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- caller passes the fixed log path created in ExecStream's private temp directory.
 	if err != nil {
 		return nil, err
 	}
@@ -656,7 +656,7 @@ func runBounded(argv []string, stdin []byte, timeout time.Duration, streamCap in
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- argv is constructed for fixed ssh/scp binaries and executed without a shell.
 	cmd.Stdin = bytes.NewReader(stdin)
 
 	w := newCapWriter(streamCap, cancel)

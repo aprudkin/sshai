@@ -39,7 +39,7 @@ func Load() (Config, error) {
 		cfg.Root = filepath.Join(home, ".sshai")
 	}
 	path := filepath.Join(cfg.Root, "config.toml")
-	if _, err := os.Stat(path); err == nil {
+	if _, err := os.Stat(path); err == nil { // #nosec G703 -- path is the fixed config.toml child of the caller-selected local root.
 		if _, err := toml.DecodeFile(path, &cfg); err != nil {
 			return cfg, err
 		}

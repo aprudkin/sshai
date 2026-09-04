@@ -144,15 +144,15 @@ func Q(args []string, stdout, stderr io.Writer) int {
 	// exec.Command(tool, append(args, path)...) shape — toolArgs is copied
 	// first so the caller-supplied slice is never mutated by append.
 	fullArgs := append(append([]string{}, toolArgs...), path)
-	cmd := exec.Command(toolPath, fullArgs...)
+	cmd := exec.Command(toolPath, fullArgs...) // #nosec G204 -- explicit q tool invocation uses LookPath and no shell.
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
 
 	runErr := cmd.Run()
 
-	io.WriteString(stdout, trimToBudget(outBuf.String(), *budget))
-	io.WriteString(stderr, trimToBudget(errBuf.String(), *budget))
+	_, _ = io.WriteString(stdout, trimToBudget(outBuf.String(), *budget))
+	_, _ = io.WriteString(stderr, trimToBudget(errBuf.String(), *budget))
 
 	if runErr == nil {
 		return 0
@@ -217,12 +217,12 @@ func Diff(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
-	data1, err := os.ReadFile(path1)
+	data1, err := os.ReadFile(path1) // #nosec G304 -- path1 is resolved from the local artifact database, not command text.
 	if err != nil {
 		fmt.Fprintf(stderr, "diff: read artifact %s: %v\n", id1, err)
 		return exitUsage
 	}
-	data2, err := os.ReadFile(path2)
+	data2, err := os.ReadFile(path2) // #nosec G304 -- path2 is resolved from the local artifact database, not command text.
 	if err != nil {
 		fmt.Fprintf(stderr, "diff: read artifact %s: %v\n", id2, err)
 		return exitUsage
@@ -251,7 +251,7 @@ func Diff(args []string, stdout, stderr io.Writer) int {
 	// on a non-empty diff will not get it. If that distinction ever
 	// matters to a caller, it's already visible in the output itself
 	// ("no difference" line vs. a printed diff).
-	io.WriteString(stdout, trimToBudget(diffText, *budget))
+	_, _ = io.WriteString(stdout, trimToBudget(diffText, *budget))
 	return 0
 }
 

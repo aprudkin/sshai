@@ -94,12 +94,12 @@ func AppendAudit(root string, e AuditEntry) error {
 	}
 	b = append(b, '\n')
 
-	f, err := os.OpenFile(filepath.Join(root, "audit.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(filepath.Join(root, "audit.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) // #nosec G304 -- filename is fixed beneath the configured local root.
 	if err != nil {
 		return err
 	}
 	if _, err := f.Write(b); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	return f.Close()

@@ -88,17 +88,27 @@ func validatePOSIXShell(path string) error {
 	return nil
 }
 
-// ctxRe is the safe charset for --ctx: no "/" (so a ctx value can never
+// safeNameRe is the portable charset for host and context path components.
+// For --ctx it excludes "/" (so a ctx value can never
 // escape <root>/state/<host>/ into a parent directory), and no characters
 // that would make a confusing filename.
-var ctxRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+var safeNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// validateHost keeps an SSH alias usable as exactly one local state-directory
+// component on every supported platform.
+func validateHost(host string) error {
+	if host == "." || host == ".." || !safeNameRe.MatchString(host) {
+		return fmt.Errorf("host %q must match %s and not be . or ..", host, safeNameRe.String())
+	}
+	return nil
+}
 
 // validateCtx enforces the safe ctx charset before any SaveState/LoadState
 // call. Two hazards, both from earlier tasks' reviews: (1) a ctx equal to
 // "facts" or "baseline" would alias session's own facts.json/baseline.json
 // — all three share one directory (session.hostDir) and are told apart
 // only by filename; (2) a ctx containing "/" could otherwise address a
-// path outside that directory entirely. ctxRe already excludes "/", so a
+// path outside that directory entirely. safeNameRe already excludes "/", so a
 // ".." component can never form — the explicit checks below for "." and
 // ".." standing alone as the whole ctx are just belt-and-braces, since
 // neither is a meaningful context name either way.
@@ -109,8 +119,8 @@ func validateCtx(ctx string) error {
 	if ctx == "." || ctx == ".." {
 		return fmt.Errorf("ctx %q is not a valid context name", ctx)
 	}
-	if !ctxRe.MatchString(ctx) {
-		return fmt.Errorf("ctx %q must match %s", ctx, ctxRe.String())
+	if !safeNameRe.MatchString(ctx) {
+		return fmt.Errorf("ctx %q must match %s", ctx, safeNameRe.String())
 	}
 	return nil
 }
@@ -275,6 +285,12 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 	if len(hosts) == 0 {
 		fmt.Fprintln(stderr, "run: at least one host is required")
 		return exitUsage
+	}
+	for _, host := range hosts {
+		if err := validateHost(host); err != nil {
+			fmt.Fprintf(stderr, "run: %v\n", err)
+			return exitUsage
+		}
 	}
 	if *follow && len(hosts) != 1 {
 		fmt.Fprintln(stderr, "run: --follow supports exactly one host")
@@ -535,7 +551,7 @@ func loadBody(path string) (string, error) {
 		}
 		return string(data), nil
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- --body-file explicitly authorizes reading this caller-provided path.
 	if err != nil {
 		return "", fmt.Errorf("read body file %s: %w", path, err)
 	}
@@ -723,7 +739,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		}
 		defer os.Remove(tmp.Name())
 		if _, err := tmp.Write(script); err != nil {
-			tmp.Close()
+			_ = tmp.Close()
 			fmt.Fprintf(stderr, "run: write temp script: %v\n", err)
 			return newInternalFailureOutcome(exitUsage)
 		}

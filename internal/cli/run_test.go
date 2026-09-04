@@ -436,6 +436,19 @@ func TestRunRejectsReservedCtxName(t *testing.T) {
 	}
 }
 
+func TestValidateHostRejectsStatePathTraversal(t *testing.T) {
+	for _, host := range []string{"../outside", `..\\outside`, ".", "..", "host/name", "host name"} {
+		if err := validateHost(host); err == nil {
+			t.Errorf("validateHost(%q) succeeded", host)
+		}
+	}
+	for _, host := range []string{"web01", "db-01.example", "host_name"} {
+		if err := validateHost(host); err != nil {
+			t.Errorf("validateHost(%q): %v", host, err)
+		}
+	}
+}
+
 // TestRunRejectsCtxWithSlash covers the other half of constraint 1: a ctx
 // containing "/" could otherwise address a path outside
 // <root>/state/<host>/.

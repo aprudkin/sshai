@@ -4,6 +4,7 @@ package session
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -141,6 +142,78 @@ func TestLoadFactsCorruptJSONReturnsError(t *testing.T) {
 	_, ok, err := LoadFacts(root, "h1")
 	if err == nil || ok {
 		t.Fatalf("ok=%v err=%v, want ok=false and a non-nil error", ok, err)
+	}
+}
+
+func TestStatePathsRejectTraversalAndReservedContexts(t *testing.T) {
+	root := t.TempDir()
+	if err := SaveFacts(root, "../outside", Facts{OS: "linux"}); err == nil {
+		t.Fatal("SaveFacts accepted a traversing host")
+	}
+	if _, _, err := LoadFacts(root, `..\\outside`); err == nil {
+		t.Fatal("LoadFacts accepted a Windows-style traversing host")
+	}
+	for _, ctx := range []string{"../outside", `..\\outside`, ".", "..", "facts", "baseline"} {
+		if err := SaveState(root, "h1", ctx, shell.State{}); err == nil {
+			t.Errorf("SaveState accepted context %q", ctx)
+		}
+	}
+	if _, err := os.Stat(root + "/outside"); !os.IsNotExist(err) {
+		t.Fatalf("traversal created an outside path: %v", err)
+	}
+}
+
+func TestStatePathsRefuseSymlinkDirectories(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		linkPath func(root string) string
+	}{
+		{name: "state directory", linkPath: func(root string) string { return root + "/state" }},
+		{name: "host directory", linkPath: func(root string) string { return root + "/state/h1" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			outside := t.TempDir()
+			link := tc.linkPath(root)
+			if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, link); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			if err := SaveState(root, "h1", "default", shell.State{}); err == nil {
+				t.Fatal("SaveState accepted a symlink directory")
+			}
+			if _, _, err := LoadState(root, "h1", "default"); err == nil {
+				t.Fatal("LoadState accepted a symlink directory")
+			}
+			entries, err := os.ReadDir(outside)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("state directory symlink was followed: entries=%v err=%v", entries, err)
+			}
+		})
+	}
+}
+
+func TestSaveStateRefusesSymlinkDestination(t *testing.T) {
+	root := t.TempDir()
+	target := root + "/outside"
+	if err := os.WriteFile(target, []byte("unchanged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := root + "/state/h1"
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, stateDir+"/default.json"); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := SaveState(root, "h1", "default", shell.State{Cwd: "/tmp"}); err == nil {
+		t.Fatal("SaveState succeeded through a symlink destination")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || string(got) != "unchanged" {
+		t.Fatalf("symlink target changed: %q, err=%v", got, err)
 	}
 }
 

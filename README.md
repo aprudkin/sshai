@@ -5,6 +5,7 @@
 <p align="center"><img src="assets/readme/banner.svg" width="100%" alt="sshai: remote commands in, compact evidence out"></p>
 
 [![CI](https://github.com/aprudkin/sshai/actions/workflows/ci.yml/badge.svg)](https://github.com/aprudkin/sshai/actions/workflows/ci.yml)
+[![Security Check](https://github.com/aprudkin/sshai/actions/workflows/security.yml/badge.svg)](https://github.com/aprudkin/sshai/actions/workflows/security.yml)
 [![Release](https://img.shields.io/github/v/release/aprudkin/sshai?display_name=tag&sort=semver)](https://github.com/aprudkin/sshai/releases/latest)
 [![Homebrew](https://img.shields.io/badge/Homebrew-aprudkin%2Ftap-FBB040?logo=homebrew&logoColor=black)](https://github.com/aprudkin/homebrew-tap)
 [![Go 1.26.5](https://img.shields.io/badge/Go-1.26.5-00ADD8?logo=go&logoColor=white)](go.mod)
@@ -104,6 +105,9 @@ skill location.
 sshai run web01 -- df -h
 ```
 
+Host aliases must match `[A-Za-z0-9._-]+`; path separators, whitespace, `.` and `..` are rejected to
+keep each alias inside its local state directory.
+
 Keep a multiline body out of process arguments:
 
 ```bash
@@ -184,6 +188,9 @@ go test ./...
 go vet ./...
 go build ./...
 ```
+
+The **Security Check** badge covers automated known-vulnerability and static-analysis checks. It is
+not a security audit or a guarantee that `sshai` is safe in every environment.
 
 Integration tests require reachable test hosts and are intentionally outside CI:
 

@@ -42,8 +42,9 @@ var psVerbs = map[string]bool{
 
 // CheckReadonly enforces the fail-closed readonly allowlist. It returns
 // nil when readonly is false — the policy does not apply — or when
-// every non-empty segment of command (split on &&, ||, ;, |, and
-// newline) starts with an allowlisted read-only prefix. Otherwise it
+// command contains no unsupported nested-execution or redirection syntax and
+// every non-empty segment (split on &&, ||, ;, |, and newline) starts with an
+// allowlisted read-only prefix. Otherwise it
 // returns an error naming the first offending segment; the caller is
 // responsible for redacting any secret that segment might carry before
 // it reaches a log (see runlog.Redact). A command with no non-empty
@@ -53,6 +54,14 @@ var psVerbs = map[string]bool{
 func CheckReadonly(command string, readonly bool) error {
 	if !readonly {
 		return nil
+	}
+
+	// These constructs can execute nested commands, write through redirection,
+	// or start an additional shell command without one of splitRe's operators.
+	// Reject them before prefix matching rather than attempting to parse a shell.
+	if strings.Contains(command, "`") || strings.Contains(command, "$(") ||
+		strings.ContainsAny(command, "<>(){}") || strings.Contains(strings.ReplaceAll(command, "&&", ""), "&") {
+		return fmt.Errorf("denied by readonly policy: unsupported shell syntax")
 	}
 
 	sawSegment := false

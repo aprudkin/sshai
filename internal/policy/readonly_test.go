@@ -24,6 +24,12 @@ func TestReadonlyDeniesWritesAndSmuggling(t *testing.T) {
 	for _, cmd := range []string{
 		"rm -f /tmp/x", "systemctl restart nginx", "Set-Service -Name x -Status Stopped",
 		"df -h && rm -rf /", "cat /etc/passwd; useradd evil", "", "  ",
+		"df -h || rm -rf /", "df -h | rm -rf /", "df -h\nrm -rf /",
+		"df -h $(rm -rf /)", "df -h `rm -rf /`", "df -h & rm -rf /",
+		"cat /etc/hosts > /tmp/copy", "cat < /etc/hosts",
+		`Get-Process (Remove-Item -Force C:\temp\x)`,
+		`Get-Process @(Remove-Item -Force C:\temp\x)`,
+		`Get-Process | Where-Object { Remove-Item -Force C:\temp\x }`,
 	} {
 		if err := CheckReadonly(cmd, true); err == nil {
 			t.Errorf("%q wrongly allowed", cmd)

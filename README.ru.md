@@ -5,6 +5,7 @@ English version: [README.md](README.md).
 <p align="center"><img src="assets/readme/banner-ru.svg" width="100%" alt="sshai: удалённые команды и компактные доказательства"></p>
 
 [![CI](https://github.com/aprudkin/sshai/actions/workflows/ci.yml/badge.svg)](https://github.com/aprudkin/sshai/actions/workflows/ci.yml)
+[![Security Check](https://github.com/aprudkin/sshai/actions/workflows/security.yml/badge.svg)](https://github.com/aprudkin/sshai/actions/workflows/security.yml)
 [![Релиз](https://img.shields.io/github/v/release/aprudkin/sshai?display_name=tag&sort=semver)](https://github.com/aprudkin/sshai/releases/latest)
 [![Homebrew](https://img.shields.io/badge/Homebrew-aprudkin%2Ftap-FBB040?logo=homebrew&logoColor=black)](https://github.com/aprudkin/homebrew-tap)
 [![Go 1.26.5](https://img.shields.io/badge/Go-1.26.5-00ADD8?logo=go&logoColor=white)](go.mod)
@@ -109,6 +110,9 @@ pi install "${SSHAI_SHARE_DIR:-$HOME/.local/share/sshai}"
 sshai run web01 -- df -h
 ```
 
+SSH-алиасы должны соответствовать выражению `[A-Za-z0-9._-]+`. Разделители путей, пробелы, `.` и
+`..` запрещены, чтобы алиас не мог выйти за пределы своего локального каталога состояния.
+
 Не передавайте многострочное тело через аргументы процесса:
 
 ```bash
@@ -184,6 +188,10 @@ go test ./...
 go vet ./...
 go build ./...
 ```
+
+Значок **Security Check** отражает результат автоматической проверки известных уязвимостей и
+статического анализа. Он не означает, что проведён аудит безопасности или что `sshai` гарантированно
+безопасен в любой среде.
 
 Интеграционные тесты требуют доступных тестовых хостов и намеренно не входят в CI:
 

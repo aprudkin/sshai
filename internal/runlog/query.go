@@ -47,7 +47,7 @@ func Search(db *sql.DB, host, grep string, since time.Time, limit int) ([]artifa
 
 	query := `SELECT art_id, ts, host, ctx, command, exit, transport_error, transport_diagnostic, bytes, lines, sha256, duration_ms, truncated, binary, delta_base FROM runs`
 	if len(conds) > 0 {
-		query += " WHERE " + strings.Join(conds, " AND ")
+		query += " WHERE " + strings.Join(conds, " AND ") // #nosec G202 -- conds contains only fixed clauses; values remain SQL parameters.
 	}
 	query += " ORDER BY id DESC LIMIT ?"
 	args = append(args, limit)

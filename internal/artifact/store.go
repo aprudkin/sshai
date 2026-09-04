@@ -52,24 +52,50 @@ type Store struct {
 // OpenStore creates <root>/art/ and opens <root>/db.sqlite (WAL,
 // busy_timeout 5000), creating the schema if needed.
 func OpenStore(root string) (*Store, error) {
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return nil, fmt.Errorf("create store root: %w", err)
+	}
+	if err := ensureStoreDir(root); err != nil {
+		return nil, fmt.Errorf("validate store root: %w", err)
+	}
 	artDir := filepath.Join(root, "art")
-	if err := os.MkdirAll(artDir, 0o700); err != nil {
+	if err := ensureStoreDir(artDir); err != nil {
 		return nil, fmt.Errorf("create artifact dir: %w", err)
 	}
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", filepath.Join(root, "db.sqlite"))
+	dbPath := filepath.Join(root, "db.sqlite")
+	if info, err := os.Lstat(dbPath); err == nil && !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("refuse non-regular database destination %s", dbPath)
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("inspect database destination: %w", err)
+	}
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)", dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 	if _, err := db.Exec(schema); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 	if err := ensureRunColumns(db); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 	return &Store{Root: root, DB: db}, nil
+}
+
+func ensureStoreDir(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return os.Mkdir(path, 0o700)
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refuse non-directory or symlink path %s", path)
+	}
+	return nil
 }
 
 // ensureRunColumns migrates databases created before optional transport
@@ -260,16 +286,30 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// writeArtifactFile writes data to path atomically: it writes to a
-// sibling ".tmp" file first, then renames it into place, so a reader can
-// never observe a partially written artifact.
+// writeArtifactFile writes data to path atomically through a private sibling
+// temporary file. It refuses an existing destination, including symlinks and
+// non-regular files, before publishing the completed artifact by rename.
 func writeArtifactFile(path string, data []byte) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	if info, err := os.Lstat(path); err == nil {
+		return fmt.Errorf("refuse existing artifact destination %s (%s)", path, info.Mode().Type())
+	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".artifact-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
 		return err
 	}
 	return nil

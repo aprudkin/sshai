@@ -3,6 +3,7 @@ package artifact
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,46 @@ func TestSaveAssignsMonotonicIDsAndWritesFile(t *testing.T) {
 	b, _ := os.ReadFile(path)
 	if string(b) != "out1\n" {
 		t.Fatalf("artifact content: %q", b)
+	}
+}
+
+func TestOpenStoreRefusesSymlinkArtifactDirectory(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "art")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if st, err := OpenStore(root); err == nil {
+		_ = st.Close()
+		t.Fatal("OpenStore accepted a symlink artifact directory")
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("artifact directory symlink was followed: entries=%v err=%v", entries, err)
+	}
+}
+
+func TestSaveRefusesSymlinkArtifactDestination(t *testing.T) {
+	root := t.TempDir()
+	st, err := OpenStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	target := filepath.Join(root, "outside")
+	if err := os.WriteFile(target, []byte("unchanged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "art", "a1")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := st.Save(Meta{Host: "h1", Ctx: "default", Ts: time.Now()}, "k1", []byte("secret")); err == nil {
+		t.Fatal("Save succeeded through a symlink artifact destination")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil || string(got) != "unchanged" {
+		t.Fatalf("symlink target changed: %q, err=%v", got, err)
 	}
 }
 

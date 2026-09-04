@@ -39,7 +39,7 @@ const deltaClipSuffix = "\n… [diff clipped at budget — full artifacts kept, 
 // artifact's bytes at prevPath, budget-trimmed the same way cli.Q/Diff trim
 // their own output (tokens ≈ bytes/4, never cutting a UTF-8 rune in half).
 func Render(prevPath string, newData []byte, prevID string, prevTs time.Time, budgetTokens int) (string, error) {
-	prevData, err := os.ReadFile(prevPath)
+	prevData, err := os.ReadFile(prevPath) // #nosec G304 -- prevPath is resolved from the local artifact database.
 	if err != nil {
 		return "", fmt.Errorf("read previous artifact %s: %w", prevPath, err)
 	}

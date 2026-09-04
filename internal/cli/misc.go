@@ -208,7 +208,7 @@ func sshConfigHosts() ([]string, error) {
 		return nil, fmt.Errorf("resolve home dir: %w", err)
 	}
 	path := filepath.Join(home, ".ssh", "config")
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- path is the fixed .ssh/config child of the OS-reported home directory.
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -342,19 +342,19 @@ func gcStore(store *artifact.Store, cutoff time.Time, maxBytes int64, protect ma
 		var c candidate
 		var tsStr string
 		if scanErr := rows.Scan(&c.id, &tsStr, &c.bytes); scanErr != nil {
-			rows.Close()
+			_ = rows.Close()
 			return 0, 0, fmt.Errorf("gc: scan run: %w", scanErr)
 		}
 		ts, parseErr := time.Parse(time.RFC3339, tsStr)
 		if parseErr != nil {
-			rows.Close()
+			_ = rows.Close()
 			return 0, 0, fmt.Errorf("gc: parse ts: %w", parseErr)
 		}
 		c.ts = ts
 		all = append(all, c)
 	}
 	rowsErr := rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if rowsErr != nil {
 		return 0, 0, fmt.Errorf("gc: query runs: %w", rowsErr)
 	}

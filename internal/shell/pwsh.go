@@ -3,7 +3,7 @@ package shell
 
 import (
 	"bytes"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- SHA-1 is only an OpenSSH-compatible filename slug, not a security digest.
 	"encoding/base64"
 	"encoding/hex"
 	"sort"
@@ -12,7 +12,7 @@ import (
 
 const (
 	// PwshDefaultShell is the PowerShell 7 executable used by default.
-	PwshDefaultShell = `C:\Program Files\PowerShell\7\pwsh.exe`
+	PwshDefaultShell = `C:\Program Files\PowerShell\7\pwsh.exe` // #nosec G101 -- executable path, not a credential.
 	// WindowsPowerShellShell is the in-box Windows PowerShell 5.1 executable.
 	WindowsPowerShellShell = `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
 )
@@ -223,6 +223,6 @@ func decodePwshEnvDump(b64 string) map[string]string {
 func BodySlug(body []byte) string {
 	normalized := bytes.ReplaceAll(body, []byte("\r\n"), []byte("\n"))
 	normalized = bytes.TrimRight(normalized, "\n")
-	sum := sha1.Sum(normalized)
+	sum := sha1.Sum(normalized) // #nosec G401 -- non-security filename slug for remote script reuse.
 	return hex.EncodeToString(sum[:])[:8]
 }
