@@ -225,6 +225,7 @@ jobs:
           gh release create "${VERSION}" \
             --repo "${GITHUB_REPOSITORY}" \
             --verify-tag \
+            --target "${GITHUB_SHA}" \
             --fail-on-no-commits \
             --generate-notes \
             --title "sshai ${VERSION}" \
