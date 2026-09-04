@@ -12,8 +12,9 @@
 [![Agent Skill included](https://img.shields.io/badge/Agent_Skill-included-6f42c1)](skills/sshai/SKILL.md)
 
 `sshai` is a Go CLI for AI agents that runs non-interactive Linux commands through Bash by default
-or an explicitly selected POSIX shell, and Windows PowerShell commands over SSH. PowerShell 7
-(`pwsh`) is the default; Windows PowerShell 5.1 is selectable per invocation. It keeps captured
+or an explicitly selected POSIX shell, and Windows PowerShell commands over SSH. By default it
+prefers PowerShell 7 (`pwsh`) and falls back to Windows PowerShell 5.1 when `pwsh` is unavailable;
+either host can be required explicitly per invocation. It keeps captured
 command output in a local artifact and returns a compact passport instead of flooding agent context.
 
 Remote commands in. Compact evidence out.
@@ -36,8 +37,8 @@ agent harnesses can load the same skill.
 ## Capabilities
 
 - Run commands on one or more Linux SSH aliases through Bash by default or a selected POSIX shell.
-- Run commands on one or more Windows/PowerShell SSH aliases with PowerShell 7 as the default and
-  Windows PowerShell 5.1 selectable per invocation.
+- Run commands on one or more Windows/PowerShell SSH aliases, preferring PowerShell 7 by default
+  with a Windows PowerShell 5.1 fallback or an explicitly required host.
 - Store output locally and return a bounded passport with outcome and artifact location.
 - Query, diff, and search artifacts without replaying whole command results.
 - Use `--body-file` for multiline commands, JSON result envelopes, `--delta`, and named contexts.
@@ -120,7 +121,9 @@ sshai run --posix-shell /bin/ash openwrt01 -- uname -s
 hosts only; Windows hosts in a mixed fan-out retain their PowerShell selection. A missing selected
 shell is a remote error—`sshai` never falls back to Bash.
 
-PowerShell 7 remains the Windows default. Select Windows PowerShell 5.1 when a command requires it:
+On Windows, the default selection prefers PowerShell 7 and falls back to Windows PowerShell 5.1
+when PowerShell 7 is unavailable. Use `--powershell-host pwsh` to require PowerShell 7 without a
+fallback, or select Windows PowerShell 5.1 when a command requires it:
 
 ```bash
 sshai run --powershell-host windows-powershell --body-file check.ps1 sccm01

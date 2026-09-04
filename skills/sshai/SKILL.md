@@ -30,14 +30,14 @@ sshai run --posix-shell /bin/ash <host> -- <command>
 
 Without `--posix-shell`, Linux-family execution remains `bash -s`. The selector accepts one non-empty path/token without whitespace or control characters. `sshai` safely quotes the selected interpreter and keeps the wrapped command body on stdin; never place a multi-line body or secret values in argv. The selector affects non-Windows hosts only, so Windows hosts in a mixed fan-out retain their PowerShell path. A missing selected shell is a genuine remote-command failure; never retry by silently falling back to Bash.
 
-For a Windows body, `pwsh` (PowerShell 7) remains the default. Select the in-box Windows PowerShell 5.1 host explicitly when required:
+For a Windows body, omitting `--powershell-host` prefers `pwsh` (PowerShell 7) and falls back to the in-box Windows PowerShell 5.1 host when PowerShell 7 is unavailable. Select a host explicitly when the command requires its semantics; an explicit `pwsh` selection does not fall back:
 
 ```bash
 sshai run --powershell-host pwsh --body-file check.ps1 windows01
 sshai run --powershell-host windows-powershell --body-file check.ps1 windows01
 ```
 
-The only supported values are `pwsh` and `windows-powershell`; an invalid selector is a usage error. The selector affects Windows body execution; Linux hosts in the same fan-out are unaffected. Do not describe Windows PowerShell 5.1 as unsupported or use a fallback solely because it is 5.1.
+The only supported values are `pwsh` and `windows-powershell`; an invalid selector is a usage error. The selector affects Windows body execution; Linux hosts in the same fan-out are unaffected. Do not describe Windows PowerShell 5.1 as unsupported.
 
 For one long-running host command, request an ephemeral structured event stream explicitly:
 

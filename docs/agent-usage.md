@@ -14,8 +14,8 @@ Run `sshai help` for the full command list, `sshai help <command>` for flags.
 Use `sshai` by default when all of these are true:
 
 - the target is a non-interactive Linux host (Bash by default, or an explicitly selected POSIX
-  shell) or Windows PowerShell host reachable by an `ssh_config` alias; Windows defaults to
-  PowerShell 7 and can explicitly select 5.1;
+  shell) or Windows PowerShell host reachable by an `ssh_config` alias; Windows prefers PowerShell
+  7, falls back to 5.1 when unavailable, and can require either host explicitly;
 - the operation executes a command and consumes text output, rather than transferring a file or
   driving an interactive program;
 - command text and expected output contain no secret value;
@@ -43,7 +43,9 @@ Bash as the Linux default. The selector affects non-Windows hosts only, so Windo
 fan-out retain their PowerShell selection. A missing selected shell remains a remote error; `sshai`
 does not fall back to Bash.
 
-For a Windows body that requires Windows PowerShell 5.1 rather than the default PowerShell 7 host:
+On Windows, omitting `--powershell-host` prefers PowerShell 7 and falls back to Windows PowerShell
+5.1 when PowerShell 7 is unavailable. Use `--powershell-host pwsh` to require PowerShell 7 without
+fallback. For a body that requires Windows PowerShell 5.1:
 
 ```bash
 sshai run --powershell-host windows-powershell --body-file check.ps1 sccm01

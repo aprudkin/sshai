@@ -660,7 +660,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		return newInternalFailureOutcome(exitUsage)
 	}
 	if !ok {
-		facts, err = session.Probe(deps.Tr, opts.Host, selectedPowerShell, opts.Timeout)
+		facts, err = session.Probe(deps.Tr, opts.Host, selectedPowerShell, opts.PowerShellHost == "", opts.Timeout)
 		if err != nil {
 			if te, isTE := asTransportError(err); isTE {
 				return handleTransportError(deps, opts, te, stdout, stderr)

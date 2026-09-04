@@ -136,8 +136,10 @@ func writeJSON(path string, v any) error {
 }
 
 // Probe determines whether host runs Linux or Windows and, for Windows,
-// which invocation Form works over this host's OpenSSH DefaultShell. It
-// runs `uname -s` first: an honest exit 0 whose output contains "Linux",
+// which invocation Form works over this host's OpenSSH DefaultShell. When
+// allowWindowsPowerShellFallback is true and the requested shell is PowerShell
+// 7, the Windows path also tries Windows PowerShell 5.1. It runs `uname -s`
+// first: an honest exit 0 whose output contains "Linux",
 // "Darwin", or "BSD" is treated as Linux family. Any other outcome (a
 // non-zero rc — no bash on Windows's default shell — or unrecognized
 // output) falls through to the Windows path.
@@ -152,7 +154,7 @@ func writeJSON(path string, v any) error {
 // *transport.TransportError) is returned immediately. If no candidate can
 // create the scratch dir, Probe reports that as a transport/setup failure
 // instead of saving a guessed shell form.
-func Probe(tr transport.Transport, host, pwshShell string, timeout time.Duration) (Facts, error) {
+func Probe(tr transport.Transport, host, pwshShell string, allowWindowsPowerShellFallback bool, timeout time.Duration) (Facts, error) {
 	res, err := tr.Exec(host, "uname -s", nil, timeout)
 	if err != nil {
 		return Facts{}, err
@@ -165,7 +167,7 @@ func Probe(tr transport.Transport, host, pwshShell string, timeout time.Duration
 	}
 
 	candidates := []string{pwshShell}
-	if pwshShell == shell.PwshDefaultShell {
+	if allowWindowsPowerShellFallback && pwshShell == shell.PwshDefaultShell {
 		candidates = append(candidates, shell.WindowsPowerShellShell)
 	}
 

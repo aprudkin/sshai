@@ -94,7 +94,7 @@ internal/policy/     # v1: readonly allowlist (fail-closed)
 
 ```
 sshai run [flags] <host...> -- <command>     # execute; N hosts = fan-out
-sshai run --powershell-host windows-powershell <host...> -- <command>  # select Windows PowerShell 5.1; pwsh 7 is default
+sshai run --powershell-host windows-powershell <host...> -- <command>  # require Windows PowerShell 5.1; default prefers pwsh 7 with a 5.1 fallback
 sshai run --body-file f.ps1 <host...>        # body from file or stdin (never argv)
       --accept-new-host-key HOST  # exact authorized alias; accept unknown, reject changed, report algorithm/fingerprint
       --proxy-jump none           # bypass configured ProxyJump for this invocation only
@@ -151,8 +151,8 @@ over from `/ps-ssh`), cached in the local DB; overridable per host in config.
 
 **Windows path** carries the paid-for lessons from `ps_ssh.py` (314 lines, ported with its control
 cases): UTF-8 BOM on body files, body delivery via scp staging (command-line length limits,
-quoting), PowerShell 7 by default with explicit Windows PowerShell 5.1 selection, DefaultShell
-invocation-form detection, and CLIXML filtering of stderr.
+quoting), PowerShell 7 preferred by default with a Windows PowerShell 5.1 fallback, strict explicit
+host selection, DefaultShell invocation-form detection, and CLIXML filtering of stderr.
 
 **Re-injection mechanics.** Every run is wrapped: prologue (`cd` to saved cwd + restore changed env
 vars) → user body → epilogue (dump cwd/env after a sentinel marker; runs on failure too —

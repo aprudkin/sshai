@@ -209,6 +209,7 @@ func TestProbe(t *testing.T) {
 		name          string
 		responses     []fakeResp
 		want          Facts
+		allowFallback bool
 		wantErr       bool
 		wantErrReason string
 		checkCommands func(t *testing.T, cmds []string)
@@ -277,7 +278,8 @@ func TestProbe(t *testing.T) {
 				{res: transport.Result{ExitCode: 1, Output: []byte(`& was unexpected at this time.`)}},
 				{res: transport.Result{ExitCode: 0, Output: []byte("")}},
 			},
-			want: Facts{OS: "windows", Shell: shell.WindowsPowerShellShell, Form: "cmd"},
+			want:          Facts{OS: "windows", Shell: shell.WindowsPowerShellShell, Form: "cmd"},
+			allowFallback: true,
 			checkCommands: func(t *testing.T, cmds []string) {
 				if len(cmds) != 4 {
 					t.Fatalf("commands = %q, want 4 calls", cmds)
@@ -287,6 +289,26 @@ func TestProbe(t *testing.T) {
 				}
 				if !strings.Contains(cmds[3], shell.WindowsPowerShellShell) {
 					t.Fatalf("call 3 = %q, want windows powershell fallback", cmds[3])
+				}
+			},
+		},
+		{
+			// An explicit pwsh selection is strict: if PowerShell 7 cannot
+			// create the scratch directory, Probe must not silently execute
+			// the body with Windows PowerShell 5.1 instead.
+			name: "windows, explicit pwsh failure does not fall back",
+			responses: []fakeResp{
+				{res: transport.Result{ExitCode: 1, Output: []byte("command not found")}},
+				{res: transport.Result{ExitCode: 1, Output: []byte("Access is denied.")}},
+				{res: transport.Result{ExitCode: 1, Output: []byte("Access is denied.")}},
+			},
+			wantErr:       true,
+			wantErrReason: "ssh",
+			checkCommands: func(t *testing.T, cmds []string) {
+				for _, cmd := range cmds {
+					if strings.Contains(cmd, shell.WindowsPowerShellShell) {
+						t.Fatalf("explicit pwsh probe used Windows PowerShell fallback: %q", cmds)
+					}
 				}
 			},
 		},
@@ -302,6 +324,7 @@ func TestProbe(t *testing.T) {
 				{res: transport.Result{ExitCode: 1, Output: []byte("Access is denied.")}},
 				{res: transport.Result{ExitCode: 1, Output: []byte("Access is denied.")}},
 			},
+			allowFallback: true,
 			wantErr:       true,
 			wantErrReason: "ssh",
 		},
@@ -310,7 +333,7 @@ func TestProbe(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tr := &fakeTransport{responses: tc.responses}
-			got, err := Probe(tr, "h1", pwshShell, time.Minute)
+			got, err := Probe(tr, "h1", pwshShell, tc.allowFallback, time.Minute)
 			if tc.wantErr {
 				var te *transport.TransportError
 				if !errors.As(err, &te) {
@@ -318,6 +341,9 @@ func TestProbe(t *testing.T) {
 				}
 				if tc.wantErrReason != "" && te.Reason != tc.wantErrReason {
 					t.Fatalf("TransportError.Reason = %q, want %q", te.Reason, tc.wantErrReason)
+				}
+				if tc.checkCommands != nil {
+					tc.checkCommands(t, tr.commands)
 				}
 				return
 			}

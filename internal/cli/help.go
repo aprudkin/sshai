@@ -63,9 +63,10 @@ Flags:
                       on OpenWrt. Bash remains the default when omitted;
                       Windows hosts are unaffected
   --powershell-host HOST
-                      Windows interpreter: "pwsh" (PowerShell 7, default)
-                      or "windows-powershell" (Windows PowerShell 5.1).
-                      Linux hosts in the same fan-out are unaffected
+                      explicitly require "pwsh" (PowerShell 7) or
+                      "windows-powershell" (Windows PowerShell 5.1).
+                      When omitted, prefer PowerShell 7 and fall back to 5.1
+                      if unavailable. Linux fan-out hosts are unaffected
   --accept-new-host-key HOST
                       only after direct user authorization for this exact
                       alias: add a previously unknown key for HOST, while
