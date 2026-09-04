@@ -17,7 +17,7 @@ import (
 
 func TestFactsRoundTrip(t *testing.T) {
 	root := t.TempDir()
-	want := Facts{OS: "windows", Shell: shell.PwshDefaultShell, Form: "pwsh"}
+	want := Facts{OS: "windows", Shell: shell.PwshDefaultShell, Form: "pwsh", WindowsProbeVersion: currentWindowsProbeVersion}
 	if err := SaveFacts(root, "h1", want); err != nil {
 		t.Fatal(err)
 	}
@@ -27,6 +27,24 @@ func TestFactsRoundTrip(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestLoadFactsInvalidatesLegacyWindowsProbe(t *testing.T) {
+	root := t.TempDir()
+	legacy := Facts{OS: "windows", Shell: shell.PwshDefaultShell, Form: "cmd"}
+	if err := writeJSON(factsPath(root, "h1"), legacy); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := LoadFacts(root, "h1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatalf("legacy Windows facts loaded as current: %+v", got)
+	}
+	if got != legacy {
+		t.Fatalf("got %+v, want legacy payload preserved for diagnostics", got)
 	}
 }
 
@@ -248,29 +266,44 @@ func TestProbe(t *testing.T) {
 			wantErrReason: "ssh",
 		},
 		{
-			// Ported from ps_ssh.py's ensure_remote_dir: a non-zero rc
-			// that does NOT carry the pwsh-default signature is accepted
-			// as-is (the directory very likely already exists; scp is the
-			// real writability test), so the cmd form is accepted on its
-			// own first try without ever probing the pwsh form.
-			name: "windows, cmd form non-zero without pwsh-default signature is accepted",
+			// A missing PowerShell 7 executable on a cmd-default Windows
+			// OpenSSH server returns a plain remote exit, not a transport
+			// error. Probe must not cache that missing executable as usable;
+			// it should fall back to the in-box Windows PowerShell path.
+			name: "windows, default pwsh missing falls back to windows powershell",
 			responses: []fakeResp{
 				{res: transport.Result{ExitCode: 1, Output: []byte("command not found")}},
-				{res: transport.Result{ExitCode: 1, Output: []byte("Access is denied.")}},
+				{res: transport.Result{ExitCode: 1, Output: []byte(`"C:\Program" is not recognized as an internal or external command`)}},
+				{res: transport.Result{ExitCode: 1, Output: []byte(`& was unexpected at this time.`)}},
+				{res: transport.Result{ExitCode: 0, Output: []byte("")}},
 			},
-			want: Facts{OS: "windows", Shell: pwshShell, Form: "cmd"},
+			want: Facts{OS: "windows", Shell: shell.WindowsPowerShellShell, Form: "cmd"},
+			checkCommands: func(t *testing.T, cmds []string) {
+				if len(cmds) != 4 {
+					t.Fatalf("commands = %q, want 4 calls", cmds)
+				}
+				if !strings.Contains(cmds[1], shell.PwshDefaultShell) {
+					t.Fatalf("call 1 = %q, want default pwsh candidate", cmds[1])
+				}
+				if !strings.Contains(cmds[3], shell.WindowsPowerShellShell) {
+					t.Fatalf("call 3 = %q, want windows powershell fallback", cmds[3])
+				}
+			},
 		},
 		{
-			// Ported from ps_ssh.py's ensure_remote_dir loop-exhausted
-			// case: both forms fail non-zero WITH the pwsh-default
-			// signature -> fall back to form "cmd" with no error.
-			name: "windows, both forms show pwsh-default signature falls back to cmd",
+			// If no Windows PowerShell candidate can create the scratch
+			// directory, Probe must fail instead of caching a guessed shell
+			// form that cannot execute staged scripts.
+			name: "windows, all powershell candidates fail reports transport error",
 			responses: []fakeResp{
 				{res: transport.Result{ExitCode: 1, Output: []byte("command not found")}},
 				{res: transport.Result{ExitCode: 1, Output: []byte("ParserError: Unexpected token")}},
 				{res: transport.Result{ExitCode: 1, Output: []byte("ParserError: Unexpected token")}},
+				{res: transport.Result{ExitCode: 1, Output: []byte("Access is denied.")}},
+				{res: transport.Result{ExitCode: 1, Output: []byte("Access is denied.")}},
 			},
-			want: Facts{OS: "windows", Shell: pwshShell, Form: "cmd"},
+			wantErr:       true,
+			wantErrReason: "ssh",
 		},
 	}
 

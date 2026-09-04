@@ -3,6 +3,10 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
+	"io"
+	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +14,73 @@ import (
 
 	"github.com/aprudkin/sshai/internal/artifact"
 )
+
+func TestMain(m *testing.M) {
+	switch os.Getenv("SSHAI_QUERY_TEST_HELPER") {
+	case "cat":
+		os.Exit(queryTestCat(os.Args[1:]))
+	case "grep":
+		os.Exit(queryTestGrep(os.Args[1:]))
+	case "signal":
+		p, err := os.FindProcess(os.Getpid())
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := p.Signal(os.Kill); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		time.Sleep(time.Second)
+		os.Exit(1)
+	default:
+		os.Exit(m.Run())
+	}
+}
+
+func queryTestTool(t *testing.T, mode string) string {
+	t.Helper()
+	t.Setenv("SSHAI_QUERY_TEST_HELPER", mode)
+	return os.Args[0]
+}
+
+func queryTestCat(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "missing artifact path")
+		return 2
+	}
+	data, err := os.ReadFile(args[len(args)-1])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	_, _ = os.Stdout.Write(data)
+	return 0
+}
+
+func queryTestGrep(args []string) int {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: grep PATTERN PATH")
+		return 2
+	}
+	pattern := args[0]
+	data, err := os.ReadFile(args[len(args)-1])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	matched := false
+	for _, line := range strings.SplitAfter(string(data), "\n") {
+		if strings.Contains(line, pattern) {
+			_, _ = io.WriteString(os.Stdout, line)
+			matched = true
+		}
+	}
+	if !matched {
+		return 1
+	}
+	return 0
+}
 
 // newQueryTestStore opens a store rooted at a fresh t.TempDir() (via
 // SSHAI_ROOT, matching config.Load()'s own precedence) and saves two
@@ -38,9 +109,10 @@ func newQueryTestStore(t *testing.T) (root, id1, id2 string) {
 
 func TestQRunsLocalToolOverArtifact(t *testing.T) {
 	_, id1, _ := newQueryTestStore(t)
+	tool := queryTestTool(t, "grep")
 
 	var out, errB bytes.Buffer
-	rc := Q([]string{id1, "--", "grep", "beta"}, &out, &errB)
+	rc := Q([]string{id1, "--", tool, "beta"}, &out, &errB)
 	if rc != 0 {
 		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
 	}
@@ -54,9 +126,10 @@ func TestQRunsLocalToolOverArtifact(t *testing.T) {
 
 func TestQUnknownIDExits96(t *testing.T) {
 	newQueryTestStore(t)
+	tool := queryTestTool(t, "grep")
 
 	var out, errB bytes.Buffer
-	rc := Q([]string{"a999", "--", "grep", "beta"}, &out, &errB)
+	rc := Q([]string{"a999", "--", tool, "beta"}, &out, &errB)
 	if rc != 96 {
 		t.Fatalf("rc=%d, want 96; stderr=%s", rc, errB.String())
 	}
@@ -99,9 +172,10 @@ func TestDiffOfArtifactWithItselfPrintsNoDifference(t *testing.T) {
 // brief's exact clip message, not silently truncate.
 func TestQBudgetTrimAppendsClipMessage(t *testing.T) {
 	_, id1, _ := newQueryTestStore(t)
+	tool := queryTestTool(t, "cat")
 
 	var out, errB bytes.Buffer
-	rc := Q([]string{"--budget", "1", id1, "--", "cat"}, &out, &errB)
+	rc := Q([]string{"--budget", "1", id1, "--", tool}, &out, &errB)
 	if rc != 0 {
 		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
 	}
@@ -136,9 +210,10 @@ func markPruned(t *testing.T, root, id string) {
 func TestQPrunedIDExits96WithDistinctMessage(t *testing.T) {
 	root, id1, _ := newQueryTestStore(t)
 	markPruned(t, root, id1)
+	tool := queryTestTool(t, "grep")
 
 	var out, errB bytes.Buffer
-	rc := Q([]string{id1, "--", "grep", "beta"}, &out, &errB)
+	rc := Q([]string{id1, "--", tool, "beta"}, &out, &errB)
 	if rc != 96 {
 		t.Fatalf("rc=%d, want 96; stderr=%s", rc, errB.String())
 	}
@@ -206,9 +281,10 @@ func TestQBudgetTrimIsValidUTF8AtMultiByteBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.Close()
+	tool := queryTestTool(t, "cat")
 
 	var out, errB bytes.Buffer
-	rc := Q([]string{"--budget", "4", m.ID, "--", "cat"}, &out, &errB)
+	rc := Q([]string{"--budget", "4", m.ID, "--", tool}, &out, &errB)
 	if rc != 0 {
 		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
 	}
@@ -230,13 +306,14 @@ func TestQBudgetTrimIsValidUTF8AtMultiByteBoundary(t *testing.T) {
 // status (e.g. -1 -> 255, indistinguishable from a real exit 255), so Q
 // must recognize it and fall back to the reserved usage code instead.
 func TestQSignalKilledToolExits96NotNegative(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX signal termination as a negative process exit code")
+	}
 	_, id1, _ := newQueryTestStore(t)
+	tool := queryTestTool(t, "signal")
 
 	var out, errB bytes.Buffer
-	// "sh -c 'kill -9 $$' <path>": the appended path becomes $0 inside the
-	// script, which the script itself never uses, and the process kills
-	// itself with SIGKILL before producing any output.
-	rc := Q([]string{id1, "--", "sh", "-c", "kill -9 $$"}, &out, &errB)
+	rc := Q([]string{id1, "--", tool}, &out, &errB)
 	if rc != 96 {
 		t.Fatalf("rc=%d, want 96 (usage) for a signal-killed tool; stderr=%s", rc, errB.String())
 	}

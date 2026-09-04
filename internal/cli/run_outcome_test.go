@@ -20,6 +20,21 @@ func openOutcomeTestStore(t *testing.T, root string) *artifact.Store {
 	return store
 }
 
+func poisonArtifactDir(t *testing.T, root string) {
+	t.Helper()
+	artDir := filepath.Join(root, "art")
+	if err := os.Remove(artDir); err != nil {
+		t.Fatalf("remove artifact dir: %v", err)
+	}
+	if err := os.WriteFile(artDir, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("replace artifact dir with file: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(artDir)
+		_ = os.MkdirAll(artDir, 0o700)
+	})
+}
+
 func TestRunHostOutcomeSuccess(t *testing.T) {
 	root := t.TempDir()
 	seedLinuxFacts(t, root, "web01")
@@ -103,11 +118,7 @@ func TestRunHostOutcomeSaveFailure(t *testing.T) {
 	root := t.TempDir()
 	seedLinuxFacts(t, root, "web01")
 	store := openOutcomeTestStore(t, root)
-	artDir := filepath.Join(root, "art")
-	if err := os.Chmod(artDir, 0o500); err != nil {
-		t.Fatalf("chmod art: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(artDir, 0o700) })
+	poisonArtifactDir(t, root)
 	deps := Deps{Tr: &fakeTr{rc: 0}, Store: store}
 
 	var stdout, stderr bytes.Buffer

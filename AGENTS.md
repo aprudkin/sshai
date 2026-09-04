@@ -37,7 +37,8 @@ buffers per-host output so results still flush in argument order.
 
 `q`, `diff`, `log`, `hosts`, and `gc` are local follow-up paths over the same state. Runtime data
 lives under `$SSHAI_ROOT` or `~/.sshai`: `config.toml`, `art/`, `db.sqlite`, `audit.jsonl`,
-per-host `state/`, and OpenSSH ControlMaster sockets under `cm/`.
+per-host `state/`, and OpenSSH ControlMaster sockets under `cm/` when the local OpenSSH client
+supports connection sharing.
 
 ## Key Directories
 
@@ -119,7 +120,7 @@ scripts/install.sh                           # atomic install to ~/.local/bin/ss
   delta, and audit changes.
 - `internal/cli/result_mode.go`: deterministic human/JSON invocation output and `--result-out`.
 - `internal/transport/transport.go` and `openssh.go`: transport contract, system OpenSSH behavior,
-  timeouts, ControlMaster settings, and stream caps.
+  timeouts, optional ControlMaster settings, and stream caps.
 - `internal/artifact/store.go`, `passport.go`, and `result.go`: persistence and output contracts.
 - `internal/session/state.go` and `internal/shell/{bash,pwsh,envdiff}.go`: cross-shell state
   continuity and encoding/parsing.

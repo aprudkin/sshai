@@ -18,10 +18,13 @@ import (
 // Probe) actually work over this host's OpenSSH DefaultShell. Form is
 // empty for a Linux host, where no shell-form ambiguity exists.
 type Facts struct {
-	OS    string // "linux" | "windows"
-	Shell string
-	Form  string // "" | "cmd" | "pwsh"
+	OS                  string // "linux" | "windows"
+	Shell               string
+	Form                string // "" | "cmd" | "pwsh"
+	WindowsProbeVersion int    `json:"windows_probe_version,omitempty"`
 }
+
+const currentWindowsProbeVersion = 2
 
 // hostDir is the per-host state directory, <root>/state/<host>/, holding
 // facts.json, baseline.json, and one <ctx>.json per shell context.
@@ -47,11 +50,17 @@ func baselinePath(root, host string) string {
 func LoadFacts(root, host string) (Facts, bool, error) {
 	var f Facts
 	ok, err := readJSON(factsPath(root, host), &f)
+	if ok && f.OS == "windows" && f.WindowsProbeVersion != currentWindowsProbeVersion {
+		return f, false, nil
+	}
 	return f, ok, err
 }
 
 // SaveFacts writes host's Facts under root, atomically.
 func SaveFacts(root, host string, f Facts) error {
+	if f.OS == "windows" {
+		f.WindowsProbeVersion = currentWindowsProbeVersion
+	}
 	return writeJSON(factsPath(root, host), f)
 }
 
@@ -133,22 +142,16 @@ func writeJSON(path string, v any) error {
 // non-zero rc — no bash on Windows's default shell — or unrecognized
 // output) falls through to the Windows path.
 //
-// The Windows path is ported from ps_ssh.py's ensure_remote_dir: it
-// creates the remote scratch dir (shell.RemoteDir) via New-Item, trying
-// each invocation form in turn ("cmd" first, then "pwsh") and returning
-// as soon as one works. Resolving the form here, at first contact, rather
-// than at execute time, is deliberate — ps_ssh.py's original flow ended
-// this step in `|| true`, so on a pwsh-default host it failed silently,
-// the scratch dir was never created, scp then failed, and the run
-// aborted at transport; the "& " fallback at the execute step could never
-// fire on the very hosts it existed for. A transport failure (Exec
-// returning a *transport.TransportError) is returned immediately. A
-// non-zero rc that does NOT carry LooksLikePwshDefault's signature is
-// accepted as-is: the directory very likely already exists (ps_ssh.py's
-// original form swallowed exactly this case with `|| true`), and scp is
-// the real test of whether the path is writable. If both forms fail with
-// the signature, the loop falls back to form "cmd" with no error,
-// mirroring ensure_remote_dir's own loop-exhausted return.
+// The Windows path creates the remote scratch dir (shell.RemoteDir) via
+// New-Item, trying PowerShell executable candidates and invocation forms
+// until one command succeeds. Resolving the executable + form here, at
+// first contact, rather than at execute time, is deliberate: a missing
+// default pwsh.exe or a mismatched OpenSSH DefaultShell must not be cached
+// as a usable host fact, because every later run would fail before the
+// user's command starts. A transport failure (Exec returning a
+// *transport.TransportError) is returned immediately. If no candidate can
+// create the scratch dir, Probe reports that as a transport/setup failure
+// instead of saving a guessed shell form.
 func Probe(tr transport.Transport, host, pwshShell string, timeout time.Duration) (Facts, error) {
 	res, err := tr.Exec(host, "uname -s", nil, timeout)
 	if err != nil {
@@ -161,24 +164,25 @@ func Probe(tr transport.Transport, host, pwshShell string, timeout time.Duration
 		}
 	}
 
+	candidates := []string{pwshShell}
+	if pwshShell == shell.PwshDefaultShell {
+		candidates = append(candidates, shell.WindowsPowerShellShell)
+	}
+
 	tail := `-NoProfile -Command "New-Item -ItemType Directory -Force -Path '` + shell.RemoteDir + `' | Out-Null"`
-	for _, form := range []string{"cmd", "pwsh"} {
-		cmd := shell.PwshInvocation(form, pwshShell, tail)
-		res, err := tr.Exec(host, cmd, nil, timeout)
-		if err != nil {
-			return Facts{}, err
-		}
-		if res.ExitCode == 0 {
-			return Facts{OS: "windows", Shell: pwshShell, Form: form}, nil
-		}
-		if !shell.LooksLikePwshDefault(res.Output) {
-			// Non-zero without the signature: the directory very likely
-			// already exists. Ported from ps_ssh.py's ensure_remote_dir —
-			// scp is the real writability test.
-			return Facts{OS: "windows", Shell: pwshShell, Form: form}, nil
+	var lastOutput []byte
+	for _, candidate := range candidates {
+		for _, form := range []string{"cmd", "pwsh"} {
+			cmd := shell.PwshInvocation(form, candidate, tail)
+			res, err := tr.Exec(host, cmd, nil, timeout)
+			if err != nil {
+				return Facts{}, err
+			}
+			if res.ExitCode == 0 {
+				return Facts{OS: "windows", Shell: candidate, Form: form}, nil
+			}
+			lastOutput = res.Output
 		}
 	}
-	// Both forms failed with the pwsh-default signature. Ported from
-	// ps_ssh.py's ensure_remote_dir loop-exhausted return.
-	return Facts{OS: "windows", Shell: pwshShell, Form: "cmd"}, nil
+	return Facts{}, transport.NewTransportError("ssh", lastOutput)
 }
