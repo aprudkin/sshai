@@ -1,35 +1,233 @@
-name: Release candidate
+name: Release
 
 on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
   workflow_dispatch:
     inputs:
       version:
-        description: Semantic version to package
+        description: Stable semantic version to package without publishing
         required: true
-        default: v1.0.0
         type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+  cancel-in-progress: false
+
+env:
+  GOTOOLCHAIN: local
+  GO_VERSION: "1.26.5"
+  VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+
 jobs:
   package:
+    name: Verify and package
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version: "1.26.x"
-          check-latest: true
-      - name: Verify source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.2.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          check-latest: false
+      - name: Validate release source
+        shell: bash
         run: |
+          set -euo pipefail
+          if ! grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' <<<"${VERSION}"; then
+            echo "invalid stable release version: ${VERSION}" >&2
+            exit 1
+          fi
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            git fetch --no-tags origin main
+            if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+              echo "release tag must point to a commit reachable from main" >&2
+              exit 1
+            fi
+          fi
+      - name: Verify source
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/check-release-tree.sh
+          go mod verify
           go test ./...
           go vet ./...
+          go build ./...
+          go tool govulncheck ./...
+      - name: Run gosec v2.29.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          GOBIN="${RUNNER_TEMP}/bin" go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+          "${RUNNER_TEMP}/bin/gosec" ./...
       - name: Build release archives
-        run: scripts/package-release.sh "${{ inputs.version }}"
-      - name: Upload release candidate
-        uses: actions/upload-artifact@v4
+        run: scripts/package-release.sh "${VERSION}"
+      - name: Verify archive inventory and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2153
+          version="${VERSION#v}"
+          cat > "${RUNNER_TEMP}/expected-assets" <<EOF
+          checksums.txt
+          sshai_${version}_darwin_amd64.tar.gz
+          sshai_${version}_darwin_arm64.tar.gz
+          sshai_${version}_linux_amd64.tar.gz
+          sshai_${version}_linux_arm64.tar.gz
+          sshai_${version}_windows_amd64.zip
+          sshai_${version}_windows_arm64.zip
+          EOF
+          find dist -maxdepth 1 -type f -printf '%f\n' | sort > "${RUNNER_TEMP}/actual-assets"
+          diff -u "${RUNNER_TEMP}/expected-assets" "${RUNNER_TEMP}/actual-assets"
+          (cd dist && sha256sum -c checksums.txt)
+      - name: Build release metadata
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_archive="${RUNNER_TEMP}/${VERSION}.tar.gz"
+          curl --fail --location --retry 5 --retry-delay 2 \
+            "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${VERSION}.tar.gz" \
+            --output "${source_archive}"
+          source_sha=$(sha256sum "${source_archive}" | cut -d' ' -f1)
+          scripts/render-homebrew-formula.sh "${VERSION}" "${source_sha}"
+          python3 - "${VERSION}" "${GITHUB_SHA}" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          version, commit = sys.argv[1:]
+          dist = pathlib.Path("dist")
+          assets = []
+          for path in sorted(dist.iterdir()):
+              if path.name == "release-manifest.json":
+                  continue
+              assets.append({
+                  "name": path.name,
+                  "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                  "bytes": path.stat().st_size,
+              })
+          manifest = {
+              "schema": "sshai-release/v1",
+              "tag": version,
+              "commit": commit,
+              "go_version": "1.26.5",
+              "assets": assets,
+          }
+          (dist / "release-manifest.json").write_text(
+              json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+          )
+          PY
+      - name: Upload verified candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: sshai-${{ inputs.version }}-candidate
+          name: sshai-${{ env.VERSION }}-candidate
           path: dist/
           if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub release
+    if: github.event_name == 'push'
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sshai-${{ env.VERSION }}-candidate
+          path: dist
+      - name: Publish or verify release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2153
+          version="${VERSION#v}"
+          cat > "${RUNNER_TEMP}/expected-assets" <<EOF
+          checksums.txt
+          release-manifest.json
+          sshai.rb
+          sshai_${version}_darwin_amd64.tar.gz
+          sshai_${version}_darwin_arm64.tar.gz
+          sshai_${version}_linux_amd64.tar.gz
+          sshai_${version}_linux_arm64.tar.gz
+          sshai_${version}_windows_amd64.zip
+          sshai_${version}_windows_arm64.zip
+          EOF
+          find dist -maxdepth 1 -type f -printf '%f\n' | sort > "${RUNNER_TEMP}/actual-assets"
+          diff -u "${RUNNER_TEMP}/expected-assets" "${RUNNER_TEMP}/actual-assets"
+          (cd dist && sha256sum -c checksums.txt)
+          python3 - "${VERSION}" "${GITHUB_SHA}" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          version, commit = sys.argv[1:]
+          dist = pathlib.Path("dist")
+          manifest = json.loads((dist / "release-manifest.json").read_text(encoding="utf-8"))
+          if manifest.get("schema") != "sshai-release/v1":
+              raise SystemExit("unexpected release manifest schema")
+          if manifest.get("tag") != version or manifest.get("commit") != commit:
+              raise SystemExit("release manifest does not match the tag event")
+          expected = {
+              path.name: {
+                  "name": path.name,
+                  "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                  "bytes": path.stat().st_size,
+              }
+              for path in dist.iterdir()
+              if path.name != "release-manifest.json"
+          }
+          actual = {asset["name"]: asset for asset in manifest.get("assets", [])}
+          if actual != expected:
+              raise SystemExit(f"release manifest assets differ: expected={expected!r} actual={actual!r}")
+          PY
+          mapfile -t assets < <(find dist -maxdepth 1 -type f -print | sort)
+          if gh release view "${VERSION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release view "${VERSION}" --repo "${GITHUB_REPOSITORY}" \
+              --json isDraft,assets > "${RUNNER_TEMP}/existing-release.json"
+            python3 - "${RUNNER_TEMP}/existing-release.json" "${assets[@]}" <<'PY'
+          import hashlib
+          import json
+          import pathlib
+          import sys
+
+          release = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if release["isDraft"]:
+              raise SystemExit("existing release is still a draft; inspect it before retrying")
+          expected = {
+              pathlib.Path(name).name: "sha256:" + hashlib.sha256(pathlib.Path(name).read_bytes()).hexdigest()
+              for name in sys.argv[2:]
+          }
+          actual = {asset["name"]: asset.get("digest") for asset in release["assets"]}
+          if actual != expected:
+              raise SystemExit(f"published release assets differ: expected={expected!r} actual={actual!r}")
+          PY
+            echo "release ${VERSION} already exists with matching immutable content"
+            exit 0
+          fi
+          gh release create "${VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --fail-on-no-commits \
+            --generate-notes \
+            --title "sshai ${VERSION}" \
+            --draft
+          gh release upload "${VERSION}" "${assets[@]}" --repo "${GITHUB_REPOSITORY}"
+          gh release edit "${VERSION}" --repo "${GITHUB_REPOSITORY}" --draft=false

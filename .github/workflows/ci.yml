@@ -21,5 +21,6 @@ jobs:
         with:
           go-version: ${{ matrix.go }}
           check-latest: true
+      - run: scripts/check-release-tree.sh
       - run: go test ./...
       - run: go vet ./...
