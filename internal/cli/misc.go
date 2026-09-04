@@ -86,6 +86,9 @@ func formatLogLine(m artifact.Meta) string {
 	if m.TransportErr != "" {
 		status = "transport-error=" + m.TransportErr
 	}
+	if m.SetupErr != "" {
+		status = "setup-error=" + m.SetupErr
+	}
 	if m.LocalError != "" {
 		status = "local-error=" + m.LocalError
 	}

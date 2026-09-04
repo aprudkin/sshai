@@ -94,9 +94,12 @@ descendant-process cleanup is not guaranteed across platforms.
 `sshai run --result-format=json` and `sshai local --result-format=json` emit exactly one
 versioned envelope (`schema_version: "v1"`) on stdout. Each saved run includes its id, target,
 exit, artifact path, byte/line counts, SHA-256, and duration, with no human tail or preview text.
-Remote failures may add `transport_diagnostic` and explicit host-key evidence. Local runner failures
-add `runs[].local_error` and increment `summary.local_errors`; both additive fields are omitted from
-normal and remote results. Use JSON when a consumer must parse the result without regexing the human
+Remote failures may add `transport_diagnostic` and explicit host-key evidence. A Windows host where
+neither supported PowerShell setup form can create its scratch directory returns
+`setup_error: "windows-shell"`, the fixed `setup_diagnostic`, and increments
+`summary.setup_errors`; its artifact contains only that fixed diagnostic, never probe output. Local
+runner failures add `runs[].local_error` and increment `summary.local_errors`; additive error fields
+are omitted when absent. Use JSON when a consumer must parse the result without regexing the human
 passport:
 
 ```bash
@@ -113,8 +116,9 @@ When OpenSSH output matches the strict diagnostic allowlist, a transport-error e
 canonical phrase such as `host key verification failed`; the artifact stores the same phrase.
 Unknown failures retain only `transport_error: "ssh"`. Raw SSH error text — including key
 material, configuration excerpts, algorithm offers, and hostnames found only in that error — is
-never copied into the envelope or artifact. The explicit accept-new path returns only the
-algorithm and SHA256 fingerprint of the newly persisted key.
+never copied into the envelope or artifact. A Windows shell setup error is distinct from a transport
+error and returns process exit `99`; it does not execute the user body or cache host facts. The
+explicit accept-new path returns only the algorithm and SHA256 fingerprint of the newly persisted key.
 
 `--result-out <file>` atomically replaces one regular destination with the
 same envelope bytes plus its trailing newline. The destination is mode
@@ -143,7 +147,7 @@ publication failures). Follow
 previews are never stored, may be suppressed for binary/invalid UTF-8 or
 preview limits, and do not replace the authoritative artifact.
 `--follow-interval` is in whole seconds (default 10, minimum 1) and requires
-`--follow`; fan-out is rejected.
+`--follow`; fan-out is rejected. A setup failure has follow outcome kind `setup_failure`.
 
 ## Explicit fallbacks
 

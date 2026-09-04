@@ -12,6 +12,8 @@ type Meta struct {
 	Exit                       int
 	TransportErr               string
 	TransportDiagnostic        string
+	SetupErr                   string
+	SetupDiagnostic            string
 	LocalError                 string
 	AcceptedHostKeyAlgorithm   string
 	AcceptedHostKeyFingerprint string
@@ -48,6 +50,8 @@ func StatusLine(m Meta) string {
 	fmt.Fprintf(&b, "%s host=%s", m.ID, m.Host)
 	if m.LocalError != "" {
 		fmt.Fprintf(&b, " local-error=%s", m.LocalError)
+	} else if m.SetupErr != "" {
+		fmt.Fprintf(&b, " setup-error=%s", m.SetupErr)
 	} else if m.TransportErr != "" {
 		fmt.Fprintf(&b, " transport-error=%s", m.TransportErr)
 	} else {

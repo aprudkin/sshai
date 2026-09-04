@@ -284,6 +284,7 @@ func TestProbe(t *testing.T) {
 		want          Facts
 		allowFallback bool
 		wantErr       bool
+		wantSetup     bool
 		wantErrReason string
 		checkCommands func(t *testing.T, cmds []string)
 	}{
@@ -375,8 +376,8 @@ func TestProbe(t *testing.T) {
 				{res: transport.Result{ExitCode: 1, Output: []byte("Access is denied.")}},
 				{res: transport.Result{ExitCode: 1, Output: []byte("Access is denied.")}},
 			},
-			wantErr:       true,
-			wantErrReason: "ssh",
+			wantErr:   true,
+			wantSetup: true,
 			checkCommands: func(t *testing.T, cmds []string) {
 				for _, cmd := range cmds {
 					if strings.Contains(cmd, shell.WindowsPowerShellShell) {
@@ -389,7 +390,7 @@ func TestProbe(t *testing.T) {
 			// If no Windows PowerShell candidate can create the scratch
 			// directory, Probe must fail instead of caching a guessed shell
 			// form that cannot execute staged scripts.
-			name: "windows, all powershell candidates fail reports transport error",
+			name: "windows, all powershell candidates fail reports setup error",
 			responses: []fakeResp{
 				{res: transport.Result{ExitCode: 1, Output: []byte("command not found")}},
 				{res: transport.Result{ExitCode: 1, Output: []byte("ParserError: Unexpected token")}},
@@ -399,7 +400,7 @@ func TestProbe(t *testing.T) {
 			},
 			allowFallback: true,
 			wantErr:       true,
-			wantErrReason: "ssh",
+			wantSetup:     true,
 		},
 	}
 
@@ -408,12 +409,22 @@ func TestProbe(t *testing.T) {
 			tr := &fakeTransport{responses: tc.responses}
 			got, err := Probe(tr, "h1", pwshShell, tc.allowFallback, time.Minute)
 			if tc.wantErr {
-				var te *transport.TransportError
-				if !errors.As(err, &te) {
-					t.Fatalf("want *transport.TransportError, got %v (facts=%+v)", err, got)
-				}
-				if tc.wantErrReason != "" && te.Reason != tc.wantErrReason {
-					t.Fatalf("TransportError.Reason = %q, want %q", te.Reason, tc.wantErrReason)
+				if tc.wantSetup {
+					var se *RemoteSetupError
+					if !errors.As(err, &se) {
+						t.Fatalf("want *RemoteSetupError, got %v (facts=%+v)", err, got)
+					}
+					if se.Class != RemoteSetupWindowsShell {
+						t.Fatalf("setup class = %q, want %q", se.Class, RemoteSetupWindowsShell)
+					}
+				} else {
+					var te *transport.TransportError
+					if !errors.As(err, &te) {
+						t.Fatalf("want *transport.TransportError, got %v (facts=%+v)", err, got)
+					}
+					if tc.wantErrReason != "" && te.Reason != tc.wantErrReason {
+						t.Fatalf("TransportError.Reason = %q, want %q", te.Reason, tc.wantErrReason)
+					}
 				}
 				if tc.checkCommands != nil {
 					tc.checkCommands(t, tr.commands)

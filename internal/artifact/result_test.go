@@ -106,6 +106,9 @@ func TestRenderResultNeverOmitsEmptyFields(t *testing.T) {
 	}
 	for _, optional := range []string{
 		`"transport_diagnostic":`,
+		`"setup_error":`,
+		`"setup_diagnostic":`,
+		`"setup_errors":`,
 		`"accepted_host_key_algorithm":`,
 		`"accepted_host_key_fingerprint":`,
 		`"local_error":`,

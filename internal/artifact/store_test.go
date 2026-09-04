@@ -117,6 +117,8 @@ func TestOpenStoreMigratesAndPersistsOptionalTransportEvidence(t *testing.T) {
 	}
 	for _, column := range []string{
 		"transport_diagnostic",
+		"setup_error",
+		"setup_diagnostic",
 		"local_error",
 		"accepted_host_key_algorithm",
 		"accepted_host_key_fingerprint",
@@ -150,6 +152,14 @@ func TestOpenStoreMigratesAndPersistsOptionalTransportEvidence(t *testing.T) {
 	if err != nil || got.TransportDiagnostic != diagnostic || got.LocalError != "start" ||
 		got.AcceptedHostKeyAlgorithm != algorithm || got.AcceptedHostKeyFingerprint != fingerprint {
 		t.Fatalf("Get evidence=%+v err=%v", got, err)
+	}
+	setup, err := st.Save(Meta{Host: "h1", Ctx: "default", Command: "true", SetupErr: "windows-shell", SetupDiagnostic: "Windows shell setup failed", Ts: time.Now()}, "k1", []byte("setup diagnostic: Windows shell setup failed\n"))
+	if err != nil {
+		t.Fatalf("save setup failure: %v", err)
+	}
+	setupBack, _, err := st.Get(setup.ID)
+	if err != nil || setupBack.SetupErr != "windows-shell" || setupBack.SetupDiagnostic != "Windows shell setup failed" {
+		t.Fatalf("Get setup evidence=%+v err=%v", setupBack, err)
 	}
 	last, ok, err := st.LastByKey("k1")
 	if err != nil || !ok || last.TransportDiagnostic != diagnostic || last.LocalError != "start" ||

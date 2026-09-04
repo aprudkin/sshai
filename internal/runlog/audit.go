@@ -81,6 +81,7 @@ type AuditEntry struct {
 	Host, Ctx, Subcommand, CommandPreview, BodySHA256, Verdict string
 	Exit                                                       int
 	TransportErr                                               string
+	SetupErr                                                   string `json:",omitempty"`
 	LocalError                                                 string `json:",omitempty"`
 }
 

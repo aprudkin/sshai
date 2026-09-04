@@ -10,6 +10,7 @@ const (
 	runOutcomeRemoteNonZero
 	runOutcomeLocalFailure
 	runOutcomeTransportFailure
+	runOutcomeSetupFailure
 	runOutcomePolicyDenied
 	runOutcomeInternalFailure
 )
@@ -30,6 +31,8 @@ func newSavedRunOutcome(meta artifact.Meta) RunOutcome {
 	switch {
 	case meta.LocalError != "":
 		kind = runOutcomeLocalFailure
+	case meta.SetupErr != "":
+		kind = runOutcomeSetupFailure
 	case meta.TransportErr != "":
 		kind = runOutcomeTransportFailure
 	case meta.Exit != 0:
@@ -67,6 +70,8 @@ func (o RunOutcome) ExitCode() int {
 		return exitUsage
 	case runOutcomeTransportFailure:
 		return exitTransport
+	case runOutcomeSetupFailure:
+		return exitSetup
 	case runOutcomePolicyDenied:
 		return exitPolicy
 	case runOutcomeInternalFailure:

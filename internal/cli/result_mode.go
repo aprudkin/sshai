@@ -51,8 +51,8 @@ func writeRunResults(root string, runs []hostRunResult, mode resultModeOptions, 
 }
 
 func writeHumanRunResults(runs []hostRunResult, stdout, stderr io.Writer) int {
-	var okCount, failedCount, transportErrCount int
-	var sawLocalError, sawTransportErr, sawPolicyDenied bool
+	var okCount, failedCount, transportErrCount, setupErrCount int
+	var sawLocalError, sawSetupErr, sawTransportErr, sawPolicyDenied bool
 	maxRemoteExit := 0
 
 	for i := range runs {
@@ -72,6 +72,10 @@ func writeHumanRunResults(runs []hostRunResult, stdout, stderr io.Writer) int {
 		case runOutcomeTransportFailure:
 			transportErrCount++
 			sawTransportErr = true
+		case runOutcomeSetupFailure:
+			failedCount++
+			setupErrCount++
+			sawSetupErr = true
 		case runOutcomePolicyDenied:
 			failedCount++
 			sawPolicyDenied = true
@@ -82,11 +86,17 @@ func writeHumanRunResults(runs []hostRunResult, stdout, stderr io.Writer) int {
 	}
 
 	if len(runs) > 1 {
-		fmt.Fprintf(stdout, "hosts=%d ok=%d failed=%d transport-errors=%d\n", len(runs), okCount, failedCount, transportErrCount)
+		fmt.Fprintf(stdout, "hosts=%d ok=%d failed=%d transport-errors=%d", len(runs), okCount, failedCount, transportErrCount)
+		if setupErrCount > 0 {
+			fmt.Fprintf(stdout, " setup-errors=%d", setupErrCount)
+		}
+		fmt.Fprintln(stdout)
 	}
 	switch {
 	case sawLocalError:
 		return exitUsage
+	case sawSetupErr:
+		return exitSetup
 	case sawTransportErr:
 		return exitTransport
 	case sawPolicyDenied:
@@ -120,6 +130,9 @@ func summarizeRunOutcomes(outcomes []RunOutcome) (artifact.Summary, []artifact.M
 			summary.WorstExit = max(summary.WorstExit, exitUsage)
 		case runOutcomeTransportFailure:
 			summary.TransportErrors++
+		case runOutcomeSetupFailure:
+			summary.Failed++
+			summary.SetupErrors++
 		case runOutcomePolicyDenied:
 			summary.PolicyDenied++
 		case runOutcomeInternalFailure, runOutcomeInvalid:
@@ -141,6 +154,8 @@ func resultModeExitCode(summary artifact.Summary) int {
 	switch {
 	case summary.LocalErrors > 0:
 		return exitUsage
+	case summary.SetupErrors > 0:
+		return exitSetup
 	case summary.TransportErrors > 0:
 		return exitTransport
 	case summary.PolicyDenied > 0:

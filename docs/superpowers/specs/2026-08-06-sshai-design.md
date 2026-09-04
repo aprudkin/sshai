@@ -122,9 +122,12 @@ tail3:
 ```
 
 - `exit=N` — the body ran and returned N. `transport-error=ssh|scp|timeout` — delivery failed;
-  the body may not have run at all. When raw OpenSSH output matches a fixed safe allowlist, the
-  artifact and optional JSON `transport_diagnostic` carry only the canonical cause. Exactly one
-  of `exit` and `transport-error` is present.
+  the body may not have run at all. `setup-error=windows-shell` — SSH succeeded, but no supported
+  PowerShell setup form could initialize the remote workspace, so the body did not start. When raw
+  OpenSSH output matches a fixed safe allowlist, the artifact and optional JSON
+  `transport_diagnostic` carry only the canonical cause. Setup failures retain only a fixed
+  diagnostic, never probe output. Exactly one of `exit`, `setup-error`, and `transport-error` is
+  present.
 - Optional flags appended to the status line: `truncated=1` (stream cap hit), `binary=1`
   (NUL detected; tail suppressed), `delta=a12` (delta mode, diff base).
 - **Tiered inlining:** when total output fits the budget (default 500 tokens ≈ 2 KB), the passport
@@ -136,7 +139,8 @@ tail3:
 
 sshai's own process exit code mirrors the remote command's exit code, so the agent's harness
 surfaces failure naturally. Reserved codes, disambiguated by the status line: 96 usage error,
-97 policy denied, 98 transport error. Fan-out returns the worst outcome.
+97 policy denied, 98 transport error, and 99 Windows shell setup error. Fan-out returns the worst
+outcome by class precedence, then by honest remote exit.
 
 ### Fan-out
 
@@ -152,7 +156,9 @@ over from `/ps-ssh`), cached in the local DB; overridable per host in config.
 **Windows path** carries the paid-for lessons from `ps_ssh.py` (314 lines, ported with its control
 cases): UTF-8 BOM on body files, body delivery via scp staging (command-line length limits,
 quoting), PowerShell 7 preferred by default with a Windows PowerShell 5.1 fallback, strict explicit
-host selection, DefaultShell invocation-form detection, and CLIXML filtering of stderr.
+host selection, DefaultShell invocation-form detection, and CLIXML filtering of stderr. Exhausting
+all eligible setup probes returns `setup-error=windows-shell`, does not cache facts, and does not
+fabricate a user-command exit.
 
 **Re-injection mechanics.** Every run is wrapped: prologue (`cd` to saved cwd + restore changed env
 vars) → user body → epilogue (dump cwd/env after a sentinel marker; runs on failure too —
@@ -180,8 +186,8 @@ config.toml          # budgets, retention, timeouts, per-host: os override, read
 ```
 
 Artifact IDs are short and monotonic (`a1`, `a2`, …) via a SQLite sequence. The run-log row stores:
-ts, host, ctx, command (or body hash only), exit/transport-error, bytes, lines, sha256,
-duration, truncated/binary flags, delta base.
+ts, host, ctx, command (or body hash only), exit/transport-error/setup-error, bytes, lines,
+sha256, duration, truncated/binary flags, delta base.
 
 **Retention:** artifacts pruned by age and total size (default 7 days / 1 GB), auto-gc on run plus
 explicit `sshai gc`. Run-log rows outlive artifact files: after pruning, queries against a pruned
@@ -201,8 +207,9 @@ never lost to delta mode.
   `ssh_config`/ssh-agent. Only aliases and passports enter agent context.
 - **Bodies never in argv** (process table): `--body-file` or stdin, enforced (no `--body` string
   flag exists).
-- **S3:** `audit.jsonl`, append-only: ts, host, ctx, subcommand, body sha256, policy verdict, exit.
-  Inline commands retain a short secret-redacted preview; `--body-file`/stdin bodies are hash-only
+- **S3:** `audit.jsonl`, append-only: ts, host, ctx, subcommand, body sha256, policy verdict, and
+  outcome fields such as exit, transport error, or setup error. Inline commands retain a short
+  secret-redacted preview; `--body-file`/stdin bodies are hash-only
   because heuristic redaction cannot safely classify arbitrary script text.
 - **Scoped SSH exceptions:** `--accept-new-host-key HOST` requires direct authorization and applies
   to exactly one matching alias; OpenSSH still refuses changed keys and returns only the newly
@@ -225,6 +232,9 @@ never lost to delta mode.
   an allowlisted canonical diagnostic. Key material, configuration, algorithm offers, paths, and
   other raw error text are never persisted or rendered. The explicit accept-new path is the sole
   exception for returning a newly stored key's algorithm and SHA256 fingerprint.
+- Exhausted Windows PowerShell setup probes → `setup-error=windows-shell`, fixed diagnostic, and
+  process exit 99. Probe output is discarded; the requested body does not run and failed facts are
+  not cached.
 
 ## Testing
 

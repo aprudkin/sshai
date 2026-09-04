@@ -57,12 +57,13 @@ Adapters that need the run's metadata (run id, host, exit, artifact path, counts
 
 Both a single host and fan-out enter `runInvocation`. Each worker writes human stdout/stderr into its own `hostRunResult` buffers and returns a typed `RunOutcome`. After every worker completes, one `writeRunResults` controller owns deterministic stderr flushing, human fallback, aggregation, JSON rendering, exit precedence, and optional side-file publication. Human mode renders an aggregate line only when the invocation has more than one host.
 
-`RunOutcome` distinguishes success, remote non-zero, transport failure, policy denial, and unsaved internal failure without interpreting `nil Meta` plus a numeric return code. JSON summaries are computed from these typed outcomes:
+`RunOutcome` distinguishes success, remote non-zero, transport failure, Windows setup failure, policy denial, and unsaved internal failure without interpreting `nil Meta` plus a numeric return code. JSON summaries are computed from these typed outcomes:
 
 - `transport_errors` = count of hosts where `Meta.TransportErr != ""`
-- `failed` = count of hosts with `TransportErr == ""` and `Meta.Exit != 0`
+- `setup_errors` = count of hosts where `Meta.SetupErr != ""`
+- `failed` = remote non-zero exits plus setup failures
 - `ok` = rest
-- `worst_exit` = `max(Meta.Exit)` over hosts where `TransportErr == ""` (0 if none)
+- `worst_exit` = `max(Meta.Exit)` over actual command exits (0 if none)
 - `policy_denied` = count of hosts that were denied before running
 
 A policy-denied host is **not** in `runs[]` because no `Meta` or artifact exists for it. It is surfaced only via `summary.policy_denied` and process exit `exitPolicy`. An unsaved internal failure suppresses the envelope and uses the existing human fallback with `exitUsage`, preserving the invariant that every `runs[]` entry has a real saved artifact.
@@ -108,8 +109,9 @@ The envelope is one JSON object on stdout, terminated by `\n`:
 ```
 
 Transport-error entries may additionally carry
-`"transport_diagnostic": "host key verification failed"`. This is an optional, non-breaking v1
-addition and is omitted when no allowlisted diagnostic is available.
+`"transport_diagnostic": "host key verification failed"`. Windows shell setup failures additionally
+carry `"setup_error": "windows-shell"` and the fixed `"setup_diagnostic": "Windows shell setup failed"`.
+These are optional, non-breaking v1 additions.
 
 ### Field reference
 
@@ -119,20 +121,23 @@ addition and is omitted when no allowlisted diagnostic is available.
 | `batch_id` | generated per invocation | string | Same shape as the existing artifact ids; not persisted. |
 | `summary.hosts` | `len(hosts)` | int | The number of hosts requested in argv. Always equals `len(runs) + summary.policy_denied`. |
 | `summary.policy_denied` | computed | int | Hosts denied by the readonly policy before any run; such hosts never call `Store.Save` and are absent from `runs[]`. |
-| `summary.ok` | computed | int | `runs[]` entries where `transport_error == ""` and `exit == 0`. |
-| `summary.failed` | computed | int | `runs[]` entries where `transport_error == ""` and `exit != 0`. |
+| `summary.ok` | computed | int | Successful `runs[]` entries with no transport, setup, or local error and `exit == 0`. |
+| `summary.failed` | computed | int | Remote non-zero exits, setup failures, and local failures. |
 | `summary.transport_errors` | computed | int | `runs[]` entries where `transport_error != ""`. |
-| `summary.worst_exit` | computed | int | `max(exit)` over hosts where `transport_error == ""`; `0` if all transport-errored. |
+| `summary.setup_errors` | computed | int | `runs[]` entries where `setup_error != ""`; setup failures are also included in `summary.failed`. |
+| `summary.worst_exit` | computed | int | `max(exit)` over actual command exits; setup and transport failures do not change it. |
 | `runs[].id` | `Meta.ID` | string | The existing artifact autoincrement id; the consumer's index into `sshai q`/`diff`/`log`. |
 | `runs[].host` | `Meta.Host` | string | As resolved in argv. |
 | `runs[].ctx` | `Meta.Ctx` | string | The named state context used for this run. |
 | `runs[].command` | `Meta.Command` | string | Already hash-only for `--body-file` / `--body-file -` runs (`"body:<sha256hex>[:16]"`); human-readable for inline `-- words`. Never the raw body. |
-| `runs[].exit` | `Meta.Exit` | int | `0` when `transport_error != ""` (the agent's contract: an unset exit is disambiguated by the presence of `transport_error`). |
+| `runs[].exit` | `Meta.Exit` | int | `0` when `transport_error != ""` or `setup_error != ""`; those fields distinguish an unset exit from an honest command exit. |
 | `runs[].transport_error` | `Meta.TransportErr` | string | Empty when absent. Possible values today: `""`, `"timeout"`, `"ssh"`, `"scp"`. A policy denial is not a transport error and never reaches `runs[]` (see `summary.policy_denied`). |
 | `runs[].transport_diagnostic` | `Meta.TransportDiagnostic` | string, optional | Canonical allowlisted cause derived from SSH/scp output. Omitted when absent; raw transport output is never exposed. |
-| `runs[].artifact_path` | `filepath.Join(root, "art", Meta.ID)` | string | Always present for every `runs[]` entry. A diagnosed transport error stores the canonical diagnostic as its artifact body; an unclassified transport error keeps an empty artifact. A policy-denied host has no artifact and therefore no `runs[]` entry. |
-| `runs[].bytes` | `Meta.Bytes` | int64 | Diagnostic body size for a classified transport error; otherwise `0` when its artifact is empty. |
-| `runs[].lines` | `Meta.Lines` | int64 | `1` for a classified transport diagnostic; otherwise `0` when its artifact is empty. |
+| `runs[].setup_error` | `Meta.SetupErr` | string, optional | `"windows-shell"` when Windows PowerShell setup is exhausted; omitted otherwise. |
+| `runs[].setup_diagnostic` | `Meta.SetupDiagnostic` | string, optional | Fixed canonical setup diagnostic; probe output is never exposed. |
+| `runs[].artifact_path` | `filepath.Join(root, "art", Meta.ID)` | string | Always present for every `runs[]` entry. A diagnosed transport error or setup error stores only its canonical diagnostic; an unclassified transport error keeps an empty artifact. A policy-denied host has no artifact and therefore no `runs[]` entry. |
+| `runs[].bytes` | `Meta.Bytes` | int64 | Stored output or canonical diagnostic body size; `0` when the artifact is empty. |
+| `runs[].lines` | `Meta.Lines` | int64 | Stored output or canonical diagnostic line count; `0` when the artifact is empty. |
 | `runs[].sha256` | `Meta.SHA256` | string | SHA-256 of the saved artifact, including an empty transport-error artifact when no diagnostic matched. |
 | `runs[].duration_ms` | `Meta.DurationMs` | int64 | Transport errors can record a partial duration (probe time). |
 | `runs[].ts` | `Meta.Ts` | string (RFC3339Nano) | UTC. |
@@ -141,8 +146,10 @@ addition and is omitted when no allowlisted diagnostic is available.
 | `runs[].delta_base` | `Meta.DeltaBase` | string | Empty when not `--delta` or no previous run; otherwise the previous artifact id. |
 
 `sha256`, `transport_error`, and `delta_base` are written as `""` rather than omitted. The additive
-`transport_diagnostic` field is intentionally omitted when empty so default v1 envelopes remain
-byte-compatible; consumers must treat it as optional.
+`transport_diagnostic`, `setup_error`, and `setup_diagnostic` are intentionally omitted when empty so
+default v1 envelopes remain byte-compatible; consumers must treat them as optional. `summary.setup_errors`
+is also omitted when zero. Consumers must inspect error fields before interpreting `exit`; an `exit` of `0`
+with `setup_error` present does not mean that the user command succeeded.
 
 `json.Marshal` indents are off; the consumer decides formatting.
 
@@ -179,6 +186,7 @@ envelope (the JSON `command` value is the `body:<sha256hex>[:16]` form, never th
 | Policy denial per host | JSON | Host is **not** in `runs[]` (no artifact is saved on that path). `summary.policy_denied++`; `summary.hosts` still includes the host, so `summary.hosts == len(runs) + summary.policy_denied`. Process exits `exitPolicy` (97). |
 | `Store.Save` failure | both | Single-host: human passport path (existing behavior); fan-out: drop the failing host from `runs[]` and continue (`summary.hosts` matches surviving length; an unenclosed host is preferable to a malformed envelope). |
 | `*transport.TransportError` (ssh, scp, timeout) | both | Routing through `handleTransportError` records the run with `transport_error: <reason>` and `exit: 0`. If raw output matches the fixed safe allowlist, `transport_diagnostic` is present and the canonical phrase is the artifact body; otherwise the field is omitted and the artifact remains empty. |
+| `*session.RemoteSetupError` | both | Records `setup_error: "windows-shell"`, the fixed `setup_diagnostic`, and a fixed diagnostic artifact; returns process exit `99`. It executes no user body, caches no facts, and retains no probe output. |
 | `delta.Render` fail post-`Save` (previous artifact pruned underfoot) | both | Stderr `run: render delta for %s: ...`; envelope carries the saved meta as if `--delta` had no previous run (mirrors today's human-path fallback). |
 | Runlog `AppendAudit` fail post-`Save` | both | Stderr note; never fatal in either mode. |
 | Flag-set `-help` on `run` | both | Today's help text now lists the new flags. |
@@ -233,7 +241,7 @@ English everywhere, matching the repo rule.
 - **Marshal performance.** `Meta` is O(100 bytes); envelope is O(hosts). Worst-case fan-out (say 200 hosts) is still O(KB); unmarshalling is well under a millisecond per call. Not a concern.
 - **Out-of-order `runs[]`.** `runInvocation` stores every `hostRunResult` by argv index; failure to preserve order is caught by explicit positional assertions in `TestRunResultFormatJSONFanOutMixed` and `TestRenderResultEnvelopePreservesOutcomeOrder`.
 - **`--delta` interaction.** The `runs[].delta_base` field is the only envelope surface for delta; the body diff is human-passport territory and is suppressed in JSON. Adapters that want the diff call `sshai diff <delta_base> <runs[i].id>`. Documented in the example.
-- **Runlog, audit.jsonl.** Untouched. `Meta.Command` already encodes `body:<sha256hex>[:16]` for body-file runs; the envelope inherits this. `auditCommandPreview` already does the same for the audit log.
+- **Runlog, audit.jsonl.** Setup failures remain searchable and appear as `setup-error=windows-shell`; audit records may carry `SetupErr` but retain verdict `allowed`. `Meta.Command` already encodes `body:<sha256hex>[:16]` for body-file runs; the envelope inherits this. `auditCommandPreview` already does the same for the audit log.
 
 ## Acceptance
 

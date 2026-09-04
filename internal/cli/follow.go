@@ -406,6 +406,8 @@ func followOutcomeKindName(k runOutcomeKind) string {
 		return "local_failure"
 	case runOutcomeTransportFailure:
 		return "transport_failure"
+	case runOutcomeSetupFailure:
+		return "setup_failure"
 	case runOutcomePolicyDenied:
 		return "policy_denied"
 	case runOutcomeInternalFailure:

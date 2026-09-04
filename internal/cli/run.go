@@ -34,6 +34,7 @@ const (
 	exitUsage     = 96
 	exitPolicy    = 97
 	exitTransport = 98
+	exitSetup     = 99
 
 	powerShellHostPwsh              = "pwsh"
 	powerShellHostWindowsPowerShell = "windows-powershell"
@@ -621,6 +622,12 @@ func asTransportError(err error) (*transport.TransportError, bool) {
 	return te, ok
 }
 
+func asRemoteSetupError(err error) (*session.RemoteSetupError, bool) {
+	var se *session.RemoteSetupError
+	ok := errors.As(err, &se)
+	return se, ok
+}
+
 func acceptedHostKeyEvidence(tr transport.Transport, host string, enabled bool, stderr io.Writer) (string, string) {
 	if !enabled {
 		return "", ""
@@ -676,8 +683,12 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		return newInternalFailureOutcome(exitUsage)
 	}
 	if !ok {
+		probeStart := time.Now()
 		facts, err = session.Probe(deps.Tr, opts.Host, selectedPowerShell, opts.PowerShellHost == "", opts.Timeout)
 		if err != nil {
+			if se, isSetup := asRemoteSetupError(err); isSetup {
+				return handleSetupError(deps, opts, se, time.Since(probeStart).Milliseconds(), stdout, stderr)
+			}
 			if te, isTE := asTransportError(err); isTE {
 				return handleTransportError(deps, opts, te, stdout, stderr)
 			}
@@ -957,6 +968,36 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 // TransportErr being non-empty.
 // A Save failure becomes an explicit internal failure while retaining the
 // transport process exit used by the existing human-mode path.
+func handleSetupError(deps Deps, opts Opts, setupErr *session.RemoteSetupError, durationMs int64, stdout, stderr io.Writer) RunOutcome {
+	root := deps.Store.Root
+	diagnostic := setupErr.Diagnostic()
+	acceptedHostKeyAlgorithm, acceptedHostKeyFingerprint := acceptedHostKeyEvidence(
+		deps.Tr, opts.Host, opts.AcceptNewHostKey, stderr)
+	meta := artifact.Meta{
+		Host: opts.Host, Ctx: opts.Ctx, Command: deltaKeyCommand(opts),
+		SetupErr: setupErr.Class, SetupDiagnostic: diagnostic,
+		AcceptedHostKeyAlgorithm:   acceptedHostKeyAlgorithm,
+		AcceptedHostKeyFingerprint: acceptedHostKeyFingerprint,
+		DurationMs:                 durationMs,
+		Ts:                         time.Now(),
+	}
+	body := []byte("setup diagnostic: " + diagnostic + "\n")
+	savedMeta, err := deps.Store.Save(meta, delta.Key(opts.Host, opts.Ctx, deltaKeyCommand(opts)), body)
+	if err != nil {
+		fmt.Fprintf(stderr, "run: save artifact after setup error: %v\n", err)
+		return newInternalFailureOutcome(exitSetup)
+	}
+	fmt.Fprintln(stdout, artifact.RenderPassport(savedMeta, filepath.Join(root, "art", savedMeta.ID), body, opts.Budget))
+	if auditErr := runlog.AppendAudit(root, runlog.AuditEntry{
+		Ts: time.Now(), Host: opts.Host, Ctx: opts.Ctx, Subcommand: "run",
+		CommandPreview: auditCommandPreview(opts), BodySHA256: sha256Hex(opts.Command),
+		Verdict: "allowed", SetupErr: savedMeta.SetupErr,
+	}); auditErr != nil {
+		fmt.Fprintf(stderr, "run: append audit: %v\n", auditErr)
+	}
+	return newSavedRunOutcome(savedMeta)
+}
+
 func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, stdout, stderr io.Writer) RunOutcome {
 	root := deps.Store.Root
 

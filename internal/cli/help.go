@@ -42,14 +42,15 @@ sshai run [flags] --body-file <file|-> <host...>
 
 Execute <command> on one or more hosts over SSH. Multiple hosts fan out
 concurrently; results print in host (argv) order, followed by one
-aggregate line ("hosts=N ok=X failed=Y transport-errors=Z"). The command
+aggregate line ("hosts=N ok=X failed=Y transport-errors=Z", with
+"setup-errors=N" only when applicable). The command
 body is never placed in ssh/scp argv: use "-- <words>" for a short inline
 command in sshai's own argv, or --body-file for anything long, multi-line,
 secret, or containing characters that would need shell escaping ("-"
 reads the body from stdin instead of a file).
 
 Output is a compact passport, not raw output: a status line carrying
-exactly one of exit=N or transport-error=R, then "file=<path>" pointing
+exactly one of exit=N, setup-error=windows-shell, or transport-error=R, then "file=<path>" pointing
 at the captured result on disk, then either the full captured body (when
 it fits the budget) or its last 3 lines ("tail3:"). Recognized SSH failures
 store only a safe canonical diagnostic in that artifact; raw SSH error text
@@ -116,9 +117,11 @@ Flags:
 sshai's own process exit mirrors the remote command's exit code.
 Reserved: 96 usage error, 97 policy denied (host marked readonly,
 command not on the allowlist), 98 transport error (delivery failed, the
-command may not have run at all). A genuine remote exit of 96/97/98 is
-never confused with these: the status line's exit=N vs transport-error=R
-is the source of truth, not the process exit code alone.
+command may not have run at all), 99 Windows shell setup error (SSH
+connected but neither supported PowerShell setup form worked). A genuine remote
+exit of 96/97/98/99 is never confused with these: the status line's exit=N,
+setup-error=R, or transport-error=R is the source of truth, not the process
+exit code alone.
 `,
 	"local": `sshai local [flags] --shell <bash|pwsh> -- <command>
 sshai local [flags] --shell <bash|pwsh> --body-file <file|->
@@ -195,7 +198,7 @@ Example: sshai diff a12 a17
 
 Search the local run-log — every run recorded by ` + "`run`" + ` or ` + "`local`" + `, whether
 or not its artifact survived retention — newest first. One line per match:
-  <id>  <ts>  <host>  exit=N|transport-error=R|local-error=R  <duration>  <command>
+  <id>  <ts>  <host>  exit=N|setup-error=R|transport-error=R|local-error=R  <duration>  <command>
 <command> is clipped to 60 runes with a trailing "…" marker.
 
 Flags:

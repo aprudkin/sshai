@@ -553,6 +553,8 @@ func TestResultModeExitCodeOrdering(t *testing.T) {
 		{name: "remote", summary: artifact.Summary{Failed: 2, WorstExit: 23}, want: 23},
 		{name: "policy outranks remote", summary: artifact.Summary{Failed: 1, PolicyDenied: 1, WorstExit: 23}, want: exitPolicy},
 		{name: "transport outranks policy", summary: artifact.Summary{TransportErrors: 1, PolicyDenied: 1, WorstExit: 23}, want: exitTransport},
+		{name: "setup outranks transport", summary: artifact.Summary{SetupErrors: 1, TransportErrors: 1, PolicyDenied: 1, WorstExit: 23}, want: exitSetup},
+		{name: "local outranks setup", summary: artifact.Summary{LocalErrors: 1, SetupErrors: 1}, want: exitUsage},
 	}
 
 	for _, tt := range tests {

@@ -230,25 +230,34 @@ func ensureStateDir(path string) error {
 	return nil
 }
 
+const (
+	// RemoteSetupWindowsShell is the only classified remote setup failure.
+	RemoteSetupWindowsShell = "windows-shell"
+	// RemoteSetupDiagnostic is the fixed, safe evidence retained for it.
+	RemoteSetupDiagnostic = "Windows shell setup failed"
+)
+
+// RemoteSetupError reports an exhausted Windows shell setup probe. It is
+// deliberately distinct from a transport failure: SSH worked, but no supported
+// PowerShell invocation could create the required remote scratch directory.
+type RemoteSetupError struct{ Class string }
+
+func (e *RemoteSetupError) Error() string { return "remote setup failed: " + e.Class }
+
+// Diagnostic returns fixed canonical evidence without retaining probe output.
+func (e *RemoteSetupError) Diagnostic() string { return RemoteSetupDiagnostic }
+
 // Probe determines whether host runs Linux or Windows and, for Windows,
 // which invocation Form works over this host's OpenSSH DefaultShell. When
 // allowWindowsPowerShellFallback is true and the requested shell is PowerShell
 // 7, the Windows path also tries Windows PowerShell 5.1. It runs `uname -s`
-// first: an honest exit 0 whose output contains "Linux",
-// "Darwin", or "BSD" is treated as Linux family. Any other outcome (a
-// non-zero rc — no bash on Windows's default shell — or unrecognized
-// output) falls through to the Windows path.
-//
-// The Windows path creates the remote scratch dir (shell.RemoteDir) via
-// New-Item, trying PowerShell executable candidates and invocation forms
-// until one command succeeds. Resolving the executable + form here, at
-// first contact, rather than at execute time, is deliberate: a missing
-// default pwsh.exe or a mismatched OpenSSH DefaultShell must not be cached
-// as a usable host fact, because every later run would fail before the
-// user's command starts. A transport failure (Exec returning a
-// *transport.TransportError) is returned immediately. If no candidate can
-// create the scratch dir, Probe reports that as a transport/setup failure
-// instead of saving a guessed shell form.
+// first: an honest exit 0 whose output contains "Linux", "Darwin", or "BSD"
+// is treated as Linux family. Any other outcome falls through to the Windows
+// path. The Windows path creates the remote scratch dir (shell.RemoteDir) via
+// New-Item, trying PowerShell executable candidates and invocation forms until
+// one command succeeds. A transport failure is returned immediately. If no
+// candidate can create the scratch dir, Probe returns RemoteSetupError instead
+// of saving a guessed shell form or retaining remote setup output.
 func Probe(tr transport.Transport, host, pwshShell string, allowWindowsPowerShellFallback bool, timeout time.Duration) (Facts, error) {
 	res, err := tr.Exec(host, "uname -s", nil, timeout)
 	if err != nil {
@@ -267,7 +276,6 @@ func Probe(tr transport.Transport, host, pwshShell string, allowWindowsPowerShel
 	}
 
 	tail := `-NoProfile -Command "New-Item -ItemType Directory -Force -Path '` + shell.RemoteDir + `' | Out-Null"`
-	var lastOutput []byte
 	for _, candidate := range candidates {
 		for _, form := range []string{"cmd", "pwsh"} {
 			cmd := shell.PwshInvocation(form, candidate, tail)
@@ -278,8 +286,7 @@ func Probe(tr transport.Transport, host, pwshShell string, allowWindowsPowerShel
 			if res.ExitCode == 0 {
 				return Facts{OS: "windows", Shell: candidate, Form: form}, nil
 			}
-			lastOutput = res.Output
 		}
 	}
-	return Facts{}, transport.NewTransportError("ssh", lastOutput)
+	return Facts{}, &RemoteSetupError{Class: RemoteSetupWindowsShell}
 }

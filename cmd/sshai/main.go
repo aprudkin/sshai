@@ -11,6 +11,7 @@ const (
 	exitUsage     = 96
 	exitPolicy    = 97
 	exitTransport = 98
+	exitSetup     = 99
 )
 
 func main() {

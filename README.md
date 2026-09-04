@@ -174,8 +174,10 @@ sshai run --follow --follow-interval 5 web01 -- long-running-check
 ```
 
 Recognized SSH failures expose only a canonical `transport_diagnostic`; raw SSH stderr remains
-private. An explicitly authorized host-key acceptance also returns the accepted algorithm and
-SHA-256 fingerprint.
+private. If a Windows host cannot create its required scratch directory through either supported
+PowerShell setup form, sshai records `setup-error=windows-shell` with a fixed diagnostic, returns
+exit `99`, and neither runs the user body nor caches host facts. An explicitly authorized host-key
+acceptance also returns the accepted algorithm and SHA-256 fingerprint.
 
 Run `sshai help` for the command inventory and `sshai help run` for its full execution contract.
 
@@ -191,7 +193,8 @@ host.
   `--proxy-jump=none` only for an explicitly selected direct-route invocation.
 - Use a separate approved workflow for secret stdin, file transfer, interactive programs,
   ad-hoc identity options, or unsupported two-hop execution.
-- A policy denial, transport failure, local failure, and remote non-zero exit are different outcomes.
+- A policy denial, transport failure, Windows shell setup failure, local failure, and remote non-zero
+  exit are different outcomes.
 - `sshai local` is neither SSH nor a remote fallback, readonly-policy check, authorization layer, or
   security sandbox. It rejects remote-only flags and `--follow`.
 - Local interpreter start failures, timeouts, and output limits are recorded as

@@ -55,6 +55,17 @@ func TestStatusLineTransportFormAndFlags(t *testing.T) {
 	}
 }
 
+func TestStatusLineSetupErrorForm(t *testing.T) {
+	m := meta()
+	m.SetupErr = "windows-shell"
+	m.TransportErr = "ssh"
+	m.Exit = 23
+	got := StatusLine(m)
+	if !strings.Contains(got, "setup-error=windows-shell") || strings.Contains(got, "transport-error=") || strings.Contains(got, "exit=") {
+		t.Fatalf("bad line: %q", got)
+	}
+}
+
 func TestPassportTiering(t *testing.T) {
 	small := []byte("ok\n")
 	p := RenderPassport(meta(), "/tmp/a17", small, 500)
