@@ -37,6 +37,10 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           check-latest: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.0.0"
+          check-latest: false
       - name: Validate release source
         shell: bash
         run: |
@@ -57,6 +61,8 @@ jobs:
         run: |
           set -euo pipefail
           scripts/check-release-tree.sh
+          node scripts/test_sshai_mode.mjs
+          scripts/test_install.sh
           go mod verify
           go test ./...
           go vet ./...
@@ -89,6 +95,17 @@ jobs:
           find dist -maxdepth 1 -type f -printf '%f\n' | sort > "${RUNNER_TEMP}/actual-assets"
           diff -u "${RUNNER_TEMP}/expected-assets" "${RUNNER_TEMP}/actual-assets"
           (cd dist && sha256sum -c checksums.txt)
+          for archive in dist/sshai_"${version}"_*; do
+            name=$(basename "${archive}" .tar.gz)
+            name=${name%.zip}
+            if [[ "${archive}" == *.zip ]]; then
+              unzip -Z1 "${archive}" | grep -Fx "${name}/skills/sshai/SKILL.md"
+              unzip -Z1 "${archive}" | grep -Fx "${name}/extensions/sshai-mode/index.ts"
+            else
+              tar -tzf "${archive}" | grep -Fx "${name}/skills/sshai/SKILL.md"
+              tar -tzf "${archive}" | grep -Fx "${name}/extensions/sshai-mode/index.ts"
+            fi
+          done
       - name: Build release metadata
         if: github.event_name == 'push'
         shell: bash

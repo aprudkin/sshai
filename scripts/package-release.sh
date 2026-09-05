@@ -34,7 +34,7 @@ licenses="$stage_root/THIRD_PARTY_LICENSES"
 while read -r goos goarch archive; do
   name="sshai_${version}_${goos}_${goarch}"
   stage="$stage_root/$name"
-  mkdir -p -- "$stage/skills"
+  mkdir -p -- "$stage/skills" "$stage/extensions"
 
   binary=sshai
   if [ "$goos" = windows ]; then
@@ -48,6 +48,7 @@ while read -r goos goarch archive; do
   )
   cp "$repo_dir/README.md" "$repo_dir/README.ru.md" "$repo_dir/LICENSE" "$stage/"
   cp -R "$repo_dir/skills/sshai" "$stage/skills/"
+  cp -R "$repo_dir/extensions/sshai-mode" "$stage/extensions/"
   cp -R "$licenses" "$stage/"
 
   python3 - "$stage" "$source_date_epoch" <<'PY'

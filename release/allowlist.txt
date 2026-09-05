@@ -29,7 +29,10 @@ release/homebrew/sshai.rb.tmpl
 release/licenses/go-LICENSE
 release/licenses/go-PATENTS
 skills/sshai/SKILL.md
+extensions/sshai-mode/index.ts
 scripts/install.sh
+scripts/test_install.sh
+scripts/test_sshai_mode.mjs
 scripts/collect-third-party-licenses.py
 scripts/package-release.sh
 scripts/render-homebrew-formula.sh
