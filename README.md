@@ -67,11 +67,16 @@ Remote execution requires OpenSSH and a configured SSH alias; local execution re
 
 ### Homebrew
 
-Install the CLI and its bundled skill from the `aprudkin/tap` repository:
+Review the [`aprudkin/homebrew-tap`](https://github.com/aprudkin/homebrew-tap) repository first.
+If you trust it, add the third-party tap explicitly, then install the CLI and its bundled skill:
 
 ```bash
+brew tap aprudkin/tap
 brew install aprudkin/tap/sshai
 ```
+
+The explicit `brew tap` step is the trust decision; Homebrew will not add this third-party tap
+implicitly.
 
 Pi users can then enable the installed skill explicitly:
 
