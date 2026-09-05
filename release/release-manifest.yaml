@@ -36,13 +36,9 @@ included_bundles:
     paths: [skills/sshai/]
     provenance: repository-authored Agent Skills instructions
     decision: candidate
-  - id: pi-session-extension
-    paths: [extensions/sshai-mode/]
-    provenance: repository-authored Pi session-mode extension
-    decision: candidate
   - id: release-automation
-    paths: [.github/workflows/ci.yml, .github/workflows/release.yml, release/homebrew/, release/licenses/, scripts/collect-third-party-licenses.py, scripts/install.sh, scripts/package-release.sh, scripts/render-homebrew-formula.sh, scripts/test_install.sh, scripts/test_sshai_mode.mjs]
-    provenance: repository-authored release packaging, installation, formula generation, and focused verification
+    paths: [.github/workflows/release.yml, release/homebrew/, release/licenses/, scripts/collect-third-party-licenses.py, scripts/package-release.sh, scripts/render-homebrew-formula.sh]
+    provenance: repository-authored release packaging, formula generation, and Go notices
     decision: candidate-after-staging-scan
 excluded_bundles:
   - paths: [CLAUDE.md, docs/superpowers/]

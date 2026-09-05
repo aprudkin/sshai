@@ -13,7 +13,7 @@ class Sshai < Formula
 
   def install
     system "go", "build", *std_go_args, "./cmd/sshai"
-    pkgshare.install "extensions", "skills"
+    pkgshare.install "skills"
   end
 
   test do
@@ -28,7 +28,5 @@ class Sshai < Formula
 
     assert_equal "fixture  os=linux  readonly=false",
                  shell_output("#{bin}/sshai hosts").strip
-    assert_predicate pkgshare/"skills/sshai/SKILL.md", :file?
-    assert_predicate pkgshare/"extensions/sshai-mode/index.ts", :file?
   end
 end

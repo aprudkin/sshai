@@ -36,37 +36,6 @@ output out of context, how to query saved artifacts, and where the safety bounda
 The skill follows the Agent Skills specification and is not tied to Pi. Pi and other compatible
 agent harnesses can load the same skill.
 
-### Pi session mode
-
-The package also includes a Pi extension. After `pi install <share-root>`, it activates both the
-Agent Skill and the extension. Session mode is off by default and persists in the Pi session tree:
-
-```text
-/sshai on
-/sshai status
-/sshai off
-```
-
-When enabled, Pi shows `sshai:on` in its footer and adds advisory guidance once to each agent-start
-event. It prefers `sshai` only for applicable bounded non-interactive commands; it is not
-authorization, a security boundary, or a replacement for direct tools where those fit.
-
-### Other agent harnesses
-
-Pi slash commands are not portable. In another Agent Skills-compatible harness, load
-`skills/sshai/SKILL.md` and apply this instruction for the session:
-
-```text
-Load and follow the sshai skill. Prefer sshai local for potentially noisy or repeated
-non-interactive local commands. Keep full output in its artifact and retrieve only needed evidence
-with sshai q, sshai diff, or --delta. Use direct tools for short, file, interactive, streaming, or
-unsupported work. This preference grants no authorization.
-```
-
-For a native toggle, implement the same default-off session flag in the harness's plugin or hook
-API and inject this guidance before each agent turn; the integration should not execute commands
-itself.
-
 ## Capabilities
 
 - Run commands on one or more Linux SSH aliases through Bash by default or a selected POSIX shell.
@@ -98,21 +67,20 @@ Remote execution requires OpenSSH and a configured SSH alias; local execution re
 
 ### Homebrew
 
-Install the CLI, bundled Agent Skill, and Pi extension from the `aprudkin/tap` repository:
+Install the CLI and its bundled skill from the `aprudkin/tap` repository:
 
 ```bash
 brew install aprudkin/tap/sshai
 ```
 
-Pi users can then activate both bundled resources:
+Pi users can then enable the installed skill explicitly:
 
 ```bash
 pi install "$(brew --prefix sshai)/share/sshai"
 ```
 
 Other Agent Skills-compatible harnesses can load `skills/sshai/SKILL.md` from the package share
-directory reported by `brew --prefix sshai`; use their equivalent session instruction or native
-plugin/hook instead of Pi slash commands.
+directory reported by `brew --prefix sshai`.
 
 ### From source
 
@@ -123,16 +91,15 @@ go test ./...
 scripts/install.sh
 ```
 
-The installer puts the CLI in `${SSHAI_INSTALL_DIR:-$HOME/.local/bin}` and copies the Agent Skill
-and Pi extension to `${SSHAI_SHARE_DIR:-$HOME/.local/share/sshai}`. Pi can load that directory as a
-local package:
+The installer copies the skill to `${SSHAI_SHARE_DIR:-$HOME/.local/share/sshai}`. Pi can load that
+directory as a local package:
 
 ```bash
 pi install "${SSHAI_SHARE_DIR:-$HOME/.local/share/sshai}"
 ```
 
 Other compatible harnesses can load or copy its `skills/sshai/` directory into their configured
-skill location and use their equivalent session instruction or native plugin/hook.
+skill location.
 
 ## Quick start
 
