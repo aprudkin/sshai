@@ -14,6 +14,14 @@ if [ -z "$requested_share_dir" ] || [ "$requested_share_dir" = "/" ] || [ "$requ
   printf '%s\n' "refusing unsafe share directory: $requested_share_dir" >&2
   exit 1
 fi
+if [ -L "$requested_dir" ] || { [ -e "$requested_dir" ] && [ ! -d "$requested_dir" ]; }; then
+  printf '%s\n' "refusing unsafe install directory: $requested_dir" >&2
+  exit 1
+fi
+if [ -L "$requested_share_dir" ] || { [ -e "$requested_share_dir" ] && [ ! -d "$requested_share_dir" ]; }; then
+  printf '%s\n' "refusing unsafe share directory: $requested_share_dir" >&2
+  exit 1
+fi
 
 mkdir -p -- "$requested_dir" "$requested_share_dir"
 install_dir=$(CDPATH='' cd -- "$requested_dir" && pwd)

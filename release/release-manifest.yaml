@@ -37,8 +37,8 @@ included_bundles:
     provenance: repository-authored Agent Skills instructions
     decision: candidate
   - id: release-automation
-    paths: [.github/workflows/release.yml, release/homebrew/, release/licenses/, scripts/collect-third-party-licenses.py, scripts/package-release.sh, scripts/render-homebrew-formula.sh]
-    provenance: repository-authored release packaging, formula generation, and Go notices
+    paths: [.github/workflows/ci.yml, .github/workflows/release.yml, release/homebrew/, release/licenses/, scripts/collect-third-party-licenses.py, scripts/install.sh, scripts/package-release.sh, scripts/render-homebrew-formula.sh, scripts/test_install.sh]
+    provenance: repository-authored release packaging, installation, formula generation, and focused verification
     decision: candidate-after-staging-scan
 excluded_bundles:
   - paths: [CLAUDE.md, docs/superpowers/]

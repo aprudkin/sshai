@@ -57,6 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           scripts/check-release-tree.sh
+          scripts/test_install.sh
           go mod verify
           go test ./...
           go vet ./...

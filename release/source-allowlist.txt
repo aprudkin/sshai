@@ -100,4 +100,5 @@ scripts/package-release.sh
 scripts/render-homebrew-formula.sh
 scripts/test_benchmark_v1_1.py
 scripts/test_benchmark_v2_1.py
+scripts/test_install.sh
 skills/sshai/SKILL.md
