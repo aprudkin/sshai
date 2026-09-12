@@ -40,14 +40,15 @@ go test ./internal/cli -run '^TestLocalValidation$' # one existing test
 go vet ./...                                   # Go static checks
 go build ./...                                 # compile packages
 gofmt -w path/to/changed.go                     # format changed Go files
-scripts/check-release-tree.sh                   # exact source inventory check
+scripts/check-release-tree.sh                   # validate binary release inputs
+python3 -m unittest discover -s scripts -p 'test_release_inventory.py' # inventory tests
 scripts/test_install.sh                         # builds and tests installation in temp roots
 go tool govulncheck ./...                       # tool pinned through go.mod
 ```
 
 - Before a pull request, run the test, vet, and build checks required by `CONTRIBUTING.md`.
   Start with affected package tests when iterating; report checks not run and any failures.
-- `.github/workflows/ci.yml` also checks the source inventory and installer.
+- `.github/workflows/ci.yml` also checks binary release inputs, inventory regressions, and the installer.
   `.github/workflows/security.yml` defines vulnerability checks and the pinned `gosec` setup;
   consult it when changing security tooling rather than assuming `gosec` is installed.
 - Format Go with `gofmt`; keep user-facing documentation and comments in English.
@@ -88,9 +89,13 @@ go tool govulncheck ./...                       # tool pinned through go.mod
 - `scripts/install.sh` builds and installs the executable and bundled skill. It writes to
   `SSHAI_INSTALL_DIR` and `SSHAI_SHARE_DIR` (defaulting under `~/.local`); it is not a
   read-only validation command. Use `scripts/test_install.sh` for isolated installer tests.
-- For source-file additions, deletions, or renames, account for
-  `release/source-allowlist.txt`: the tree check compares tracked and non-ignored untracked
-  files against that exact inventory. New release files require review per `CONTRIBUTING.md`.
+- When changing the static files shipped in binary release archives, review and update
+  `release/archive-files.txt`, then run the release-input check and inventory regression tests.
+  Unrelated source, test, documentation, and agent-instruction changes do not require manifest
+  entries. Executables and generated third-party licenses are added and validated separately.
+- Binary archive inventory checks do not scan content for secrets or filter GitHub's automatic
+  source archives, which contain the tracked tree. Review every committed file under the existing
+  sensitive-data restrictions; see `CONTRIBUTING.md` for release review requirements.
 - For release work, read `CONTRIBUTING.md` and `.github/workflows/release.yml` first.
   `scripts/package-release.sh VERSION` generates archives and checksums in `dist/` and
   clears its existing contents. The workflow generates release metadata and uses

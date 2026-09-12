@@ -26,8 +26,19 @@ archive candidate without publishing it. The Homebrew tap discovers stable GitHu
 its own autobump workflow.
 
 Release tags must not contain environment-specific benchmark manifests, credentials, private host
-aliases, local paths, or captured output. Every tracked release file must be reviewed and listed in
-`release/source-allowlist.txt`. Release automation fails closed and does not rewrite an existing
-release with different assets.
+aliases, local paths, or captured output. Review files before committing: GitHub's automatic source
+archives contain the tracked tree and are not filtered by the binary packaging manifest.
+
+`release/archive-files.txt` lists the static repository files included in binary release archives.
+Update it only when intentionally changing that payload, not when adding unrelated source files,
+tests, documentation, or agent instructions. The executable and generated third-party licenses are
+added separately. Packaging validates its inputs and the resulting archive inventory; missing
+required files, unsafe paths, and unexpected archive members fail closed. This is an inventory
+check, not a scanner for secret content.
+
+Run `scripts/check-release-tree.sh` to validate packaging inputs and
+`python3 -m unittest discover -s scripts -p 'test_release_inventory.py'` for isolated regression
+tests. The historical tree-check command no longer compares the entire Git tree to a file list.
+Release automation does not rewrite an existing release with different assets.
 
 By contributing, you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).

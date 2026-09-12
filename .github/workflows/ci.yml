@@ -22,6 +22,7 @@ jobs:
           go-version: ${{ matrix.go }}
           check-latest: true
       - run: scripts/check-release-tree.sh
+      - run: python3 -m unittest discover -s scripts -p 'test_release_inventory.py'
       - run: scripts/test_install.sh
       - run: go test ./...
       - run: go vet ./...

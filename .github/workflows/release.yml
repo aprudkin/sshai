@@ -57,6 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           scripts/check-release-tree.sh
+          python3 -m unittest discover -s scripts -p 'test_release_inventory.py'
           scripts/test_install.sh
           go mod verify
           go test ./...

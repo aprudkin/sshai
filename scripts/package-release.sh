@@ -15,6 +15,8 @@ fi
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_dir=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 dist_dir="$repo_dir/dist"
+manifest="$repo_dir/release/archive-files.txt"
+inventory_tool="$repo_dir/scripts/release_inventory.py"
 stage_root=$(mktemp -d "${TMPDIR:-/tmp}/sshai-release.XXXXXX")
 
 cleanup() {
@@ -22,19 +24,23 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+# Validate static inputs before replacing any existing release artifacts.
+python3 "$inventory_tool" validate-inputs "$repo_dir" "$manifest"
+
 mkdir -p -- "$dist_dir"
 find "$dist_dir" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
 
 source_date_epoch=$(git -C "$repo_dir" log -1 --format=%ct)
 export SOURCE_DATE_EPOCH="$source_date_epoch" TZ=UTC
 
-licenses="$stage_root/THIRD_PARTY_LICENSES"
+licenses="$stage_root/generated-licenses"
 (cd "$repo_dir" && python3 scripts/collect-third-party-licenses.py "$licenses")
+python3 "$inventory_tool" validate-licenses "$licenses"
 
 while read -r goos goarch archive; do
   name="sshai_${version}_${goos}_${goarch}"
   stage="$stage_root/$name"
-  mkdir -p -- "$stage/skills"
+  mkdir -p -- "$stage"
 
   binary=sshai
   if [ "$goos" = windows ]; then
@@ -46,9 +52,9 @@ while read -r goos goarch archive; do
     CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
       go build -trimpath -o "$stage/$binary" ./cmd/sshai
   )
-  cp "$repo_dir/README.md" "$repo_dir/README.ru.md" "$repo_dir/LICENSE" "$stage/"
-  cp -R "$repo_dir/skills/sshai" "$stage/skills/"
-  cp -R "$licenses" "$stage/"
+  chmod 0755 "$stage/$binary"
+  python3 "$inventory_tool" stage-release \
+    "$repo_dir" "$manifest" "$licenses" "$stage" "$binary"
 
   python3 - "$stage" "$source_date_epoch" <<'PY'
 import os
@@ -63,9 +69,11 @@ os.utime(root, (epoch, epoch), follow_symlinks=False)
 PY
 
   if [ "$archive" = zip ]; then
-    (cd "$stage_root" && find "$name" -print | LC_ALL=C sort | zip -Xq "$dist_dir/$name.zip" -@)
+    archive_path="$dist_dir/$name.zip"
+    (cd "$stage_root" && find "$name" -print | LC_ALL=C sort | zip -Xq "$archive_path" -@)
   else
-    python3 - "$stage_root" "$name" "$dist_dir/$name.tar.gz" "$source_date_epoch" <<'PY'
+    archive_path="$dist_dir/$name.tar.gz"
+    python3 - "$stage_root" "$name" "$archive_path" "$source_date_epoch" <<'PY'
 import gzip
 import pathlib
 import sys
@@ -94,6 +102,7 @@ with output.open("wb") as raw:
                     archive_file.addfile(info)
 PY
   fi
+  python3 "$inventory_tool" validate-archive "$archive_path" "$stage" "$name"
 done <<'PLATFORMS'
 darwin amd64 tar.gz
 darwin arm64 tar.gz
