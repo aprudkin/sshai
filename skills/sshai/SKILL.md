@@ -5,7 +5,9 @@ license: MIT
 compatibility: Requires the sshai CLI; remote execution needs system OpenSSH and configured ssh_config aliases, while local execution needs bash or pwsh on PATH.
 ---
 
-Use the installed `sshai` binary through the agent harness's non-interactive shell execution tool. It supports Windows PowerShell 7 or 5.1 and Linux-family hosts reachable through an `ssh_config` alias, plus explicit local Bash or PowerShell 7 (`pwsh`) execution. Linux-family remote execution defaults to Bash; select an explicit POSIX shell when the host, such as OpenWrt, does not provide Bash. Confirm availability with `command -v sshai`. Read `sshai help`, `sshai help run`, and `sshai help local` when a command, flag, or output contract is uncertain; the CLI does not provide a `--version` command.
+Use the installed `sshai` binary through the agent harness's non-interactive shell execution tool. It supports Windows PowerShell 7 or 5.1 and Linux-family hosts reachable through an `ssh_config` alias, plus explicit local Bash or PowerShell 7 (`pwsh`) execution. Linux-family remote execution defaults to Bash; select an explicit POSIX shell when the host, such as OpenWrt, does not provide Bash. Confirm availability with `command -v sshai`. Read `sshai help` for command discovery and `sshai help <command>` for the relevant command whenever a flag or output contract is uncertain; the CLI does not provide a `--version` command.
+
+Use `sshai` only when command text, script bodies, and expected output contain no secret values. Neither stdin nor a private body file makes embedded secrets safe: staged scripts and captured output can retain body-derived data. Do not embed passwords, tokens, keys, or other secret values; stop and require a separately approved, purpose-built workflow when secrets are required.
 
 ## Execute
 
@@ -56,9 +58,31 @@ sshai run --follow <host> -- <command>
 sshai run --follow --follow-interval 5 <host> -- <command>
 ```
 
-Follow events are JSONL on stderr; the normal human passport or JSON v1 result remains on stdout. The interval is in seconds, defaults to `10`, and must be at least `1`. Follow mode accepts exactly one host. Treat heartbeats as truthful elapsed-time signals, not application progress. Live combined-output previews are bounded, may end with `output_suppressed`, and are not authoritative; use the saved artifact for complete captured evidence. The stream is not persisted and does not imply polling, replay, retry, or authorization.
+Follow events are JSONL on stderr; the normal human passport or JSON v1 result remains on stdout. The interval is in seconds, defaults to `10`, and must be at least `1`. Follow mode accepts exactly one host. Treat heartbeats as truthful elapsed-time signals, not application progress. Live combined-output previews are bounded, may end with `output_suppressed`, and are not authoritative; use the saved artifact as the authoritative source for retained evidence. The stream is not persisted and does not imply polling, replay, retry, or authorization.
 
-Treat the passport status line as the source of truth. A Windows host where no supported PowerShell setup form can create its scratch directory reports `setup-error=windows-shell`, returns exit `99`, and does not run the user body or cache host facts; its artifact contains only a fixed diagnostic. A transport failure is reported as `transport-error=<class>` and may include a bounded canonical diagnostic. In human output, JSON output, and the saved artifact, only sanitized diagnostics are exposed; raw SSH or setup output, host keys, SSH configuration, algorithm offers, identities, and secrets are never passed through. Query a large stored result locally with `sshai q <id> -- <tool> <args>`; use `sshai diff` or `--delta` for repeated checks instead of loading or rerunning full output.
+## Interpret and query results
+
+For human output, treat the passport status line as the source of truth. When a consumer must parse the result, use `--result-format=json` with `run` or `local` and inspect the single stdout envelope (`schema_version: "v1"`), including `runs[]` and `summary`, rather than parsing a human passport. Policy-denied hosts are counted in `summary.policy_denied` and have no `runs[]` entry. Do not classify failures from the process exit code alone: genuine command exits can overlap reserved CLI codes. Use the passport status or JSON error fields to distinguish command exits from local, transport, and setup failures.
+
+For example:
+
+```bash
+sshai run --result-format=json <host> -- <command>
+```
+
+When a result file is required, read `sshai help run` or `sshai help local` before using `--result-out <file>` with JSON mode; it atomically replaces a regular destination with a private envelope and rejects non-regular destinations.
+
+For both remote and local execution, artifacts retain output only up to the configured stream cap. `truncated=1` means output was discarded; neither the artifact nor `sshai q` can recover that discarded portion. Do not claim the retained evidence is the complete command output when truncated.
+
+A Windows host where no supported PowerShell setup form can create its scratch directory reports `setup-error=windows-shell`, returns exit `99`, and does not run the user body or cache host facts; its artifact contains only a fixed diagnostic. A transport failure is reported as `transport-error=<class>` and may include a bounded canonical diagnostic. SSH transport and Windows setup diagnostics are sanitized in human output, JSON output, and saved artifacts: raw SSH or setup output is not passed through. This is not general secret redaction for user-command output; captured command output may retain secrets if the command emits them. Explicitly authorized host-key acceptance may report the accepted algorithm and SHA256 fingerprint.
+
+Query a large stored result locally with `sshai q <id> -- <tool> <args>`. It invokes `<tool> <args> <artifact-path>`: the artifact path is appended as the final argv argument, never supplied on stdin. For example:
+
+```bash
+sshai q <id> -- python3 -c 'import sys; print(open(sys.argv[-1]).readline())'
+```
+
+Read `sshai help q` if query arguments or output limits are uncertain. Use `sshai diff` or `--delta` for repeated checks instead of loading or rerunning full output.
 
 The transport never authorizes a server mutation. Retain the task's exact target, preconditions, rollback, and post-change verification. Get confirmation before remote, destructive, production, external, or hard-to-reverse actions not already authorized by the request.
 
