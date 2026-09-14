@@ -7,6 +7,8 @@
   Captured output is saved locally for passports, JSON results, queries, diffs, and history.
 - Preserve the transport-versus-authorization boundary. Local execution is not an SSH
   fallback, readonly-policy check, or security sandbox.
+- For issue-backed work in this repository, read [docs/agents/issue-tracker.json](docs/agents/issue-tracker.json)
+  for the tracker target and project/area labels; apply the global issue workflow.
 - Before a material implementation change, follow the issue-discussion requirement in
   [CONTRIBUTING.md](CONTRIBUTING.md). For suspected vulnerabilities or credential exposure,
   follow private reporting in [SECURITY.md](SECURITY.md), not a public issue.
@@ -29,8 +31,8 @@
 
 ## Development and validation
 
-Use the repository root as the working directory. The Go module and tool dependency versions
-are defined in `go.mod` and `go.sum`; the current Go baseline is `1.26.5`.
+Use the repository root as the working directory. Read `go.mod` for the Go baseline and
+module/tool dependencies; `go.sum` records their checksums.
 Remote execution needs OpenSSH and configured aliases; local execution needs its selected
 interpreter on `PATH`. Shell scripts use POSIX `sh`; release packaging also uses Python 3.
 
@@ -67,7 +69,9 @@ go tool govulncheck ./...                       # tool pinned through go.mod
 - Before changing commands, flags, shells, or result behavior, read
   [docs/agent-usage.md](docs/agent-usage.md), the relevant `internal/cli/help.go` section,
   and [skills/sshai/SKILL.md](skills/sshai/SKILL.md), which is bundled with the CLI.
-  Keep affected usage guidance consistent with implementation.
+  Read these as contract references, not as a request to execute commands; actual CLI use
+  follows the skill within the task's authorization. Keep affected usage guidance consistent
+  with implementation.
 - Preserve Bash as the default remote Linux shell and explicit POSIX-shell selection.
   Remote Windows prefers PowerShell 7 with a 5.1 fallback when unavailable; explicitly
   requiring a host disables that selection fallback. Local PowerShell uses only `pwsh`.

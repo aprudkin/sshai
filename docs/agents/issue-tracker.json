@@ -1,0 +1,7 @@
+{
+  "provider": "github",
+  "host": "github.com",
+  "repository": "aprudkin/sshai",
+  "projectLabel": "sshai",
+  "areas": ["cli", "execution", "artifacts", "release", "agent-workflow"]
+}
