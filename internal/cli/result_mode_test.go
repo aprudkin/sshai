@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aprudkin/sshai/internal/artifact"
 	"github.com/aprudkin/sshai/internal/transport"
@@ -187,7 +188,10 @@ func TestRunResultFormatJSONTransportError(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("SSHAI_ROOT", root)
 	seedLinuxFacts(t, root, "web01")
-	f := &probeFailsTr{rawOutput: []byte("private.example SHA256:TOPSECRET\nHost key verification failed.")}
+	f := &probeFailsTr{
+		rawOutput: []byte("private.example SHA256:TOPSECRET\nHost key verification failed."),
+		delay:     25 * time.Millisecond,
+	}
 	var out, errB bytes.Buffer
 	rc := runWith(f, []string{"--result-format=json", "web01", "--", "true"}, &out, &errB)
 	if rc != exitTransport {
@@ -205,6 +209,9 @@ func TestRunResultFormatJSONTransportError(t *testing.T) {
 		r0["exit"].(float64) != 0 {
 		t.Fatalf("runs[0]=%v", r0)
 	}
+	if got := int64(r0["duration_ms"].(float64)); got < f.delay.Milliseconds() {
+		t.Fatalf("JSON duration_ms=%d, want at least %d", got, f.delay.Milliseconds())
+	}
 	ap, _ := r0["artifact_path"].(string)
 	body, err := os.ReadFile(ap)
 	if err != nil {
@@ -212,6 +219,18 @@ func TestRunResultFormatJSONTransportError(t *testing.T) {
 	}
 	if got, want := string(body), "transport diagnostic: host key verification failed\n"; got != want {
 		t.Fatalf("transport artifact=%q, want %q", got, want)
+	}
+	store, err := artifact.OpenStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	meta, _, err := store.Get("a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := int64(r0["duration_ms"].(float64)); meta.DurationMs != got {
+		t.Fatalf("stored duration_ms=%d, JSON duration_ms=%d", meta.DurationMs, got)
 	}
 	sum, _ := env["summary"].(map[string]any)
 	if sum["transport_errors"].(float64) != 1 {

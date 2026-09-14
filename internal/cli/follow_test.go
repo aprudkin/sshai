@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aprudkin/sshai/internal/artifact"
 	"github.com/aprudkin/sshai/internal/session"
 	"github.com/aprudkin/sshai/internal/transport"
 )
@@ -133,7 +134,10 @@ func TestFollowJSONResultOutMatchesFinalStdout(t *testing.T) {
 	}
 }
 
-type transportFailFollowTr struct{ calls int }
+type transportFailFollowTr struct {
+	calls int
+	delay time.Duration
+}
 
 func (f *transportFailFollowTr) Exec(host, command string, stdin []byte, timeout time.Duration) (transport.Result, error) {
 	panic("follow mode must not call Exec")
@@ -141,6 +145,7 @@ func (f *transportFailFollowTr) Exec(host, command string, stdin []byte, timeout
 func (f *transportFailFollowTr) Put(host, local, remote string) error { return nil }
 func (f *transportFailFollowTr) ExecStream(host, command string, stdin []byte, timeout time.Duration, out func([]byte)) (transport.Result, error) {
 	f.calls++
+	time.Sleep(f.delay)
 	return transport.Result{}, transport.NewTransportError("ssh", []byte("Permission denied for secret-host.example"))
 }
 
@@ -181,7 +186,7 @@ func TestFollowTransportFailureIsSanitizedAndNotRetried(t *testing.T) {
 	root := t.TempDir()
 	prepareFollowHost(t, root)
 	var stdout, stderr bytes.Buffer
-	f := &transportFailFollowTr{}
+	f := &transportFailFollowTr{delay: 25 * time.Millisecond}
 	if rc := runWith(f, []string{"--follow", "h", "--", "true"}, &stdout, &stderr); rc != exitTransport {
 		t.Fatalf("rc=%d stderr=%s", rc, stderr.String())
 	}
@@ -195,6 +200,25 @@ func TestFollowTransportFailureIsSanitizedAndNotRetried(t *testing.T) {
 	encoded, _ := json.Marshal(events[0])
 	if bytes.Contains(encoded, []byte("secret-host")) || !bytes.Contains(encoded, []byte("permission denied")) {
 		t.Fatalf("transport diagnostic is not safely canonicalized: %s", encoded)
+	}
+	outcome := events[0]["outcome"].(map[string]any)
+	if got := int64(outcome["duration_ms"].(float64)); got < f.delay.Milliseconds() {
+		t.Fatalf("completed outcome duration_ms=%d, want at least %d", got, f.delay.Milliseconds())
+	}
+	store, err := artifact.OpenStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	meta, _, err := store.Get("a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := int64(outcome["duration_ms"].(float64)); meta.DurationMs != got {
+		t.Fatalf("stored duration_ms=%d, completed outcome duration_ms=%d", meta.DurationMs, got)
+	}
+	if want := "time=" + artifact.HumanDuration(meta.DurationMs); !strings.Contains(stdout.String(), want) {
+		t.Fatalf("passport missing measured duration %q: %q", want, stdout.String())
 	}
 }
 

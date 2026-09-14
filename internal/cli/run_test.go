@@ -72,10 +72,14 @@ func TestRunProbesFactsWhenNotCached(t *testing.T) {
 type probeFailsTr struct {
 	calls     []string
 	rawOutput []byte
+	delay     time.Duration
 }
 
 func (f *probeFailsTr) Exec(host, cmd string, stdin []byte, _ time.Duration) (transport.Result, error) {
 	f.calls = append(f.calls, cmd)
+	if f.delay > 0 {
+		time.Sleep(f.delay)
+	}
 	if len(f.rawOutput) != 0 {
 		return transport.Result{}, transport.NewTransportError("ssh", f.rawOutput)
 	}
@@ -93,7 +97,10 @@ func TestRunProbeTransportErrorProducesTransportErrorPassport(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("SSHAI_ROOT", root)
 
-	f := &probeFailsTr{rawOutput: []byte("SHA256:TOPSECRET\nHost key verification failed.")}
+	f := &probeFailsTr{
+		rawOutput: []byte("SHA256:TOPSECRET\nHost key verification failed."),
+		delay:     25 * time.Millisecond,
+	}
 	var out, errB bytes.Buffer
 	rc := runWith(f, []string{"--ctx", "t1", "web01", "--", "echo", "hello"}, &out, &errB)
 	if rc != exitTransport {
@@ -118,6 +125,21 @@ func TestRunProbeTransportErrorProducesTransportErrorPassport(t *testing.T) {
 	}
 	if got, want := string(body), "transport diagnostic: host key verification failed\n"; got != want {
 		t.Fatalf("transport artifact=%q, want %q", got, want)
+	}
+	store, err := artifact.OpenStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	meta, _, err := store.Get("a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.DurationMs < f.delay.Milliseconds() {
+		t.Fatalf("stored duration_ms=%d, want at least %d", meta.DurationMs, f.delay.Milliseconds())
+	}
+	if want := "time=" + artifact.HumanDuration(meta.DurationMs); !strings.Contains(out.String(), want) {
+		t.Fatalf("passport missing measured duration %q: %q", want, out.String())
 	}
 }
 
@@ -200,6 +222,69 @@ func TestRunWindowsHappyPathAndStableSlug(t *testing.T) {
 	}
 	if f.putPaths[1] != f.putPaths[0] {
 		t.Fatalf("remote path changed across two runs of the identical command: %q != %q (BodySlug regression)", f.putPaths[1], f.putPaths[0])
+	}
+}
+
+type windowsTransportErrorTr struct {
+	failAt              string
+	delay               time.Duration
+	putCalls, execCalls int
+}
+
+func (f *windowsTransportErrorTr) Put(_, _, _ string) error {
+	f.putCalls++
+	if f.failAt == "put" {
+		time.Sleep(f.delay)
+		return &transport.TransportError{Reason: "ssh"}
+	}
+	return nil
+}
+
+func (f *windowsTransportErrorTr) Exec(_ string, _ string, _ []byte, _ time.Duration) (transport.Result, error) {
+	f.execCalls++
+	if f.failAt == "exec" {
+		time.Sleep(f.delay)
+		return transport.Result{}, &transport.TransportError{Reason: "ssh"}
+	}
+	panic("unexpected successful Windows transport execution")
+}
+
+func TestRunWindowsTransportErrorPreservesElapsedDuration(t *testing.T) {
+	for _, failAt := range []string{"put", "exec"} {
+		t.Run(failAt, func(t *testing.T) {
+			root := t.TempDir()
+			t.Setenv("SSHAI_ROOT", root)
+			if err := session.SaveFacts(root, "dc01", session.Facts{
+				OS: "windows", Shell: shell.PwshDefaultShell, Form: "pwsh",
+			}); err != nil {
+				t.Fatalf("SaveFacts: %v", err)
+			}
+
+			tr := &windowsTransportErrorTr{failAt: failAt, delay: 25 * time.Millisecond}
+			var stdout, stderr bytes.Buffer
+			if rc := runWith(tr, []string{"dc01", "--", "Get-Date"}, &stdout, &stderr); rc != exitTransport {
+				t.Fatalf("rc=%d, want %d; stderr=%s", rc, exitTransport, stderr.String())
+			}
+			if tr.putCalls != 1 || tr.execCalls != map[string]int{"put": 0, "exec": 1}[failAt] {
+				t.Fatalf("transport calls: Put=%d Exec=%d", tr.putCalls, tr.execCalls)
+			}
+
+			store, err := artifact.OpenStore(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			meta, _, err := store.Get("a1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if meta.DurationMs < tr.delay.Milliseconds() {
+				t.Fatalf("stored duration_ms=%d, want at least %d", meta.DurationMs, tr.delay.Milliseconds())
+			}
+			if want := "time=" + artifact.HumanDuration(meta.DurationMs); !strings.Contains(stdout.String(), want) {
+				t.Fatalf("passport missing measured duration %q: %q", want, stdout.String())
+			}
+		})
 	}
 }
 

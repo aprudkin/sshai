@@ -690,7 +690,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 				return handleSetupError(deps, opts, se, time.Since(probeStart).Milliseconds(), stdout, stderr)
 			}
 			if te, isTE := asTransportError(err); isTE {
-				return handleTransportError(deps, opts, te, stdout, stderr)
+				return handleTransportError(deps, opts, te, time.Since(probeStart).Milliseconds(), stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: probe %s: %v\n", opts.Host, err)
 			return newInternalFailureOutcome(exitUsage)
@@ -769,7 +769,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		remotePath := shell.RemoteDir + "/" + slug + ".ps1"
 		if err := deps.Tr.Put(opts.Host, tmp.Name(), remotePath); err != nil {
 			if te, isTE := asTransportError(err); isTE {
-				return handleTransportError(deps, opts, te, stdout, stderr)
+				return handleTransportError(deps, opts, te, time.Since(start).Milliseconds(), stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: put script to %s: %v\n", opts.Host, err)
 			return newInternalFailureOutcome(exitUsage)
@@ -784,7 +784,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		}
 		if err != nil {
 			if te, isTE := asTransportError(err); isTE {
-				return handleTransportError(deps, opts, te, stdout, stderr)
+				return handleTransportError(deps, opts, te, time.Since(start).Milliseconds(), stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: exec on %s: %v\n", opts.Host, err)
 			return newInternalFailureOutcome(exitUsage)
@@ -812,7 +812,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		}
 		if err != nil {
 			if te, isTE := asTransportError(err); isTE {
-				return handleTransportError(deps, opts, te, stdout, stderr)
+				return handleTransportError(deps, opts, te, time.Since(start).Milliseconds(), stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: exec on %s: %v\n", opts.Host, err)
 			return newInternalFailureOutcome(exitUsage)
@@ -998,7 +998,7 @@ func handleSetupError(deps Deps, opts Opts, setupErr *session.RemoteSetupError, 
 	return newSavedRunOutcome(savedMeta)
 }
 
-func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, stdout, stderr io.Writer) RunOutcome {
+func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, durationMs int64, stdout, stderr io.Writer) RunOutcome {
 	root := deps.Store.Root
 
 	diagnostic := te.Diagnostic()
@@ -1006,7 +1006,7 @@ func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, st
 		deps.Tr, opts.Host, opts.AcceptNewHostKey, stderr)
 	meta := artifact.Meta{
 		Host: opts.Host, Ctx: opts.Ctx, Command: deltaKeyCommand(opts),
-		TransportErr: te.Reason, TransportDiagnostic: diagnostic, Ts: time.Now(),
+		TransportErr: te.Reason, TransportDiagnostic: diagnostic, DurationMs: durationMs, Ts: time.Now(),
 		AcceptedHostKeyAlgorithm:   acceptedHostKeyAlgorithm,
 		AcceptedHostKeyFingerprint: acceptedHostKeyFingerprint,
 	}
