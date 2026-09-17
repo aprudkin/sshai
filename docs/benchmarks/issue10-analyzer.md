@@ -427,6 +427,94 @@ Codex session was used to establish this result. Binary/source equivalence, prov
 compaction continuity and collector delivery remain unqualified. Full Go checks were not run
 for this Python-only stage. Source/document changes require fresh offline plans.
 
+### Call evidence map and qualification boundary
+
+The next offline revision distinguishes reported requests/activity from supported command lifecycle
+observations. This map describes inspected source and current decoding, **not** observed live calls.
+It is pinned to Codex `0.151.0`, revision `78c290807ce710180111df227df3b7a4fe845452`.
+
+Source owners:
+
+- [Rollout persistence](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/rollout/src/policy.rs#L40-L200):
+  selected ResponseItems persist; paginated history persists completed TurnItems, not item starts.
+  Exec begin/end, raw-response events, dynamic request/response and approval requests are transient.
+  Legacy history retains some alternative end events; this is not a complete event recorder.
+- [Exec mapping/filtering and IDs](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/exec/src/event_processor_with_jsonl_output.rs#L142-L378)
+  and [wire schema](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/exec/src/exec_events.rs#L106-L296):
+  exec maps selected variants, remaps IDs, drops others and may reconcile unfinished started items.
+  Command exit codes are nullable. File-change failures collapse failed and declined states.
+- [TurnItem variants and fields](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/protocol/src/items.rs#L40-L458):
+  commands, dynamic tools, MCP, file changes, collaboration, images and extensions are distinct
+  schemas. MCP status uses camelCase; command/dynamic status uses snake_case.
+- [ResponseItem calls](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/protocol/src/models.rs#L1024-L1190),
+  [request construction](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/core/src/tools/router.rs#L246-L298)
+  and [dispatch rejection](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/core/src/tools/registry.rs#L519-L587):
+  a recorded function/custom request is not proof of handler execution. Dispatch can reject an
+  unknown tool, incompatible payload or blocked hook; hosted activity also has different semantics.
+
+| Activity | Source-shaped evidence available | Current adapter / remaining gap |
+| --- | --- | --- |
+| Command execution | CLI command lifecycle; completed paginated `CommandExecution`; ResponseItem request where emitted | Decodes command fields and retains raw observations. Declined/malformed observations are unconfirmed. A reported lifecycle is not an independent process-spawn receipt or a unique tool-call total. |
+| Saved-artifact read, query, retry or routed diagnostic | May be carried inside command argv/input, MCP/dynamic arguments or other tool payloads | Preserves payloads, but has no qualified semantic classification. A shell substring, command name or output size cannot prove which artifact was read or that routing complied. Counts remain unavailable, not zero. |
+| MCP | Exec `mcp_tool_call`; paginated `McpToolCall`; legacy MCP end event | Retains raw payloads as unqualified entries. No success/access inference from name, read-only hint or result presence. |
+| Dynamic tools | Paginated `DynamicToolCall`; possible function request/output | Exec mapping has no dynamic variant; dynamic request/response events are transient. Retains TurnItem as unsupported, not evidence of absence when missing. |
+| File changes | Exec `file_change`; paginated `FileChange`; legacy patch end | CLI changes are now retained instead of skipped. Raw status/changes remain unqualified; exec failed cannot distinguish decline from failed application. |
+| Web/image/extension tools | Hosted ResponseItems; paginated `WebSearch`, `ImageView`, `ImageGeneration`, `Extension`; selected exec web search | Preserves recognized call-shaped responses and unsupported TurnItems/CLI items; no full producer/extension decoder or unique invocation mapping. |
+| Collaboration/subagents | Paginated collaboration/activity items; only a subset mapped to exec | Retains unsupported activity. Parent records do not establish child call/usage coverage; some collaboration tools/statuses are omitted or mapped lossily by exec. |
+| Approval/input requests | Transient events, if independently supplied to the parser | Retained as requests, not confirmed execution. Their absence from persisted rollout is expected and cannot prove absence of requests. |
+| Other/unknown variants, compaction, delivery loss | Original bounded raw streams; selected compaction observations | Unsupported inventory is explicit where decoded, but unknown event payloads need not become inventory entries. No zero-gap/full-coverage claim from zero unknown entries, terminal success or matching usage. |
+
+Inventory semantics:
+
+- `actual_call_confirmed` is a retained compatibility field, now restricted to syntactically supported
+  non-declined command lifecycle reports. It does **not** attest real execution, session validity,
+  successful effects, access compliance or the completeness of either stream. Other call-shaped
+  records remain unconfirmed even when they report `status=completed`.
+- `reported_call` covers ResponseItem requests/hosted reports; unknown `*_call` types are
+  `unknown_response_item`. Legacy requests/lifecycles are `reported_request`/
+  `reported_call_lifecycle`. Unsupported CLI items (including file changes) and TurnItems retain
+  explicit decoder gaps. These labels describe evidence, not tool-policy classifications.
+- All inventory entries retain source-local `raw_observations`. Within one source and ID, grouping
+  preserves every observation and distinct `evidence_kinds`; singular `evidence_kind` describes the
+  first observation. Any unconfirmed or changed-type observation prevents group confirmation.
+  CLI, TurnItem, legacy event, ResponseItem and raw-response-event IDs are separate domains even
+  when their strings match. Grouping is not a count of executions.
+- `confirmed_call_entry_count` counts supported command-report groups, not unique calls;
+  `unknown_item_entry_count` includes **all unconfirmed entries**, including known requests.
+  Command completed/failed summaries exclude unconfirmed groups. Captured output bytes still
+  describe retained CLI output, not proven model-visible bytes. `unique_session_call_count=null`,
+  `coverage=unqualified`, unknown boundary and disabled experimental claims are unconditional.
+
+Finite qualification checklist (a plan, not launch approval):
+
+1. Freeze the exact launcher/native binary hashes, version, history mode, collector/adapter revision,
+   rendered prompt, model/reasoning and effective observable tool surface. Recheck pins rather than
+   trusting prior receipts. Hash/version agreement alone does not prove binary/source equivalence.
+2. Before live qualification, approve specific non-production targets, directories, access/setup/
+   cleanup and protocol/phase manifest. Fit qualification into the agreed 12 technical pilot sessions
+   and 120-session ceiling; this checklist allocates no extra sessions, paid API fallback or access.
+3. In authorized synthetic scenarios, retain an independent expected-action ledger and fixture
+   outcomes alongside both streams: normal/failed/declined command, request rejected before handler,
+   saved-artifact read, repeated identical command and any permitted non-command tool. Qualify
+   disabled tools through observable restrictions rather than invoking unauthorized services.
+   Distinguish request, dispatch, process/interaction and side effect; do not count them as synonyms.
+4. Match the ledger to source-local evidence, including terminal-interaction inputs, child activity
+   if allowed, and all saved-output follow-ups. A tool surface not covered by qualified observation
+   must be restricted with verified controls or remain a launch blocker. Do not repair missingness
+   by summing streams, accepting suffixes or requiring every task to succeed.
+5. Exercise bounded failure/delivery cases (timeout, truncation/overflow, interrupted persistence,
+   compaction and nonzero exit) using synthetic collector tests first and an approved live subset.
+   Verify answer completion separately with `completion_evidence_bytes`; a match remains unknown
+   finality until exact-binary delivery qualification. Preserve every attempted slot and limitation.
+6. Record observed versus inferred/missing calls and explicit pass/fail evidence before any change
+   to eligibility. If actual-call coverage or authorized-data access cannot be established, stop
+   launch qualification; further offline preparation is not a substitute for passing the gate.
+
+Synthetic tests in `test_issue10_v3_call_evidence.py` and coordinator import/replay cover request
+non-promotion, file-change retention, declined/malformed commands, nullable exits, identity-domain
+separation, mixed observations and rehashed false execution claims. They run no model/SSH session.
+This revision requires fresh development plans; it does not migrate or rewrite frozen evidence.
+
 ### Offline capture-to-slot integration
 
 ```sh

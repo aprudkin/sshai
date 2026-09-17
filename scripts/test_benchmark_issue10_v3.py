@@ -217,6 +217,26 @@ class CoordinatorTests(unittest.TestCase):
         self.assertEqual((self.root / 'records/001.json').stat().st_mode & 0o777, 0o600)
         self.assertEqual((self.root / 'records').stat().st_mode & 0o777, 0o700)
 
+    def test_call_evidence_roundtrip_rejects_rehashed_execution_claim(self):
+        cli = cli_records()
+        change = {'id': 'patch-1', 'type': 'file_change', 'status': 'failed',
+                  'changes': [{'path': 'synthetic.txt', 'kind': 'update'}]}
+        cli.insert(-1, {'type': 'item.completed', 'item': change})
+        envelope = self.capture(cli_data=jsonl(cli))
+        calls = envelope['capture']['report']['calls']
+        patch_entry = next(c for c in calls['inventory'] if c['call_id'] == 'patch-1')
+        self.assertEqual(patch_entry['raw_observations'][0]['item'], change)
+        self.assertFalse(patch_entry['actual_call_confirmed'])
+        request = next(c for c in calls['inventory'] if c['source'] == 'rollout.response_item')
+        self.assertFalse(request['actual_call_confirmed'])
+        self.assertIsNone(calls['unique_session_call_count'])
+        self.assertFalse(runner.analyze_root(self.root)['experimental_claim_eligible'])
+        request['actual_call_confirmed'] = True
+        envelope['capture_sha256'] = runner.digest(runner.encoded(envelope['capture']))
+        (self.root / 'records/001.json').write_bytes(runner.encoded(envelope))
+        with self.assertRaises(ValueError):
+            runner.analyze_root(self.root)
+
     def test_capture_overwrite_and_duplicate_across_import_paths(self):
         self.capture()
         original = (self.root / 'records/001.json').read_bytes()

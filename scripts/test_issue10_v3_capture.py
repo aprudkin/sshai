@@ -147,7 +147,9 @@ class PureCaptureTests(unittest.TestCase):
         unknown_cli = next(item for item in inventory if item["call_id"] == "future-cli-1")
         self.assertFalse(unknown_cli["actual_call_confirmed"])
         self.assertEqual(unknown_cli["evidence_kind"], "unknown_cli_item")
-        self.assertEqual(report["calls"]["unknown_item_entry_count"], 1)
+        # Request, future response, unsupported CLI and legacy lifecycle are
+        # retained, but none independently confirms execution.
+        self.assertEqual(report["calls"]["unknown_item_entry_count"], 4)
         self.assertNotIn("count", report["calls"])
         self.assertGreaterEqual(report["calls"]["observation_count"],
                                 report["calls"]["inventory_entry_count"])

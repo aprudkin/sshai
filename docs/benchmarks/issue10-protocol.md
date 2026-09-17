@@ -919,7 +919,14 @@ completion comparison now binds exact delivered bytes to a narrow Codex 0.151.0 
 recipe and retains the result during collector import/replay. A structural match remains explicitly
 unqualified: finality and quality stay unknown, answer bytes are not promoted to a gradable answer,
 and process success/failure cannot supply or erase this evidence. The analyzer guide specifies
-supported shapes, source references and remaining live/binary qualification. No live experiment is
+supported shapes, source references and remaining live/binary qualification. The subsequent call-
+evidence revision retains CLI file changes and raw inventory observations, separates request/hosted
+reports from supported command lifecycles, and leaves unsupported variants explicitly unconfirmed.
+It does not join CLI, TurnItem, response or legacy-event IDs into a unique-call total; the reported
+unique session call count remains null. See the analyzer guide's **Call evidence map and qualification
+boundary** for pinned persistence/filtering sources and the finite exact-binary qualification checklist.
+Zero unknown entries, a call-shaped name or a successful terminal record do not qualify full auditing.
+The checklist grants no targets, additional sessions or live launch permission. No live experiment is
 authorized by this document.
 
 The manifest explicitly records unfrozen status, unqualified native formats and calibration grades,

@@ -198,9 +198,8 @@ def _response_call(item: dict[str, Any], source: str, record: int,
     item_type = item.get("type")
     if not isinstance(item_type, str):
         return
-    # These shapes are evidenced by the historical rollout parser.  The suffix
-    # fallback retains future/unknown call kinds instead of treating their name
-    # as a compliance decision.
+    # Response items report requests or hosted activity, not necessarily a
+    # dispatched local invocation. A future suffix is only an inventory hint.
     call_types = {
         "function_call", "custom_tool_call", "local_shell_call",
         "web_search_call", "image_generation_call", "mcp_tool_call",
@@ -216,9 +215,11 @@ def _response_call(item: dict[str, Any], source: str, record: int,
         "tool_name": _tool_name(item, item_type),
         "detail": _call_detail(item),
         "status": item.get("status") if isinstance(item.get("status"), str) else None,
-        "evidence_kind": "call",
-        "actual_call_confirmed": True,
+        "evidence_kind": ("reported_call" if item_type in call_types
+                          else "unknown_response_item"),
+        "actual_call_confirmed": False,
         "classification": "unclassified",
+        "raw_observations": [{"record": record, "event": "response_item", "item": item}],
     })
 
 
@@ -314,13 +315,15 @@ def _parse_cli(records: Any) -> dict[str, Any]:
             output = item.get("aggregated_output")
             status = item.get("status")
             exit_code = item.get("exit_code")
-            if kind == "item.completed":
-                if not isinstance(command, str) or not command:
-                    issues.append(_issue(source, "malformed_command", "completed command has no command string", record=number))
-                if not isinstance(output, str):
-                    issues.append(_issue(source, "malformed_command", "completed command has no aggregated_output string", record=number))
-                if status not in ("completed", "failed") or type(exit_code) is not int:
-                    issues.append(_issue(source, "malformed_command", "completed command lacks terminal status/exit_code", record=number))
+            valid = (isinstance(command, str) and bool(command)
+                     and isinstance(output, str)
+                     and status in ("in_progress", "completed", "failed", "declined")
+                     and (exit_code is None or type(exit_code) is int)
+                     and not (kind == "item.completed" and status == "in_progress"))
+            if not valid:
+                issues.append(_issue(source, "malformed_command",
+                    "command fields or lifecycle status are malformed", record=number))
+            confirmed = valid and status != "declined"
             calls.append({
                 "source": source, "record": number,
                 "record_type": "command_execution", "call_id": item_id,
@@ -329,27 +332,25 @@ def _parse_cli(records: Any) -> dict[str, Any]:
                 "exit_code": exit_code if type(exit_code) is int else None,
                 "output_bytes": (len(output.encode("utf-8"))
                                  if kind == "item.completed" and isinstance(output, str) else None),
-                "evidence_kind": "call",
-                "actual_call_confirmed": True,
+                "evidence_kind": "call" if confirmed else "unqualified_command",
+                "actual_call_confirmed": confirmed,
                 "classification": "unclassified",
+                "raw_observations": [{"record": number, "event": kind, "item": item}],
             })
-        elif item_type not in ("agent_message", "reasoning", "file_change", "todo_list"):
-            before = len(calls)
-            _response_call(item, source, number, calls)
-            if len(calls) == before:
-                # Do not silently discard a schema-drift item.  It may or may
-                # not represent a tool call, so retain it without promoting it
-                # to a confirmed actual call.
-                calls.append({
-                    "source": source, "record": number,
-                    "record_type": item_type, "call_id": item_id,
-                    "tool_name": _tool_name(item, item_type),
-                    "detail": _call_detail(item),
-                    "status": item.get("status") if isinstance(item.get("status"), str) else None,
-                    "evidence_kind": "unknown_cli_item",
-                    "actual_call_confirmed": False,
-                    "classification": "unclassified",
-                })
+        elif item_type not in ("agent_message", "reasoning", "todo_list", "error"):
+            # Exec ThreadItems are not ResponseItems. In particular, a suffix
+            # must not qualify MCP/collab calls, and file changes are activity.
+            issues.append(_issue(source, "unsupported_cli_item",
+                f"unqualified CLI item variant {item_type!r}", record=number, invalid=False))
+            calls.append({
+                "source": source, "record": number,
+                "record_type": item_type, "call_id": item_id,
+                "tool_name": _tool_name(item, item_type), "detail": _call_detail(item),
+                "status": item.get("status") if isinstance(item.get("status"), str) else None,
+                "evidence_kind": "unknown_cli_item",
+                "actual_call_confirmed": False, "classification": "unclassified",
+                "raw_observations": [{"record": number, "event": kind, "item": item}],
+            })
     if not thread_ids:
         issues.append(_issue(source, "missing_thread_start", "no thread.started record"))
     if not turn_starts:
@@ -534,15 +535,19 @@ def _parse_rollout(records: Any) -> dict[str, Any]:
                 "exec_command_begin", "exec_command_end", "dynamic_tool_call_request",
                 "dynamic_tool_call_response", "apply_patch_approval_request", "request_user_input",
             ):
+                is_request = subtype.endswith("_request") or subtype == "request_user_input"
                 calls.append({
                     "source": "rollout.event_msg", "record": number,
                     "record_type": subtype,
                     "call_id": _call_identity(payload, f"rollout.event_msg:{number}"),
                     "tool_name": _tool_name(payload, subtype), "detail": _call_detail(payload),
-                    "status": "begin" if subtype.endswith(("_begin", "_request")) else "end",
-                    "evidence_kind": "call_lifecycle",
-                    "actual_call_confirmed": True,
+                    "status": "request" if is_request else (
+                        "begin" if subtype.endswith("_begin") else "end"),
+                    "evidence_kind": ("reported_request" if is_request
+                                      else "reported_call_lifecycle"),
+                    "actual_call_confirmed": False,
                     "classification": "unclassified",
+                    "raw_observations": [{"record": number, "event": subtype, "item": payload}],
                 })
             # Other event messages are retained by the raw capture but do not
             # acquire invented call or compliance semantics here.
@@ -651,14 +656,13 @@ def _answer(answer_capture: Any, cli_messages: list[dict[str, Any]],
 
 
 def _deduplicate_calls(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Merge repeated lifecycle representations only within the same source family."""
+    """Group source-local identities; never claim cross-representation uniqueness."""
     result: list[dict[str, Any]] = []
     positions: dict[tuple[str, str], int] = {}
     for call in calls:
-        family = call["source"].split(".", 1)[0]
-        # TurnItem IDs are not proven to share the legacy response/event ID domain.
-        identity_domain = call["source"] if call["source"] == "rollout.turn_item" else family
-        key = (identity_domain, call["call_id"])
+        # CLI, TurnItem, raw ResponseItem and legacy event identities have no
+        # qualified join contract. Even equal strings remain separate evidence.
+        key = (call["source"], call["call_id"])
         if key not in positions:
             positions[key] = len(result)
             result.append({
@@ -666,15 +670,19 @@ def _deduplicate_calls(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "observations": 1,
                 "sources": [call["source"]],
                 "record_types": [call["record_type"]],
+                "evidence_kinds": [call["evidence_kind"]],
             })
         else:
             target = result[positions[key]]
             target["observations"] += 1
             if "raw_observations" in call:
                 target.setdefault("raw_observations", []).extend(call["raw_observations"])
-                target["actual_call_confirmed"] = (
-                    target["actual_call_confirmed"] and call["actual_call_confirmed"]
-                )
+            target["actual_call_confirmed"] = (
+                target["actual_call_confirmed"] and call["actual_call_confirmed"]
+                and target["record_type"] == call["record_type"]
+            )
+            if call["evidence_kind"] not in target["evidence_kinds"]:
+                target["evidence_kinds"].append(call["evidence_kind"])
             if call["source"] not in target["sources"]:
                 target["sources"].append(call["source"])
             if call["record_type"] not in target["record_types"]:
@@ -793,11 +801,13 @@ def capture(cli_records: Any, rollout_records: Any, process: Any,
             },
             "completed_command_calls": sum(
                 item["record_type"] == "command_execution"
+                and item["actual_call_confirmed"]
                 and item.get("status") in ("completed", "failed")
                 for item in calls
             ),
             "failed_command_calls": sum(
                 item["record_type"] == "command_execution"
+                and item["actual_call_confirmed"]
                 and (item.get("status") == "failed"
                      or (item.get("exit_code") is not None and item["exit_code"] != 0))
                 for item in calls
@@ -807,10 +817,13 @@ def capture(cli_records: Any, rollout_records: Any, process: Any,
                 if item["record_type"] == "command_execution"
             ),
             "coverage": "unqualified",
+            "unique_session_call_count": None,
             "compliance_inferred": False,
             "note": (
-                "entries are per-source evidence and are not a cross-source unique-call total; "
-                "names/details are verbatim and shell substrings are not policy classifications"
+                "entries are per-source evidence, not a cross-source unique-call total; "
+                "actual_call_confirmed only marks supported command lifecycle reports, not "
+                "independently attested execution; unknown_item_entry_count includes all "
+                "unconfirmed entries; names/details and shell substrings are not policy classifications"
             ),
         },
         "instrumentation": {
