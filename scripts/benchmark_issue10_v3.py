@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Offline three-series study coordinator. No launch or live capture is implemented.
+"""Offline three-series study coordinator. Experimental launch CLI remains disabled.
 
-Preparation never probes Codex, sshai, hosts, or credentials. Imported records
-are operator-supplied offline evidence, not proof of capture qualification.
+Preparation/import never probe Codex, sshai, hosts, or credentials. The collect_slot
+library API executes an explicit caller-supplied process for collector development;
+its receipts and imported records do not establish live capture qualification.
 """
 from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import contextmanager
 import hashlib
 import json
 import math
@@ -30,6 +32,8 @@ MAX_RECORD_BYTES = 32 * 1_048_576
 CAPTURE_PROVENANCE = 'operator-supplied-offline-capture'
 COLLECTOR_PROVENANCE = 'collector-supplied-offline-attempt'
 COLLECTOR_BINDING_STAGE = 'coordinator-import-after-collection'
+RESERVED_BINDING_STAGE = 'coordinator-reserved-before-collection'
+RESERVATION_SCHEMA = 'sshai-benchmark/issue10-v3-slot-reservation-1'
 
 
 def digest(data: bytes) -> str:
@@ -151,6 +155,84 @@ def _slot(manifest: dict[str, Any], number: int) -> dict[str, Any]:
     raise ValueError('slot is not scheduled')
 
 
+@contextmanager
+def _record_write_lock(root: Path):
+    """Fail-fast local serialization of reservation/result publication, not a process lock."""
+    lock = legacy._physical(root) / '.record-write-lock'
+    try:
+        lock.mkdir(mode=0o700)
+    except FileExistsError:
+        raise ValueError('record publication is busy or an interrupted write left a lock') from None
+    try:
+        yield
+    finally:
+        lock.rmdir()
+
+
+def _reservation_path(root: Path, number: int) -> Path:
+    return root / 'reservations' / f'{number:03}.json'
+
+
+def _load_reservation(root: Path, manifest: dict[str, Any], number: int) -> dict[str, Any] | None:
+    path = _reservation_path(root, number)
+    if not path.exists() and not path.is_symlink():
+        return None
+    value = _receipt_object(legacy._read_bounded(legacy._physical(path), capture_adapter.MAX_CAPTURE_BYTES),
+                            'reservation', canonical=encoded)
+    _exact_fields(value, {'schema', 'plan_digest', 'slot', 'attempt_path', 'request'}, 'reservation')
+    if (value['schema'] != RESERVATION_SCHEMA or value['plan_digest'] != manifest['digest']
+            or encoded(value['slot']) != encoded(_slot(manifest, number))
+            or value['attempt_path'] != f'attempts/{number:03}'):
+        raise ValueError('reservation plan/slot binding mismatch')
+    _validate_attempt_receipt(value['request'])
+    if value['request']['schema'] != collector.ATTEMPT_SCHEMA:
+        raise ValueError('reservation requires an unassociated request')
+    return value
+
+
+def _publish_record(root: Path, number: int, data: bytes, *, reservation=None) -> None:
+    # Importers cannot race each other or a reservation into claiming the same slot.
+    with _record_write_lock(root):
+        manifest = load_plan(root)
+        current = _load_reservation(root, manifest, number)
+        if current != reservation:
+            raise ValueError('slot reservation requires its associated collector attempt')
+        session = json.loads(data)['record']['session_id']
+        for path in (root / 'records').glob('*.json'):
+            if _read_envelope(path)['record']['session_id'] == session:
+                raise ValueError('session_id already used by an imported slot')
+        legacy._write_new(root / 'records' / f'{number:03}.json', data)
+
+
+def collect_slot(root: Path, number: int, argv, *, prompt: bytes, env, cwd: Path,
+                 timeout_seconds: float, rollout_candidates=(), answer_path: Path | None = None):
+    """Development API: reserve once, then collect the explicit caller-supplied process.
+
+    No model/access qualification or launch CLI is provided. A reservation survives
+    any subsequent failure; import completed evidence separately, never rerun the slot.
+    """
+    root = legacy._physical(root)
+    manifest = load_plan(root)
+    _require_collector_pin(manifest)
+    slot = _slot(manifest, number)
+    attempt = root / 'attempts' / f'{number:03}'
+    (output, command, environment, work, timeout, candidates, answer) = collector._validate_request(
+        attempt, argv, prompt, env, cwd, timeout_seconds, rollout_candidates, answer_path)
+    request = collector._request_receipt(command, prompt, environment, work, timeout, candidates, answer)
+    reservation = {'schema': RESERVATION_SCHEMA, 'plan_digest': manifest['digest'], 'slot': slot,
+                   'attempt_path': f'attempts/{number:03}', 'request': request}
+    with _record_write_lock(root):
+        record_path = root / 'records' / f'{number:03}.json'
+        if record_path.exists() or record_path.is_symlink() or output.exists():
+            raise ValueError('slot already has a result or attempt')
+        legacy._write_new(_reservation_path(root, number), encoded(reservation))
+    association = {'plan_digest': manifest['digest'], 'slot': slot,
+                   'reservation_sha256': digest(encoded(reservation))}
+    return collector.collect_attempt(output, command, prompt=prompt, env=environment, cwd=work,
+                                     timeout_seconds=timeout, rollout_candidates=candidates,
+                                     answer_path=answer, association=association)
+
+
 def _validate_record(record: dict[str, Any]) -> None:
     if not isinstance(record, dict):
         raise ValueError('result must be an object')
@@ -200,14 +282,10 @@ def import_result(root: Path, number: int, record: dict[str, Any]) -> None:
     _validate_record(record)
     if 'slot' in record and record['slot'] != number:
         raise ValueError('import slot mismatch')
-    for path in (root / 'records').glob('*.json'):
-        previous = _read_envelope(path)['record']
-        if previous.get('session_id') == record['session_id']:
-            raise ValueError('session_id already used by an imported slot')
     payload = {**record, 'slot': number, 'review': None}
     envelope = {'plan_digest': manifest['digest'], 'provenance': 'operator-supplied-offline-record',
                 'record': payload, 'record_sha256': digest(encoded(payload))}
-    legacy._write_new(root / 'records' / f'{number:03}.json', encoded(envelope))
+    _publish_record(root, number, encoded(envelope))
 
 
 def _read_envelope(path: Path) -> dict[str, Any]:
@@ -240,9 +318,6 @@ def import_capture(root: Path, number: int, cli_data: bytes, rollout_data: bytes
                                            answer_data, answer_state=answer_state)
     record = {**_capture_projection(report, manifest, number), 'slot': number, 'review': None}
     _validate_record(record)
-    for path in (root / 'records').glob('*.json'):
-        if _read_envelope(path)['record']['session_id'] == record['session_id']:
-            raise ValueError('session_id already used by an imported slot')
     evidence = {
         'plan_digest': manifest['digest'], 'slot': slot,
         'answer_state_option': answer_state,
@@ -258,10 +333,10 @@ def import_capture(root: Path, number: int, cli_data: bytes, rollout_data: bytes
     data = encoded(envelope)
     if len(data) > MAX_RECORD_BYTES:
         raise ValueError('capture envelope exceeds storage bound')
-    legacy._write_new(root / 'records' / f'{number:03}.json', data)
+    _publish_record(root, number, data)
 
 
-def _receipt_object(data: bytes, label: str) -> dict[str, Any]:
+def _receipt_object(data: bytes, label: str, *, canonical=legacy._canon) -> dict[str, Any]:
     def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         value: dict[str, Any] = {}
         for key, item in pairs:
@@ -278,7 +353,7 @@ def _receipt_object(data: bytes, label: str) -> dict[str, Any]:
                            parse_constant=reject_constant)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f'invalid collector {label} receipt') from exc
-    if not isinstance(value, dict) or data != legacy._canon(value):
+    if not isinstance(value, dict) or data != canonical(value):
         raise ValueError(f'collector {label} receipt is not a canonical object')
     return value
 
@@ -308,9 +383,18 @@ def _validate_attempt_receipt(value: dict[str, Any]) -> None:
         'environment_sha256', 'cwd', 'timeout_seconds', 'limits',
         'rollout_candidates', 'answer_path',
     }
+    if isinstance(value, dict) and value.get('schema') == collector.ASSOCIATED_ATTEMPT_SCHEMA:
+        fields.add('association')
     _exact_fields(value, fields, 'attempt')
-    if value['schema'] != collector.ATTEMPT_SCHEMA:
+    if value['schema'] not in (collector.ATTEMPT_SCHEMA, collector.ASSOCIATED_ATTEMPT_SCHEMA):
         raise ValueError('unsupported collector attempt schema')
+    if 'association' in value:
+        association = _exact_fields(value['association'], {'plan_digest', 'slot', 'reservation_sha256'},
+                                    'attempt association')
+        for field in ('plan_digest', 'reservation_sha256'):
+            _sha256_text(association[field], f'association {field}')
+        if not isinstance(association['slot'], dict):
+            raise ValueError('invalid collector association slot')
     for field in ('argv_sha256', 'prompt_sha256', 'environment_sha256'):
         _sha256_text(value[field], f'attempt {field}')
     _bounded_integer(value['prompt_bytes'], 'prompt byte count', collector.MAX_PROMPT_BYTES)
@@ -649,24 +733,40 @@ def _require_collector_pin(manifest: dict[str, Any]) -> None:
         raise ValueError('plan does not pin the supported collector source')
 
 
+def _collector_binding(root: Path, manifest: dict[str, Any], number: int, attempt: dict[str, Any]):
+    binding = {'plan_digest': manifest['digest'], 'slot': _slot(manifest, number),
+               'stage': COLLECTOR_BINDING_STAGE, 'pre_spawn_attestation': False}
+    reservation = _load_reservation(root, manifest, number)
+    association = attempt.get('association')
+    if reservation is None:
+        if association is not None:
+            raise ValueError('associated collector attempt has no slot reservation')
+        return binding
+    expected = {'plan_digest': manifest['digest'], 'slot': _slot(manifest, number),
+                'reservation_sha256': digest(encoded(reservation))}
+    request = {key: value for key, value in attempt.items() if key != 'association'}
+    request['schema'] = collector.ATTEMPT_SCHEMA
+    if encoded(association) != encoded(expected) or encoded(request) != encoded(reservation['request']):
+        raise ValueError('collector attempt does not match reserved request/association')
+    return {**binding, 'stage': RESERVED_BINDING_STAGE, 'reservation': reservation}
+
+
 def import_collector(root: Path, number: int, attempt_dir: Path) -> None:
     """Import a completed collector attempt without treating it as final-answer proof."""
     manifest = load_plan(root)
     _require_collector_pin(manifest)
-    slot = _slot(manifest, number)
+    _slot(manifest, number)
     files = _read_collector_attempt(attempt_dir)
     receipts, report = _validate_collector_files(files)
+    binding = _collector_binding(root, manifest, number, receipts['attempt'])
+    if ('reservation' in binding and legacy._physical(attempt_dir)
+            != legacy._physical(root / binding['reservation']['attempt_path'])):
+        raise ValueError('collector attempt is not at its reserved path')
     record = {**_capture_projection(report, manifest, number), 'slot': number, 'review': None}
     _validate_record(record)
-    for path in (root / 'records').glob('*.json'):
-        if _read_envelope(path)['record']['session_id'] == record['session_id']:
-            raise ValueError('session_id already used by an imported slot')
     identity_origin = 'matching-streams' if report['session_id'] else 'local-slot-key'
     evidence = {
-        'binding': {
-            'plan_digest': manifest['digest'], 'slot': slot,
-            'stage': COLLECTOR_BINDING_STAGE, 'pre_spawn_attestation': False,
-        },
+        'binding': binding,
         'receipt_authenticity': 'not-attested',
         'files': {name: _blob(body) for name, body in sorted(files.items())},
         'receipts': receipts,
@@ -685,10 +785,10 @@ def import_collector(root: Path, number: int, attempt_dir: Path) -> None:
     data = encoded(envelope)
     if len(data) > MAX_RECORD_BYTES:
         raise ValueError('collector envelope exceeds storage bound')
-    legacy._write_new(root / 'records' / f'{number:03}.json', data)
+    _publish_record(root, number, data, reservation=binding.get('reservation'))
 
 
-def _verify_collector(envelope: dict[str, Any], manifest: dict[str, Any], number: int) -> None:
+def _verify_collector(envelope: dict[str, Any], manifest: dict[str, Any], number: int, root: Path) -> None:
     _require_collector_pin(manifest)
     _exact_fields(envelope, {
         'plan_digest', 'provenance', 'record', 'record_sha256',
@@ -701,16 +801,12 @@ def _verify_collector(envelope: dict[str, Any], manifest: dict[str, Any], number
     }, 'collector evidence')
     if envelope['collector_sha256'] != digest(encoded(evidence)):
         raise ValueError('collector evidence hash mismatch')
-    expected_binding = {
-        'plan_digest': manifest['digest'], 'slot': _slot(manifest, number),
-        'stage': COLLECTOR_BINDING_STAGE, 'pre_spawn_attestation': False,
-    }
-    if evidence.get('binding') != expected_binding:
-        raise ValueError('collector plan/slot binding mismatch')
     if evidence.get('receipt_authenticity') != 'not-attested':
         raise ValueError('collector receipt authenticity was upgraded')
     files = _collector_files_from_evidence(evidence.get('files'))
     receipts, report = _validate_collector_files(files)
+    if evidence.get('binding') != _collector_binding(root, manifest, number, receipts['attempt']):
+        raise ValueError('collector plan/slot binding mismatch')
     if evidence.get('receipts') != receipts or evidence.get('report') != report:
         raise ValueError('collector report/receipts differ from retained bytes')
     expected_policy = {
@@ -760,10 +856,13 @@ def _verify_capture(envelope: dict[str, Any], manifest: dict[str, Any], number: 
 
 def _read_record(root: Path, number: int, manifest: dict[str, Any]) -> dict[str, Any]:
     envelope = _read_envelope(root / 'records' / f'{number:03}.json')
+    if (envelope.get('provenance') != COLLECTOR_PROVENANCE
+            and _load_reservation(root, manifest, number) is not None):
+        raise ValueError('reserved slot has an unrelated imported record')
     if envelope.get('provenance') == CAPTURE_PROVENANCE:
         _verify_capture(envelope, manifest, number)
     elif envelope.get('provenance') == COLLECTOR_PROVENANCE:
-        _verify_collector(envelope, manifest, number)
+        _verify_collector(envelope, manifest, number, root)
     elif (envelope.get('provenance') != 'operator-supplied-offline-record'
           or any(field in envelope for field in (
               'capture', 'capture_sha256', 'collector', 'collector_sha256'))):
@@ -834,6 +933,16 @@ def analyze_root(root: Path) -> dict[str, Any]:
         names = allowed if folder == 'records' else {name.removesuffix('.json') for name in allowed}
         if any(p.name not in names for p in (root / folder).iterdir()):
             raise ValueError(f'unscheduled {folder} entry')
+    reservations = {}
+    directory = root / 'reservations'
+    if directory.exists() or directory.is_symlink():
+        legacy._physical(directory)
+        if any(path.name not in allowed for path in directory.iterdir()):
+            raise ValueError('unscheduled reservation entry')
+        for slot in manifest['slots']:
+            value = _load_reservation(root, manifest, slot['slot'])
+            if value is not None:
+                reservations[slot['slot']] = value
     records = []
     provenance = []
     for slot in manifest['slots']:
@@ -862,7 +971,12 @@ def analyze_root(root: Path) -> dict[str, Any]:
                 'capture_sha256': envelope.get('capture_sha256'),
                 'identity_origin': envelope.get('capture', {}).get('identity_origin'),
             })
-    report = analyze(manifest, records)
+    report = analyze(manifest, records, reserved_slots=list(reservations))
+    report['slot_reservations'] = [
+        {'slot': number, 'reservation_sha256': digest(encoded(value)),
+         'result_imported': (root / 'records' / f'{number:03}.json').exists()}
+        for number, value in reservations.items()
+    ]
     report['record_provenance'] = 'operator-supplied offline records; live capture not qualified'
     report['slot_provenance'] = provenance
     report['experimental_claim_eligible'] = False

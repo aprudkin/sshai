@@ -14,6 +14,7 @@ evidence available even when a later adapter/coordinator import refuses it.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from pathlib import Path
 import stat
@@ -23,6 +24,7 @@ import benchmark_issue10 as legacy
 import benchmark_issue10_v3_capture as capture_adapter
 
 ATTEMPT_SCHEMA = "sshai-benchmark/issue10-v3-collector-attempt-1"
+ASSOCIATED_ATTEMPT_SCHEMA = "sshai-benchmark/issue10-v3-collector-attempt-2"
 PROCESS_SCHEMA = "sshai-benchmark/issue10-v3-collector-process-1"
 DELIVERY_SCHEMA = "sshai-benchmark/issue10-v3-collector-delivery-1"
 MAX_PROMPT_BYTES = 1_048_576
@@ -269,31 +271,9 @@ def _execution(process: dict[str, Any]) -> str:
     return "failed"
 
 
-def collect_attempt(
-    attempt_dir: Path,
-    argv: Sequence[str],
-    *,
-    prompt: bytes,
-    env: Mapping[str, str],
-    cwd: Path,
-    timeout_seconds: float,
-    rollout_candidates: Sequence[Path] = (),
-    answer_path: Path | None = None,
-) -> dict[str, Any]:
-    """Run one explicitly supplied process and retain bounded private evidence.
-
-    ``attempt_dir`` must be new.  Missing, empty, unsafe, or oversized final
-    answer files are ``lost`` delivery evidence, never proof that no answer was
-    produced.  Rollout candidates are only the paths supplied by the caller;
-    no home or session directory is searched.
-    """
-    (requested_output, command, environment, work, timeout, candidates,
-     answer) = _validate_request(
-        Path(attempt_dir), argv, prompt, env, Path(cwd), timeout_seconds,
-        rollout_candidates, answer_path,
-    )
-    attempt = _private_new_directory(requested_output)
-    attempt_receipt = {
+def _request_receipt(command, prompt, environment, work, timeout, candidates, answer):
+    """Describe a validated request without process or publication side effects."""
+    return {
         "schema": ATTEMPT_SCHEMA,
         "argv_sha256": _sha(legacy._canon(command)),
         "prompt_bytes": len(prompt),
@@ -312,6 +292,47 @@ def collect_attempt(
         "rollout_candidates": [str(path) for path in candidates],
         "answer_path": str(answer) if answer is not None else None,
     }
+
+
+def collect_attempt(
+    attempt_dir: Path,
+    argv: Sequence[str],
+    *,
+    prompt: bytes,
+    env: Mapping[str, str],
+    cwd: Path,
+    timeout_seconds: float,
+    rollout_candidates: Sequence[Path] = (),
+    answer_path: Path | None = None,
+    association: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run one explicitly supplied process and retain bounded private evidence.
+
+    ``attempt_dir`` must be new.  Missing, empty, unsafe, or oversized final
+    answer files are ``lost`` delivery evidence, never proof that no answer was
+    produced.  Rollout candidates are only the paths supplied by the caller;
+    no home or session directory is searched. Optional bounded ``association``
+    metadata is snapshotted in a version-2 pre-spawn receipt; the caller owns its
+    meaning and validation. It is not authenticated by the collector.
+    """
+    (requested_output, command, environment, work, timeout, candidates,
+     answer) = _validate_request(
+        Path(attempt_dir), argv, prompt, env, Path(cwd), timeout_seconds,
+        rollout_candidates, answer_path,
+    )
+    attempt_receipt = _request_receipt(command, prompt, environment, work, timeout, candidates, answer)
+    if association is not None:
+        # Caller-supplied association is retained, not authenticated by this generic collector.
+        if not isinstance(association, dict):
+            raise CollectorInputError("association must be a bounded JSON object")
+        try:
+            body = json.dumps(association, allow_nan=False).encode()
+            if len(body) > 16384:
+                raise ValueError("association exceeds 16 KiB")
+            attempt_receipt.update(schema=ASSOCIATED_ATTEMPT_SCHEMA, association=json.loads(body))
+        except (TypeError, ValueError) as exc:
+            raise CollectorInputError(str(exc)) from exc
+    attempt = _private_new_directory(requested_output)
     # This file is intentionally complete before process creation and is never
     # reopened or replaced by this module.
     legacy._write_new(attempt / "attempt.json", legacy._canon(attempt_receipt))
@@ -358,7 +379,7 @@ def collect_attempt(
 
 
 __all__ = [
-    "ATTEMPT_SCHEMA", "CollectorInputError", "DELIVERY_SCHEMA",
+    "ASSOCIATED_ATTEMPT_SCHEMA", "ATTEMPT_SCHEMA", "CollectorInputError", "DELIVERY_SCHEMA",
     "MAX_PROMPT_BYTES", "MAX_ROLLOUT_CANDIDATES", "MAX_STREAM_BYTES",
     "PROCESS_SCHEMA", "collect_attempt",
 ]

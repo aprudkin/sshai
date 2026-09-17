@@ -248,7 +248,9 @@ experimental launches remain outside that authorization.
 `scripts/benchmark_issue10_v3.py` is an independent offline coordination path, not a modification of
 `scripts/benchmark_issue10.py`. It reuses the historical module's private atomic-file and hashing
 helpers, not its strict-success quality gate or command-routing heuristic. It never invokes Codex,
-sshai, SSH, or credential/configuration probes during preparation or import.
+sshai, SSH, or credential/configuration probes during preparation or import. The separate
+`collect_slot` development-library API described below can execute an explicitly supplied process;
+there is still no experimental launch CLI.
 
 ```sh
 python3 scripts/benchmark_issue10_v3.py prepare NEW_DIRECTORY --phase pilot --seed 1010
@@ -581,9 +583,10 @@ This import is distinct from `import-capture`, whose supplied final-answer optio
 operator declaration. Hashes and replay establish internal consistency, not collector authenticity
 or protection against rewriting all data and hashes. Raw receipts can contain private paths and
 errors; base64 is not sanitization. Keep the envelope and original attempt outside published data.
-`run-one` remains disabled and experimental claims remain false. Pre-spawn plan/slot reservation,
-qualified finality detection, complete audit coverage, live capture qualification and protocol
-freeze remain prerequisites, not results of this import.
+`run-one` remains disabled and experimental claims remain false. This unbound import alone does
+not establish pre-spawn plan/slot reservation. The development-library path below adds that local
+association; qualified finality detection, complete audit coverage, live capture qualification and
+protocol freeze remain prerequisites.
 
 Synthetic verification covers successful and timed-out collection, nonzero exits, empty/missing
 answer files, start failure, stream overflow, unreadable and malformed candidates, receipt/data/
@@ -593,6 +596,62 @@ suite passed 96 tests with warnings treated as errors (25 coordinator, 25 captur
 6 collector contract, 11 analysis, 13 fixture). Historical offline runner/fixture checks and
 Go test/vet/build also passed; Go tests used cache. These are synthetic consistency checks, not
 real session qualification or measured token results.
+
+### Pre-spawn slot association development API
+
+`benchmark_issue10_v3.collect_slot(root, number, argv, *, prompt, env, cwd,
+timeout_seconds, rollout_candidates=(), answer_path=None)` is a library function, not a launch
+command. It executes the explicitly supplied process through the bounded collector. Development
+verification uses synthetic local Python children only; the API does not authorize model or SSH
+execution, and `run-one` continues to refuse unconditionally.
+
+The function validates the plan and supplied collection request, then publishes a new private
+`reservations/NNN.json` before invoking the collector at the fixed `attempts/NNN/` path. The
+reservation binds the plan digest, full scheduled slot, attempt path, and exact request receipt
+(command/environment/prompt hashes, prompt size, cwd, paths, timeout and bounds). Before process
+creation the collector publishes its version-2 `attempt.json` with that reservation's hash,
+plan digest and full slot. Unassociated library attempts retain the version-1 schema.
+
+The reservation is one-shot. Existing results, attempts or reservations prevent another collection
+for that slot. A failure after reservation leaves it intact, including failure before spawn or
+partial evidence publication. There is no automatic retry, deletion, replacement, recovery command
+or automatic import. Import a completed attempt using the existing `import-collector` command;
+retain incomplete originals for diagnosis rather than filling the slot with unrelated evidence.
+
+All three import paths respect reservations. A reserved slot accepts only the associated collector
+attempt at its reserved path, with a matching request and reservation hash. The result envelope
+retains the reservation as well as original collector files; analysis replays that association and
+compares it to the retained reservation. Unreserved version-1 attempts still import with the original
+`coordinator-import-after-collection` binding. Associated attempts use
+`coordinator-reserved-before-collection`; `pre_spawn_attestation` stays false and receipt authenticity
+stays `not-attested`. This records application-level ordering, not independent authenticity.
+
+Short reservation/result publication sections share a fail-fast private `.record-write-lock`
+directory to prevent competing import/collection claims and duplicate imported session IDs. The
+lock is released before collecting the process. An interrupted writer can leave a lock that blocks
+further publication; the API neither removes stale locks automatically nor interprets that condition
+as permission to retry a slot. Filesystem publication is not a crash-atomic multi-file transaction
+or tamper-proof storage, and owner modifications remain outside the consistency guarantee.
+
+Analysis distinguishes reserved slots without imported results from unattempted slots. Their
+quality is unknown with `reserved_without_result`, not a zero score or proven answer absence;
+`attempted: false` does not assert that no child ran, only that no result was imported. The separate
+`reserved_without_result_slot_count`, `collection_reserved` marker, and `slot_reservations` summary
+make this uncertainty explicit. Reservation summaries expose slot numbers, hashes and import status,
+not request paths or command/environment values. Raw reservations and attempts remain private.
+
+The supplied request is bound exactly; it is **not** certified as using the rendered planned prompt,
+selected model, approved environment, schedule order or qualified access. The current plan remains
+an unfrozen draft with unresolved deployment placeholders. This API does not provide fixture or
+credential isolation, qualified finality, live audit coverage, model pins, or experimental launch
+approval. Unknown-finality answer bytes remain ungradable and experimental claims remain false.
+Source/document changes require fresh development plans, not rewriting preserved evidence.
+
+Offline regression command:
+
+```sh
+python3 -W error scripts/test_issue10_v3_reservations.py
+```
 
 ## Historical runner interface
 

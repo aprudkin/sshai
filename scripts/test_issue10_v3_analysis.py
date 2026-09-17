@@ -157,6 +157,38 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(quality["arms"]["sshai"]["unknown"], 1)
         self.assertFalse(quality["no_observed_degradation"]["applicable"])
 
+    def test_reserved_missing_slot_is_not_unattempted_or_scored_as_failure(self) -> None:
+        plan = manifest("pilot")
+        records = [record(2)]
+        report = ANALYSIS.analyze(plan, records, reserved_slots=[1, 2])
+        by_slot = {item["slot"]: item for item in report["slots"]}
+
+        self.assertFalse(by_slot[1]["attempted"])
+        self.assertTrue(by_slot[1]["collection_reserved"])
+        self.assertEqual(by_slot[1]["quality"]["status"], "unknown")
+        self.assertEqual(by_slot[1]["quality"]["reason"], "reserved_without_result")
+        self.assertTrue(by_slot[2]["attempted"])
+        self.assertTrue(by_slot[2]["collection_reserved"])
+        self.assertEqual(by_slot[2]["quality"]["reason"], "assessed")
+        self.assertFalse(by_slot[3]["collection_reserved"])
+        self.assertEqual(by_slot[3]["quality"]["reason"], "unattempted")
+        self.assertEqual(report["recorded_slot_count"], 1)
+        self.assertEqual(report["reserved_without_result_slot_count"], 1)
+        self.assertEqual(report["unattempted_slot_count"], 10)
+
+    def test_reserved_slots_must_be_unique_scheduled_integers(self) -> None:
+        plan = manifest("pilot")
+        for reserved, text in (
+            ([1, 1], "duplicate reserved slot"),
+            ([999], "not scheduled"),
+            ([True], "booleans"),
+        ):
+            with self.subTest(reserved=reserved):
+                with self.assertRaisesRegex(ANALYSIS.AnalysisInvalid, text):
+                    ANALYSIS.analyze(plan, [], reserved_slots=reserved)
+        with self.assertRaisesRegex(ANALYSIS.AnalysisInvalid, "must be an array"):
+            ANALYSIS.analyze(plan, [], reserved_slots={1})
+
     def test_partial_scores_are_independent_and_task_regressions_are_visible(self) -> None:
         plan = manifest()
         records = complete_records(plan)

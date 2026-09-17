@@ -2,7 +2,8 @@
 """Pure offline descriptive analysis for the Issue 10 v3 study design.
 
 The controller is responsible for collecting records.  This module performs no
-I/O and exposes only ``analyze(manifest, records)`` plus ``AnalysisInvalid``.
+I/O and exposes only ``analyze(manifest, records, *, reserved_slots=())`` plus
+``AnalysisInvalid``.
 """
 
 from __future__ import annotations
@@ -469,25 +470,46 @@ def _usage_pair(pair_rows: dict[str, dict[str, Any]]) -> dict[str, Any]:
     return shell
 
 
-def analyze(manifest: dict[str, Any], records: list[dict[str, Any]]) -> dict[str, Any]:
+def analyze(
+    manifest: dict[str, Any],
+    records: list[dict[str, Any]],
+    *,
+    reserved_slots: tuple[int, ...] | list[int] = (),
+) -> dict[str, Any]:
     """Validate and descriptively analyze a v3 manifest and its collected records."""
     phase, planned, seed, resamples = _validate_manifest(manifest)
     planned_by_slot = {slot["slot"]: slot for slot in planned}
+    if not isinstance(reserved_slots, (tuple, list)):
+        raise AnalysisInvalid("reserved_slots must be an array")
+    reserved: set[int] = set()
+    for index, value in enumerate(reserved_slots):
+        number = _integer(value, f"reserved_slots[{index}]", minimum=1)
+        if number not in planned_by_slot:
+            raise AnalysisInvalid(f"reserved slot is not scheduled: {number}")
+        if number in reserved:
+            raise AnalysisInvalid(f"duplicate reserved slot {number}")
+        reserved.add(number)
     actual = _validate_records(records, planned_by_slot)
 
     rows: list[dict[str, Any]] = []
     for slot in sorted(planned, key=lambda item: item["slot"]):
-        record = actual.get(slot["slot"])
+        number = slot["slot"]
+        record = actual.get(number)
+        collection_reserved = number in reserved
         if record is None:
             row = {
                 **slot,
                 "attempted": False,
+                "collection_reserved": collection_reserved,
                 "session_id": None,
                 "execution": None,
                 "answer_state": None,
                 "review": None,
                 "quality": {
-                    "status": "unknown", "reason": "unattempted",
+                    "status": "unknown",
+                    "reason": (
+                        "reserved_without_result" if collection_reserved else "unattempted"
+                    ),
                     "diagnosis_correct": None, "evidence": None,
                     "recommendation": None, "success": None,
                 },
@@ -500,6 +522,7 @@ def analyze(manifest: dict[str, Any], records: list[dict[str, Any]]) -> dict[str
             row = {
                 **slot,
                 "attempted": True,
+                "collection_reserved": collection_reserved,
                 "session_id": record["session_id"],
                 "execution": record["execution"],
                 "answer_state": record["answer_state"],
@@ -708,7 +731,8 @@ def analyze(manifest: dict[str, Any], records: list[dict[str, Any]]) -> dict[str
         ),
         "planned_slot_count": len(planned),
         "recorded_slot_count": len(actual),
-        "unattempted_slot_count": len(planned) - len(actual),
+        "reserved_without_result_slot_count": len(reserved - set(actual)),
+        "unattempted_slot_count": len(planned) - len(actual) - len(reserved - set(actual)),
         "slots": rows,
         "series": series_results,
     }

@@ -38,6 +38,19 @@ class CollectorTests(unittest.TestCase):
             cwd=root, timeout_seconds=kwargs.pop("timeout_seconds", 2), **kwargs,
         )
 
+    def test_invalid_association_refused_without_attempt_or_spawn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            marker = root / 'spawned'
+            command = python_command(
+                f'from pathlib import Path; Path({str(marker)!r}).write_text("unexpected")')
+            for index, value in enumerate(([], {'bad': object()}, {'bad': float('nan')},
+                                           {'large': 'x' * 16384})):
+                with self.subTest(index=index), self.assertRaises(collector.CollectorInputError):
+                    self.collect(root, f'attempt-{index}', command, association=value)
+                self.assertFalse((root / f'attempt-{index}').exists())
+                self.assertFalse(marker.exists())
+
     def test_answer_finality_is_unknown_independently_of_delivery_and_exit(self) -> None:
         cases = [
             ("success", "pass", b"Partial or final", "completed", "captured"),

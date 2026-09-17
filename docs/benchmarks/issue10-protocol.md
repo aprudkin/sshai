@@ -908,8 +908,14 @@ Nonempty answer-file bytes remain unverified delivery evidence. The subsequent o
 `import-collector` path retains existing collector evidence in a scheduled slot, with import-time
 plan/slot binding and replay checks. It keeps unknown-finality answer bytes separate from the
 projected final answer: quality remains unknown and review is refused. This is not pre-spawn
-slot reservation or live collector integration. See the analyzer guide for limits, synthetic checks
-and remaining qualification requirements. No live experiment is authorized by this document.
+slot reservation or live collector integration by itself. The subsequent `collect_slot` development
+API now reserves the exact plan/slot and supplied request before collector invocation, retains the
+association in the pre-spawn attempt receipt, and verifies it at import and analysis. Incomplete
+reserved slots remain visible with unknown quality and cannot be automatically recollected or
+filled by an unrelated import. This is tested application-level association, not authenticity,
+rendered-prompt/model/access qualification or an experimental launch CLI. See the analyzer guide
+for limits, synthetic checks and remaining qualification requirements. No live experiment is
+authorized by this document.
 
 The manifest explicitly records unfrozen status, unqualified native formats and calibration grades,
 and each case's deviation from the recommended byte budget. Do not add padding just to clear the
