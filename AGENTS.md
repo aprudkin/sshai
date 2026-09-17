@@ -15,6 +15,20 @@
 - Never commit credentials, private hostnames, captured remote output, local artifacts,
   or raw benchmark rollouts. Use synthetic values in reproductions and tests.
 
+## Commit and push completion
+
+- After completing and verifying an authorized task's changes in this repository,
+  commit and push them without requesting separate approval. An explicit user instruction
+  not to commit or push overrides this default for that task; read-only work needs no commit.
+- Stage only the task's intended changes. Preserve unrelated working-tree edits and exclude
+  secrets, captured output, generated local artifacts, and other prohibited content.
+- Follow Conventional Commits and include the applicable issue reference in every related
+  commit. Push to the current branch's configured remote; do not force-push or rewrite
+  published history without explicit authorization.
+- Verify that the push succeeded and report the commit and destination. If verification,
+  commit, or push is blocked, report the actual blocker and remaining work; do not claim
+  delivery or mark the issue done until the required delivery succeeds.
+
 ## Entry points and module boundaries
 
 - `cmd/sshai/main.go` dispatches commands and owns process exit. Keep execution orchestration
