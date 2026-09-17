@@ -520,18 +520,22 @@ Oversized source files produce retained error receipts, not retained byte prefix
 are not deleted. Only stream overflow retains a bounded prefix automatically.
 
 An answer source must not exist before spawn. Pre-existing regular rollout candidates are accepted,
-so freshness remains the caller's responsibility. One usable matching rollout may be selected even
-if another candidate is unreadable or malformed; this does not rule out an unseen duplicate match.
-Candidate enumeration and full metadata validation remain unqualified. A delivery `state=captured`
+so freshness remains the caller's responsibility. Selection fails closed if any supplied candidate
+is unreadable, oversized, malformed, or has missing, invalid or ambiguous session identity. Such
+candidates could conceal a duplicate match; `unresolved_candidate_identity` records that uncertainty
+unless a CLI identity error or multiple known matches already explains rejection. Invalid metadata
+entries are not silently dropped. Readable candidate bytes and per-candidate findings remain retained,
+but selected `rollout.jsonl` is empty and delivery is `lost`. A valid identified nonmatch does not
+block a unique match. Candidate enumeration and full metadata validation remain unqualified. A delivery `state=captured`
 means bytes were copied, not that full audit coverage or final-answer completeness was established.
 The helper uses POSIX process-group cleanup, not containment of descendants that start new sessions;
 Windows controllers, blocked spawn/filesystem calls and live model delivery are not qualified.
 
-Verification: 13 collector tests and 6 additional contract tests pass with warnings treated as
+Verification: 15 collector tests and 6 additional contract tests pass with warnings treated as
 errors, covering synthetic subprocesses, publication failures, bounds, stale-answer refusal and
 pipe-EOF timeout. The existing 66 v3 coordinator/capture/analysis/fixture tests also passed.
-Historical source modules remain unchanged; no live model/SSH session was used. Full Go checks
-were not run for this Python-only stage.
+Historical source modules remain unchanged; no live model/SSH session was used. The selection
+regressions cover unresolved competitors in both candidate orders and a valid nonmatching competitor.
 
 This stage does not enable experimental execution: coordinator integration, qualified actual-call
 coverage, compaction continuity, live delivery semantics and separate launch approval remain open.

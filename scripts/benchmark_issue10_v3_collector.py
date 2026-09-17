@@ -149,15 +149,19 @@ def _cli_identity(events: bytes) -> tuple[str | None, str | None]:
 def _rollout_identity(data: bytes) -> tuple[str | None, str, list[str]]:
     parsed = capture_adapter.parse_jsonl(data, "collector_rollout_candidate")
     issue_codes = [item["code"] for item in parsed["issues"]]
-    identities = [
-        record.get("payload", {}).get("id")
-        for record in parsed["records"]
-        if (isinstance(record, dict) and record.get("type") == "session_meta"
-            and isinstance(record.get("payload"), dict))
+    metadata = [
+        record for record in parsed["records"]
+        if isinstance(record, dict) and record.get("type") == "session_meta"
     ]
-    identities = [item for item in identities if isinstance(item, str) and item]
     if not parsed["complete"]:
         return None, "malformed", issue_codes
+    identities = []
+    for record in metadata:
+        payload = record.get("payload")
+        identity = payload.get("id") if isinstance(payload, dict) else None
+        if not isinstance(identity, str) or not identity:
+            return None, "invalid_identity", issue_codes
+        identities.append(identity)
     if len(identities) == 0:
         return None, "missing_identity", issue_codes
     if len(identities) != 1:
@@ -205,7 +209,15 @@ def _collect_rollout(
             for index, source in enumerate(candidates, 1)
         ]
 
-    selected: tuple[int, bytes] | None = matching[0] if len(matching) == 1 else None
+    # An unreadable or invalid candidate could conceal another match. Only
+    # positively identified nonmatches can be excluded from uniqueness checks.
+    unresolved = any(
+        item["status"] not in {"usable", "mismatched_identity"}
+        for item in observations
+    )
+    selected: tuple[int, bytes] | None = (
+        matching[0] if len(matching) == 1 and not unresolved else None
+    )
     rollout = selected[1] if selected is not None else b""
     legacy._write_new(attempt / "rollout.jsonl", rollout)
     if not process_started:
@@ -214,6 +226,8 @@ def _collect_rollout(
         reason = cli_problem
     elif len(matching) > 1:
         reason = "ambiguous_matching_candidates"
+    elif unresolved:
+        reason = "unresolved_candidate_identity"
     elif selected is None:
         reason = "no_candidate_matched_cli_thread_identity"
     else:

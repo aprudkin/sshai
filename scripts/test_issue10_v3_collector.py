@@ -143,9 +143,9 @@ class CollectorTests(unittest.TestCase):
     def test_malformed_ambiguous_and_mismatched_rollouts_are_not_selected(self) -> None:
         cases: list[tuple[str, list[bytes], str, str]] = [
             ("malformed", [b"{bad json}\n"],
-             "no_candidate_matched_cli_thread_identity", "malformed"),
+             "unresolved_candidate_identity", "malformed"),
             ("ambiguous-identity", [rollout_bytes() + rollout_bytes("other-thread")],
-             "no_candidate_matched_cli_thread_identity", "ambiguous_identity"),
+             "unresolved_candidate_identity", "ambiguous_identity"),
             ("multiple-matches", [rollout_bytes(), rollout_bytes()],
              "ambiguous_matching_candidates", "usable"),
             ("mismatched", [rollout_bytes("other-thread")],
@@ -180,6 +180,60 @@ class CollectorTests(unittest.TestCase):
                     capture_adapter.coordinator_record(report)
                 self.assertTrue((root / "attempt" / "process.json").is_file())
                 self.assertTrue((root / "attempt" / "delivery.json").is_file())
+
+    def test_unresolved_competitor_blocks_single_matching_rollout(self) -> None:
+        cases = {
+            "malformed": b"{bad json}\n",
+            "missing_identity": b'{}\n',
+            "ambiguous_identity": rollout_bytes() + rollout_bytes(),
+            "invalid_identity": rollout_bytes() + b'{"type":"session_meta","payload":{"id":""}}\n',
+            "invalid_payload": rollout_bytes() + b'{"type":"session_meta","payload":null}\n',
+            "input_error": None,
+            "oversized": b"x" * (capture_adapter.MAX_CAPTURE_BYTES + 1),
+        }
+        for name, body in cases.items():
+            for reverse in (False, True):
+                with self.subTest(name=name, reverse=reverse), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory).resolve()
+                    good, competitor = root / "good", root / "competitor"
+                    good.write_bytes(rollout_bytes())
+                    if body is not None:
+                        competitor.write_bytes(body)
+                    paths = [good, competitor]
+                    if reverse:
+                        paths.reverse()
+                    result = self.collect(
+                        root, "attempt", python_command(f"print({cli_line()!r})"),
+                        rollout_candidates=paths,
+                    )
+                    delivery = result["delivery"]["rollout"]
+                    self.assertEqual(delivery["state"], "lost")
+                    self.assertEqual(delivery["reason"], "unresolved_candidate_identity")
+                    self.assertIsNone(delivery["selected_candidate"])
+                    self.assertEqual((root / "attempt" / "rollout.jsonl").read_bytes(), b"")
+                    observation = delivery["candidates"][paths.index(competitor)]
+                    expected = "input_error" if name == "oversized" else name
+                    if name == "invalid_payload":
+                        expected = "invalid_identity"
+                    self.assertEqual(observation["status"], expected)
+                    if body is not None and name != "oversized":
+                        self.assertEqual((root / "attempt" / observation["retained"]).read_bytes(), body)
+                    self.assertTrue((root / "attempt" / "delivery.json").is_file())
+
+    def test_valid_nonmatching_competitor_does_not_block_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            good, other = root / "good", root / "other"
+            good.write_bytes(rollout_bytes())
+            other.write_bytes(rollout_bytes("other-thread"))
+            result = self.collect(
+                root, "attempt", python_command(f"print({cli_line()!r})"),
+                rollout_candidates=[other, good],
+            )
+            delivery = result["delivery"]["rollout"]
+            self.assertEqual(delivery["state"], "captured")
+            self.assertEqual(delivery["selected_candidate"], 2)
+            self.assertEqual(delivery["candidates"][0]["status"], "mismatched_identity")
 
     def test_malformed_or_invalid_cli_identity_cannot_select_rollout(self) -> None:
         cases = {
