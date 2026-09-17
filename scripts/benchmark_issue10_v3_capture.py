@@ -17,6 +17,8 @@ Public APIs:
     be supplied explicitly; CLI agent messages remain non-final candidates.
 ``capture_bytes(cli_data, rollout_data, process_data, ...)``
     Parse and analyze bounded in-memory bytes.
+``completion_evidence_bytes(cli_data, rollout_data, answer_data)``
+    Compare a pinned source-shaped completion recipe without qualifying finality.
 ``coordinator_record(report)``
     Project a capture report into the v3 coordinator's import contract.
 """
@@ -24,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Iterable
+import hashlib
 import json
 from pathlib import Path
 import stat
@@ -869,6 +872,155 @@ def capture_bytes(cli_data: bytes, rollout_data: bytes, process_data: bytes,
     return capture(cli["records"], rollout["records"], process, explicit, source_issues=issues)
 
 
+def completion_evidence_bytes(cli_data: bytes, rollout_data: bytes,
+                              answer_data: bytes | None) -> dict[str, Any]:
+    """Compare a narrow Codex 0.151.0 completion recipe, not qualify finality.
+
+    This deliberately accepts less than all valid Codex output: one recorded
+    exec turn, an explicit final_answer phase, and matching terminal/message/file
+    text. It does not attest the producer, freshness, binary or live delivery.
+    It cannot promote an answer into a gradable coordinator record.
+    """
+    for value in (cli_data, rollout_data):
+        if not isinstance(value, bytes):
+            raise TypeError("completion streams must be bytes")
+    if answer_data is not None and not isinstance(answer_data, bytes):
+        raise TypeError("delivered answer must be bytes or None")
+    result: dict[str, Any] = {
+        "schema": "sshai-benchmark/issue10-v3-completion-evidence-1",
+        "source_contract": {
+            "cli_version": "0.151.0",
+            "revision": "78c290807ce710180111df227df3b7a4fe845452",
+        },
+        "status": "unmatched", "reasons": [], "binding": None,
+        "finality": "unknown", "live_qualified": False,
+        "inputs": {
+            name: ({"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+                   if data is not None else None)
+            for name, data in (("events", cli_data), ("rollout", rollout_data),
+                               ("answer", answer_data))
+        },
+    }
+
+    def reject(reason: str) -> dict[str, Any]:
+        result["reasons"].append(reason)
+        return result
+
+    if answer_data is None or not answer_data:
+        result["status"] = "unavailable"
+        return reject("no_delivered_answer_bytes")
+    if len(answer_data) > MAX_ANSWER_BYTES:
+        return reject("answer_too_large")
+    try:
+        text = answer_data.decode("utf-8")
+    except UnicodeDecodeError:
+        return reject("answer_invalid_utf8")
+    if not text.strip():
+        return reject("answer_empty_text")
+    cli = parse_jsonl(cli_data, "cli")
+    rollout = parse_jsonl(rollout_data, "rollout")
+    if not cli["complete"] or not rollout["complete"]:
+        return reject("incomplete_or_malformed_stream")
+    cr, rr = cli["records"], rollout["records"]
+    if any(not isinstance(row, dict) or not isinstance(row.get("type"), str)
+           for row in [*cr, *rr]):
+        return reject("malformed_record")
+    if any(not isinstance(row.get("payload"), dict) for row in rr):
+        return reject("malformed_rollout_payload")
+
+    def rows(records, kinds):
+        return [(n, row) for n, row in enumerate(records, 1) if row["type"] in kinds]
+
+    threads = rows(cr, {"thread.started"})
+    starts = rows(cr, {"turn.started"})
+    terminals = rows(cr, {"turn.completed", "turn.failed", "turn.aborted", "error"})
+    if len(threads) != 1 or len(starts) != 1 or len(terminals) != 1:
+        return reject("ambiguous_cli_lifecycle")
+    thread_n, thread = threads[0]
+    start_n = starts[0][0]
+    terminal_n, terminal = terminals[0]
+    session_id = thread.get("thread_id")
+    if (not isinstance(session_id, str) or not session_id
+            or not thread_n < start_n < terminal_n or terminal_n != len(cr)
+            or terminal["type"] != "turn.completed"):
+        return reject("unsupported_cli_lifecycle")
+    messages = []
+    message_ids = set()
+    for n, row in rows(cr, {"item.started", "item.updated", "item.completed"}):
+        item = row.get("item")
+        if not start_n < n < terminal_n or not isinstance(item, dict):
+            return reject("invalid_cli_item")
+        if item.get("type") == "agent_message":
+            identity = item.get("id")
+            if (row["type"] != "item.completed" or not isinstance(identity, str)
+                    or not identity or identity in message_ids
+                    or not isinstance(item.get("text"), str)):
+                return reject("ambiguous_cli_message")
+            message_ids.add(identity)
+            messages.append((n, item))
+    if not messages or messages[-1][1]["text"] != text:
+        return reject("cli_answer_mismatch")
+
+    metadata = rows(rr, {"session_meta"})
+    if len(metadata) != 1 or metadata[0][0] != 1:
+        return reject("ambiguous_rollout_metadata")
+    meta = metadata[0][1]["payload"]
+    if (meta.get("id") != session_id or meta.get("cli_version") != "0.151.0"
+            or meta.get("source") != "exec" or meta.get("history_mode") != "paginated"
+            or meta.get("forked_from_id") is not None):
+        return reject("unsupported_rollout_identity_or_version")
+    events = [(n, row["payload"]) for n, row in rows(rr, {"event_msg"})]
+    rs = [(n, p) for n, p in events if p.get("type") in ("task_started", "turn_started")]
+    rt = [(n, p) for n, p in events if p.get("type") in (
+        "task_complete", "turn_complete", "task_failed", "turn_aborted", "error", "stream_error")]
+    if len(rs) != 1 or len(rt) != 1:
+        return reject("ambiguous_rollout_lifecycle")
+    rsn, rsp = rs[0]
+    rtn, rtp = rt[0]
+    turn_id = rsp.get("turn_id")
+    if (not isinstance(turn_id, str) or not turn_id or rtp.get("turn_id") != turn_id
+            or not rsn < rtn or rtn != len(rr)
+            or rtp.get("type") not in ("task_complete", "turn_complete")
+            or rtp.get("error") is not None):
+        return reject("unsupported_rollout_lifecycle")
+    if rtp.get("last_agent_message") != text:
+        return reject("terminal_answer_mismatch")
+    completed_messages = []
+    item_ids = set()
+    for n, payload in events:
+        if payload.get("type") not in ("item_started", "item_completed"):
+            continue
+        item = payload.get("item")
+        if (not rsn < n < rtn or payload.get("thread_id") != session_id
+                or payload.get("turn_id") != turn_id or not isinstance(item, dict)):
+            return reject("rollout_item_binding_mismatch")
+        if payload["type"] == "item_completed":
+            identity = item.get("id")
+            if not isinstance(identity, str) or not identity or identity in item_ids:
+                return reject("ambiguous_rollout_item")
+            item_ids.add(identity)
+            if item.get("type") == "AgentMessage":
+                completed_messages.append((n, item))
+    finals = [(n, item) for n, item in completed_messages if item.get("phase") == "final_answer"]
+    if len(finals) != 1 or finals[0] != completed_messages[-1]:
+        return reject("no_unique_final_phase_message")
+    final_n, final_item = finals[0]
+    content = final_item.get("content")
+    if (final_item.get("delivery") is not None or not isinstance(content, list)
+            or len(content) != 1 or not isinstance(content[0], dict)
+            or content[0].get("type") != "Text" or not isinstance(content[0].get("text"), str)):
+        return reject("unsupported_final_message_content_or_delivery")
+    if content[0]["text"] != text:
+        return reject("rollout_answer_mismatch")
+    result.update(status="matched", binding={
+        "session_id": session_id, "turn_id": turn_id,
+        "cli_message_record": messages[-1][0], "cli_terminal_record": terminal_n,
+        "rollout_message_record": final_n, "rollout_terminal_record": rtn,
+        "rollout_item_id": final_item["id"],
+    })
+    return result
+
+
 def coordinator_record(report: dict[str, Any]) -> dict[str, Any]:
     """Project a report to the coordinator import schema without upgrading claims."""
     if not isinstance(report, dict) or report.get("schema") != SCHEMA:
@@ -953,7 +1105,7 @@ def main(argv: list[str] | None = None) -> int:
 __all__ = [
     "ANSWER_STATES", "CaptureInputError", "MAX_ANSWER_BYTES", "MAX_CAPTURE_BYTES",
     "MAX_LINE_BYTES", "MAX_RECORDS", "SCHEMA", "capture", "capture_bytes",
-    "coordinator_record", "main", "parse_jsonl",
+    "completion_evidence_bytes", "coordinator_record", "main", "parse_jsonl",
 ]
 
 

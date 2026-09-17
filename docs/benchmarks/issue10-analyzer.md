@@ -577,7 +577,8 @@ Only the current collector's explicit unknown finality is supported. Delivered a
 and `final_answer: null`. Here `lost` means unavailable qualified final-answer evidence, not that
 retained bytes disappeared. Quality remains unknown even after a timeout, exit zero, or matching
 CLI message text. Human review of this projected record is refused rather than assigning zero or
-promoting a candidate answer. Unsupported finality claims are rejected, not trusted.
+promoting a candidate answer. Unsupported finality claims are rejected, not trusted. The source-shaped
+completion comparison below adds retained evidence, not an exception to this rule.
 
 This import is distinct from `import-capture`, whose supplied final-answer option remains an
 operator declaration. Hashes and replay establish internal consistency, not collector authenticity
@@ -596,6 +597,63 @@ suite passed 96 tests with warnings treated as errors (25 coordinator, 25 captur
 6 collector contract, 11 analysis, 13 fixture). Historical offline runner/fixture checks and
 Go test/vet/build also passed; Go tests used cache. These are synthetic consistency checks, not
 real session qualification or measured token results.
+
+### Source-shaped answer completion comparison
+
+`benchmark_issue10_v3_capture.completion_evidence_bytes(events, rollout, answer)` compares bounded
+supplied bytes without launching a process. `import-collector` stores its result as
+`collector.report.answer_completion` and recomputes it during replay. It does **not** pass delivered
+bytes to the adapter as an explicitly captured final answer. Collector receipts, projected lost/null
+answers, unknown quality, and grading refusal remain unchanged even when the comparison matches.
+
+The intentionally narrow recipe targets the reviewed
+[Codex 0.151.0 source revision](https://github.com/openai/codex/tree/78c290807ce710180111df227df3b7a4fe845452).
+It requires one matching exec thread, declared `paginated` history, one completed turn in each
+stream, matching rollout turn/item identities, one completed `AgentMessage` with explicit
+`final_answer` phase as the last completed
+agent message, and agreement between its text, terminal `last_agent_message`, the last completed
+CLI agent message and delivered UTF-8 bytes. The current recipe accepts exactly one `Text` content
+block and no asynchronous delivery. Duplicate/failed/ambiguous terminal evidence, later records,
+unsupported version/source, partial JSONL, missing phase, mismatches and missing delivery do not
+match. This is deliberately not a decoder for every valid Codex answer, review/plan output, or
+legacy unphased message. A nonmatch is not proof that an answer was absent or incorrect.
+
+The implementation distinguishes `matched`, `unmatched`, and `unavailable`; all retain
+`finality: unknown` and `live_qualified: false`. Reports bind exact stream/answer SHA-256 hashes
+and byte counts plus source-local message/terminal record positions and rollout identity. CLI and
+rollout message IDs are **not** joined: the CLI remaps them. Text comparison performs no stripping,
+newline addition, Unicode normalization, or prefix acceptance. Process exit/timeout is not an input:
+a later process failure does not erase an observed match, and exit zero cannot create one. Usage,
+call-audit completeness and answer correctness remain independent.
+
+Source basis: the [exec processor](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/exec/src/event_processor_with_jsonl_output.rs#L476-L548)
+retains completed message text, enables final output on a completed turn and clears it on failure
+or interruption. Its [turn-item fallback](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/exec/src/event_processor_with_jsonl_output.rs#L380-L394)
+can select a last agent message or plan; the narrower recipe does not infer a final answer from
+that fallback alone. The [writer](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/exec/src/event_processor.rs#L31-L48)
+writes the supplied string without adding a newline and reports write failures to stderr.
+[Turn completion fields](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/protocol/src/protocol.rs#L2099-L2123)
+and [message phase/delivery fields](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/protocol/src/items.rs#L120-L158)
+provide explicit evidence to compare, not binary provenance or guarantees of lossless capture.
+The [core finalizer](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/core/src/stream_events_utils.rs#L442-L466)
+combines content and removes hidden markup into one visible `Text` block; compare this finalized
+text, not raw model response text. The [terminal producer](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/core/src/tasks/mod.rs#L796-L837)
+carries `last_agent_message` and terminal error separately. A [continuation test](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/core/tests/suite/pending_input.rs#L1042-L1099)
+shows that another model request can follow a final-phase item before turn completion; phase alone
+is insufficient. Async messages also [use final phase without ending the turn](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/core/src/tools/handlers/send_user_message_async.rs#L76-L99).
+
+This prepares qualification evidence, not a qualified finality detector. Self-reported version and
+source fields do not attest a binary or establish fresh-session provenance. Owner-rewritten bytes
+and hashes remain outside the consistency guarantee. Exact live producer/delivery semantics, binary
+pins and supported failure cases still need qualification before a match may become a gradable
+final answer. No option upgrades it; `run-one` and experimental claims remain disabled.
+Source/document changes require a fresh development plan, not a rewritten preserved envelope.
+
+Synthetic regressions use `python3 -W error scripts/test_issue10_v3_completion.py` and the coordinator
+suite. They cover exact hashes/binding, partial/Unicode/newline delivery, lifecycle and identity
+mismatches, explicit phase versus commentary, unsupported content/delivery, duplicate evidence,
+replay tampering and grading refusal after a normal exit, a nonzero exit and a post-evidence timeout. These
+are source-shaped synthetic records/children, not measured Codex sessions.
 
 ### Pre-spawn slot association development API
 

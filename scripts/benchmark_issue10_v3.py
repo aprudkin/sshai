@@ -696,6 +696,11 @@ def _validate_collector_files(files: dict[str, bytes]) -> tuple[dict[str, dict[s
         files['events.jsonl'], files['rollout.jsonl'], files['process.json'],
         None, answer_state='lost',
     )
+    # Compare retained bytes without supplying them as an explicit final answer.
+    # A source-shaped match is evidence for qualification, not qualification.
+    report['answer_completion'] = capture_adapter.completion_evidence_bytes(
+        files['events.jsonl'], files['rollout.jsonl'], files.get('answer.txt'),
+    )
     return {'attempt': attempt, 'process': process, 'delivery': delivery}, report
 
 

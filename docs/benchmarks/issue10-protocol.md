@@ -914,7 +914,12 @@ association in the pre-spawn attempt receipt, and verifies it at import and anal
 reserved slots remain visible with unknown quality and cannot be automatically recollected or
 filled by an unrelated import. This is tested application-level association, not authenticity,
 rendered-prompt/model/access qualification or an experimental launch CLI. See the analyzer guide
-for limits, synthetic checks and remaining qualification requirements. No live experiment is
+for limits, synthetic checks and remaining qualification requirements. A subsequent offline
+completion comparison now binds exact delivered bytes to a narrow Codex 0.151.0 message/terminal
+recipe and retains the result during collector import/replay. A structural match remains explicitly
+unqualified: finality and quality stay unknown, answer bytes are not promoted to a gradable answer,
+and process success/failure cannot supply or erase this evidence. The analyzer guide specifies
+supported shapes, source references and remaining live/binary qualification. No live experiment is
 authorized by this document.
 
 The manifest explicitly records unfrozen status, unqualified native formats and calibration grades,

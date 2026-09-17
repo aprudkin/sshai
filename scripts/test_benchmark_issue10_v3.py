@@ -12,6 +12,7 @@ from unittest.mock import patch
 import benchmark_issue10_v3 as runner
 import benchmark_issue10_v3_collector as collector
 from test_issue10_v3_capture import cli_records, rollout_records, process, jsonl
+from test_issue10_v3_completion import completion_streams, ANSWER
 
 
 def result(session='synthetic-session-1', **changes):
@@ -143,21 +144,20 @@ class CoordinatorTests(unittest.TestCase):
         return runner._read_envelope(self.root / 'records' / f'{number:03}.json')
 
     def collector_attempt(self, name='collector-attempt', *, thread='synthetic-thread',
-                          timeout=False, extra_candidates=()):
+                          timeout=False, extra_candidates=(), completion=False, exit_code=0):
         attempt = self.root.parent / name
         answer = self.root.parent / f'{name}-answer'
         rollout = self.root.parent / f'{name}-rollout'
-        cli = cli_records()
+        cli, persisted = completion_streams() if completion else (cli_records(), rollout_records())
         cli[0]['thread_id'] = thread
-        persisted = rollout_records()
         persisted[0]['payload']['id'] = thread
         events = jsonl(cli)
         rollout.write_bytes(jsonl(persisted))
         code = (
             "import sys,time; from pathlib import Path; "
-            "Path(sys.argv[1]).write_bytes(b'Synthetic final answer'); "
+            f"Path(sys.argv[1]).write_bytes({ANSWER.encode() if completion else b'Synthetic final answer'!r}); "
             "sys.stdout.buffer.write(bytes.fromhex(sys.argv[2])); sys.stdout.flush(); "
-            + ("time.sleep(60)" if timeout else "pass")
+            + ("time.sleep(60)" if timeout else f"sys.exit({exit_code})")
         )
         collector.collect_attempt(
             attempt, [sys.executable, '-c', code, str(answer), events.hex()],
@@ -167,6 +167,38 @@ class CoordinatorTests(unittest.TestCase):
             rollout_candidates=[rollout, *extra_candidates], answer_path=answer,
         )
         return attempt
+
+    def test_collector_completion_match_is_retained_replayed_and_not_gradable(self):
+        for execution, timeout, exit_code in [('completed', False, 0), ('timeout', True, 0),
+                                               ('failed', False, 3)]:
+            with self.subTest(execution=execution):
+                attempt = self.collector_attempt(name=f'completion-{execution}', completion=True,
+                                                 timeout=timeout, exit_code=exit_code)
+                # Each subcase uses its own slot store so the same synthetic
+                # thread does not bypass the coordinator's identity uniqueness.
+                root = self.root if execution == 'completed' else self.root.parent / f'{execution}-study'
+                if execution != 'completed':
+                    runner.prepare(root, 'pilot')
+                runner.import_collector(root, 1, attempt)
+                path = root / 'records/001.json'
+                envelope = runner._read_envelope(path)
+                completion = envelope['collector']['report']['answer_completion']
+                self.assertEqual(completion['status'], 'matched')
+                self.assertEqual(completion['finality'], 'unknown')
+                self.assertFalse(completion['live_qualified'])
+                record = runner._read_record(root, 1, runner.load_plan(root))
+                self.assertEqual(record['execution'], execution)
+                self.assertEqual(record['answer_state'], 'lost')
+                self.assertIsNone(record['final_answer'])
+                with self.assertRaises(ValueError):
+                    runner.record_review(root, 1, review())
+                self.assertFalse(runner.analyze_root(root)['experimental_claim_eligible'])
+                # Even a rehashed report cannot substitute claimed qualification.
+                completion['finality'] = 'confirmed'
+                envelope['collector_sha256'] = runner.digest(runner.encoded(envelope['collector']))
+                path.write_bytes(runner.encoded(envelope))
+                with self.assertRaisesRegex(ValueError, 'report/receipts differ'):
+                    runner.analyze_root(root)
 
     def test_capture_roundtrip_raw_bytes_binding_and_review(self):
         envelope = self.capture()
