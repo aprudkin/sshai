@@ -10,12 +10,14 @@ import argparse
 import base64
 import hashlib
 import json
+import math
 from pathlib import Path
 import random
 from typing import Any
 
 import benchmark_issue10 as legacy
 import benchmark_issue10_v3_capture as capture_adapter
+import benchmark_issue10_v3_collector as collector
 from benchmark_issue10_v3_cases import build_cases
 from prepare_issue10_v3_fixtures import bundle
 
@@ -26,6 +28,8 @@ REPO = SOURCE.parent
 # JSON/base64 and parsed-report expansion need more room than one input stream.
 MAX_RECORD_BYTES = 32 * 1_048_576
 CAPTURE_PROVENANCE = 'operator-supplied-offline-capture'
+COLLECTOR_PROVENANCE = 'collector-supplied-offline-attempt'
+COLLECTOR_BINDING_STAGE = 'coordinator-import-after-collection'
 
 
 def digest(data: bytes) -> str:
@@ -81,7 +85,7 @@ def prepare(root: Path, phase: str = 'measurement', seed: int = 1010) -> dict[st
             data[f'planned-prompts/{case_id}-{arm}.md'] = text.encode()
     pins = {}
     for name in ('benchmark_issue10_v3.py', 'benchmark_issue10_v3_analysis.py',
-                 'benchmark_issue10_v3_capture.py',
+                 'benchmark_issue10_v3_capture.py', 'benchmark_issue10_v3_collector.py',
                  'benchmark_issue10_v3_cases.py', 'prepare_issue10_v3_fixtures.py',
                  'benchmark_issue10.py', 'benchmark_issue10_fixtures.py'):
         pins[f'scripts/{name}'] = digest((SOURCE / name).read_bytes())
@@ -257,6 +261,473 @@ def import_capture(root: Path, number: int, cli_data: bytes, rollout_data: bytes
     legacy._write_new(root / 'records' / f'{number:03}.json', data)
 
 
+def _receipt_object(data: bytes, label: str) -> dict[str, Any]:
+    def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError(f'duplicate key in collector {label}: {key}')
+            value[key] = item
+        return value
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f'non-JSON constant in collector {label}: {value}')
+
+    try:
+        value = json.loads(data.decode('utf-8'), object_pairs_hook=unique,
+                           parse_constant=reject_constant)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f'invalid collector {label} receipt') from exc
+    if not isinstance(value, dict) or data != legacy._canon(value):
+        raise ValueError(f'collector {label} receipt is not a canonical object')
+    return value
+
+
+def _exact_fields(value: Any, fields: set[str], label: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ValueError(f'collector {label} fields differ from schema')
+    return value
+
+
+def _sha256_text(value: Any, label: str) -> str:
+    if (not isinstance(value, str) or len(value) != 64
+            or any(character not in '0123456789abcdef' for character in value)):
+        raise ValueError(f'invalid collector {label} SHA-256')
+    return value
+
+
+def _bounded_integer(value: Any, label: str, maximum: int, *, minimum: int = 0) -> int:
+    if type(value) is not int or not minimum <= value <= maximum:
+        raise ValueError(f'invalid collector {label}')
+    return value
+
+
+def _validate_attempt_receipt(value: dict[str, Any]) -> None:
+    fields = {
+        'schema', 'argv_sha256', 'prompt_bytes', 'prompt_sha256',
+        'environment_sha256', 'cwd', 'timeout_seconds', 'limits',
+        'rollout_candidates', 'answer_path',
+    }
+    _exact_fields(value, fields, 'attempt')
+    if value['schema'] != collector.ATTEMPT_SCHEMA:
+        raise ValueError('unsupported collector attempt schema')
+    for field in ('argv_sha256', 'prompt_sha256', 'environment_sha256'):
+        _sha256_text(value[field], f'attempt {field}')
+    _bounded_integer(value['prompt_bytes'], 'prompt byte count', collector.MAX_PROMPT_BYTES)
+    timeout = value['timeout_seconds']
+    if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout) or timeout <= 0):
+        raise ValueError('invalid collector timeout')
+    if not isinstance(value['cwd'], str) or not Path(value['cwd']).is_absolute():
+        raise ValueError('invalid collector working directory')
+    expected_limits = {
+        'stdout_bytes': collector.MAX_STREAM_BYTES,
+        'stderr_bytes': collector.MAX_STREAM_BYTES,
+        'prompt_bytes': collector.MAX_PROMPT_BYTES,
+        'rollout_candidate_bytes_each': capture_adapter.MAX_CAPTURE_BYTES,
+        'answer_bytes': capture_adapter.MAX_ANSWER_BYTES,
+        'rollout_candidate_count': collector.MAX_ROLLOUT_CANDIDATES,
+    }
+    if value['limits'] != expected_limits:
+        raise ValueError('collector limits differ from supported bounds')
+    candidates = value['rollout_candidates']
+    if (not isinstance(candidates, list) or len(candidates) > collector.MAX_ROLLOUT_CANDIDATES
+            or any(not isinstance(path, str) or not path or not Path(path).is_absolute()
+                   for path in candidates) or len(set(candidates)) != len(candidates)):
+        raise ValueError('invalid collector rollout candidate inventory')
+    answer = value['answer_path']
+    if answer is not None and (not isinstance(answer, str) or not Path(answer).is_absolute()):
+        raise ValueError('invalid collector answer path')
+    if answer is not None and answer in candidates:
+        raise ValueError('collector answer and rollout paths overlap')
+
+
+def _validate_process_receipt(value: dict[str, Any]) -> None:
+    fields = {
+        'schema', 'exit_code', 'timed_out', 'capture_overflow', 'interrupted',
+        'start_error', 'duration_seconds', 'pid', 'execution', 'stdout_bytes',
+        'stderr_bytes', 'stdout_limit_reached', 'stderr_limit_reached',
+    }
+    _exact_fields(value, fields, 'process')
+    if value['schema'] != collector.PROCESS_SCHEMA:
+        raise ValueError('unsupported collector process schema')
+    for field in ('timed_out', 'capture_overflow', 'interrupted',
+                  'stdout_limit_reached', 'stderr_limit_reached'):
+        if type(value[field]) is not bool:
+            raise ValueError(f'invalid collector process {field}')
+    if value['exit_code'] is not None and type(value['exit_code']) is not int:
+        raise ValueError('invalid collector process exit code')
+    if value['pid'] is not None and (type(value['pid']) is not int or value['pid'] <= 0):
+        raise ValueError('invalid collector process pid')
+    if value['pid'] is None and value['exit_code'] is not None:
+        raise ValueError('unstarted collector process has an exit code')
+    if value['pid'] is None and value['start_error'] is None and not value['interrupted']:
+        raise ValueError('unstarted collector process lacks failure evidence')
+    if value['start_error'] is not None and not isinstance(value['start_error'], str):
+        raise ValueError('invalid collector process start error')
+    duration = value['duration_seconds']
+    if (isinstance(duration, bool) or not isinstance(duration, (int, float))
+            or not math.isfinite(duration) or duration < 0):
+        raise ValueError('invalid collector process duration')
+    for stream in ('stdout', 'stderr'):
+        count = _bounded_integer(value[f'{stream}_bytes'], f'{stream} byte count',
+                                 collector.MAX_STREAM_BYTES)
+        if value[f'{stream}_limit_reached'] != (count == collector.MAX_STREAM_BYTES):
+            raise ValueError(f'collector {stream} limit receipt mismatch')
+    if (value['capture_overflow'] and not value['stdout_limit_reached']
+            and not value['stderr_limit_reached']):
+        raise ValueError('collector overflow lacks a stream at its limit')
+    expected = collector._execution(value)
+    if value['execution'] != expected:
+        raise ValueError('collector process execution is inconsistent')
+
+
+def _collector_referenced_paths(delivery_data: bytes) -> set[str]:
+    delivery = _receipt_object(delivery_data, 'delivery')
+    _exact_fields(delivery, {'schema', 'process_execution', 'rollout', 'answer'}, 'delivery')
+    rollout = delivery['rollout']
+    if not isinstance(rollout, dict) or not isinstance(rollout.get('candidates'), list):
+        raise ValueError('invalid collector delivery rollout')
+    if len(rollout['candidates']) > collector.MAX_ROLLOUT_CANDIDATES:
+        raise ValueError('too many collector delivery candidates')
+    referenced: set[str] = set()
+    for item in rollout['candidates']:
+        if not isinstance(item, dict):
+            raise ValueError('invalid collector candidate observation')
+        retained = item.get('retained')
+        if retained is not None:
+            index = item.get('index')
+            expected = (f'rollout-candidates/{index:03}.jsonl'
+                        if type(index) is int and 1 <= index <= collector.MAX_ROLLOUT_CANDIDATES
+                        else None)
+            if retained != expected or Path(retained).is_absolute() or '..' in Path(retained).parts:
+                raise ValueError('unsafe collector retained candidate path')
+            referenced.add(retained)
+    answer = delivery['answer']
+    if not isinstance(answer, dict):
+        raise ValueError('invalid collector delivery answer')
+    if answer.get('retained') is not None:
+        if answer['retained'] != 'answer.txt':
+            raise ValueError('unsafe collector retained answer path')
+        referenced.add('answer.txt')
+    return referenced
+
+
+def _collector_limit(relative: str) -> int:
+    if relative in ('events.jsonl', 'stderr.txt'):
+        return collector.MAX_STREAM_BYTES
+    if relative == 'answer.txt':
+        return capture_adapter.MAX_ANSWER_BYTES
+    return capture_adapter.MAX_CAPTURE_BYTES
+
+
+def _read_collector_attempt(attempt_dir: Path) -> dict[str, bytes]:
+    attempt = legacy._physical(Path(attempt_dir))
+    if not attempt.is_dir():
+        raise ValueError('collector attempt path is not a directory')
+    mandatory = {
+        'attempt.json', 'process.json', 'delivery.json',
+        'events.jsonl', 'stderr.txt', 'rollout.jsonl',
+    }
+    files: dict[str, bytes] = {}
+
+    def read_relative(relative: str) -> bytes:
+        # Every path is a literal collector output name or a validated retained
+        # candidate name. Receipt source paths are deliberately never read.
+        path = legacy._physical(attempt / relative)
+        if path.parent != attempt and path.parent.parent != attempt:
+            raise ValueError('collector evidence path escapes attempt directory')
+        return legacy._read_bounded(path, _collector_limit(relative))
+
+    for relative in sorted(mandatory):
+        files[relative] = read_relative(relative)
+    for relative in sorted(_collector_referenced_paths(files['delivery.json'])):
+        if relative in files:
+            raise ValueError('duplicate collector evidence path')
+        files[relative] = read_relative(relative)
+    return files
+
+
+def _validate_collector_files(files: dict[str, bytes]) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    mandatory = {
+        'attempt.json', 'process.json', 'delivery.json',
+        'events.jsonl', 'stderr.txt', 'rollout.jsonl',
+    }
+    if not isinstance(files, dict) or not mandatory <= set(files):
+        raise ValueError('collector attempt is incomplete')
+    attempt = _receipt_object(files['attempt.json'], 'attempt')
+    process = _receipt_object(files['process.json'], 'process')
+    delivery = _receipt_object(files['delivery.json'], 'delivery')
+    _validate_attempt_receipt(attempt)
+    _validate_process_receipt(process)
+    _exact_fields(delivery, {'schema', 'process_execution', 'rollout', 'answer'}, 'delivery')
+    if delivery['schema'] != collector.DELIVERY_SCHEMA:
+        raise ValueError('unsupported collector delivery schema')
+    if delivery['process_execution'] != process['execution']:
+        raise ValueError('collector process/delivery execution mismatch')
+    if len(files['events.jsonl']) != process['stdout_bytes']:
+        raise ValueError('collector events byte count mismatch')
+    if len(files['stderr.txt']) != process['stderr_bytes']:
+        raise ValueError('collector stderr byte count mismatch')
+
+    process_started = process['pid'] is not None
+    cli_id, cli_problem = collector._cli_identity(files['events.jsonl'])
+    rollout = _exact_fields(delivery['rollout'], {
+        'state', 'reason', 'cli_thread_id', 'selected_candidate',
+        'bytes', 'sha256', 'candidates',
+    }, 'delivery rollout')
+    if rollout['cli_thread_id'] != cli_id:
+        raise ValueError('collector CLI identity receipt mismatch')
+    observations = rollout['candidates']
+    if not isinstance(observations, list) or len(observations) != len(attempt['rollout_candidates']):
+        raise ValueError('collector candidate count mismatch')
+    expected_files = set(mandatory)
+    matching: list[int] = []
+    statuses: list[str] = []
+    candidate_bodies: dict[int, bytes] = {}
+    for index, (source, observation) in enumerate(
+            zip(attempt['rollout_candidates'], observations), 1):
+        if not isinstance(observation, dict):
+            raise ValueError('invalid collector candidate observation')
+        if observation.get('index') != index or observation.get('source') != source:
+            raise ValueError('collector candidate order/source mismatch')
+        status = observation.get('status')
+        if not process_started:
+            _exact_fields(observation, {'index', 'source', 'status'}, 'unstarted candidate')
+            if status != 'not_read_process_not_started':
+                raise ValueError('unstarted collector candidate was claimed read')
+            statuses.append(status)
+            continue
+        if status == 'input_error':
+            _exact_fields(observation, {'index', 'source', 'status', 'error'},
+                          'candidate input error')
+            if not isinstance(observation['error'], str) or not observation['error']:
+                raise ValueError('collector candidate input error lacks detail')
+            statuses.append(status)
+            continue
+        retained = f'rollout-candidates/{index:03}.jsonl'
+        expected_files.add(retained)
+        body = files.get(retained)
+        if body is None:
+            raise ValueError('collector retained candidate is missing')
+        candidate_bodies[index] = body
+        identity, parsed_status, issue_codes = collector._rollout_identity(body)
+        expected_status = parsed_status
+        expected_match: bool | None = None
+        fields = {
+            'index', 'source', 'status', 'thread_id', 'bytes', 'sha256',
+            'retained', 'parser_issue_codes',
+        }
+        if parsed_status == 'usable':
+            fields.add('identity_match')
+            expected_match = cli_id is not None and identity == cli_id
+            if cli_id is not None and not expected_match:
+                expected_status = 'mismatched_identity'
+        _exact_fields(observation, fields, 'retained candidate')
+        _bounded_integer(observation['bytes'], 'candidate byte count',
+                         capture_adapter.MAX_CAPTURE_BYTES)
+        if (observation['retained'] != retained or observation['thread_id'] != identity
+                or observation['parser_issue_codes'] != issue_codes
+                or observation['status'] != expected_status
+                or observation['bytes'] != len(body)
+                or observation['sha256'] != digest(body)):
+            raise ValueError('collector retained candidate receipt mismatch')
+        if (expected_match is not None
+                and (type(observation['identity_match']) is not bool
+                     or observation['identity_match'] != expected_match)):
+            raise ValueError('collector candidate identity selection mismatch')
+        if expected_match:
+            matching.append(index)
+        statuses.append(expected_status)
+
+    unresolved = any(status not in {'usable', 'mismatched_identity'} for status in statuses)
+    selected = matching[0] if len(matching) == 1 and not unresolved else None
+    if not process_started:
+        reason = 'process_not_started'
+    elif cli_problem is not None:
+        reason = cli_problem
+    elif len(matching) > 1:
+        reason = 'ambiguous_matching_candidates'
+    elif unresolved:
+        reason = 'unresolved_candidate_identity'
+    elif selected is None:
+        reason = 'no_candidate_matched_cli_thread_identity'
+    else:
+        reason = 'matched_cli_thread_identity'
+    selected_body = candidate_bodies[selected] if selected is not None else b''
+    _bounded_integer(rollout['bytes'], 'selected rollout byte count',
+                     capture_adapter.MAX_CAPTURE_BYTES)
+    if (rollout['selected_candidate'] != selected
+            or (rollout['selected_candidate'] is not None
+                and type(rollout['selected_candidate']) is not int)
+            or rollout['state'] != ('captured' if selected is not None else 'lost')
+            or rollout['reason'] != reason or rollout['bytes'] != len(selected_body)
+            or rollout['sha256'] != digest(selected_body)
+            or files['rollout.jsonl'] != selected_body):
+        raise ValueError('collector rollout selection receipt mismatch')
+
+    answer = delivery['answer']
+    common = {'state', 'reason', 'source', 'finality', 'finality_reason'}
+    source = attempt['answer_path']
+    if not isinstance(answer, dict) or answer.get('source') != source:
+        raise ValueError('collector answer source mismatch')
+    if (answer.get('finality') != 'unknown'
+            or answer.get('finality_reason') != 'no_qualified_final_answer_evidence'):
+        raise ValueError('unsupported collector answer finality claim')
+    if not process_started:
+        _exact_fields(answer, common, 'unstarted answer')
+        if answer['state'] != 'lost' or answer['reason'] != 'process_not_started':
+            raise ValueError('invalid unstarted collector answer receipt')
+    elif source is None:
+        _exact_fields(answer, common, 'missing answer path')
+        if answer['state'] != 'lost' or answer['reason'] != 'no_explicit_answer_path':
+            raise ValueError('invalid missing collector answer path receipt')
+    elif answer.get('reason') == 'answer_input_error':
+        _exact_fields(answer, common | {'error'}, 'answer input error')
+        if answer['state'] != 'lost' or not isinstance(answer['error'], str) or not answer['error']:
+            raise ValueError('invalid collector answer input error receipt')
+    elif answer.get('reason') == 'empty_answer_file':
+        _exact_fields(answer, common | {'bytes', 'sha256'}, 'empty answer')
+        _bounded_integer(answer['bytes'], 'empty answer byte count',
+                         capture_adapter.MAX_ANSWER_BYTES)
+        if (answer['state'] != 'lost' or answer['bytes'] != 0
+                or answer['sha256'] != digest(b'')):
+            raise ValueError('invalid empty collector answer receipt')
+    elif answer.get('reason') == 'nonempty_explicit_answer_file':
+        _exact_fields(answer, common | {'bytes', 'sha256', 'retained'}, 'retained answer')
+        expected_files.add('answer.txt')
+        body = files.get('answer.txt')
+        _bounded_integer(answer['bytes'], 'retained answer byte count',
+                         capture_adapter.MAX_ANSWER_BYTES, minimum=1)
+        if (answer['state'] != 'captured' or answer['retained'] != 'answer.txt'
+                or body is None or not body or answer['bytes'] != len(body)
+                or answer['sha256'] != digest(body)):
+            raise ValueError('collector retained answer receipt mismatch')
+    else:
+        raise ValueError('unsupported collector answer delivery reason')
+    if set(files) != expected_files:
+        raise ValueError('collector retained file inventory mismatch')
+
+    report = capture_adapter.capture_bytes(
+        files['events.jsonl'], files['rollout.jsonl'], files['process.json'],
+        None, answer_state='lost',
+    )
+    return {'attempt': attempt, 'process': process, 'delivery': delivery}, report
+
+
+def _blob(data: bytes) -> dict[str, Any]:
+    return {'base64': base64.b64encode(data).decode('ascii'),
+            'bytes': len(data), 'sha256': digest(data)}
+
+
+def _collector_files_from_evidence(value: Any) -> dict[str, bytes]:
+    if not isinstance(value, dict):
+        raise ValueError('collector retained files must be an object')
+    files: dict[str, bytes] = {}
+    for relative, item in value.items():
+        if (not isinstance(relative, str) or Path(relative).is_absolute()
+                or '..' in Path(relative).parts):
+            raise ValueError('unsafe collector evidence filename')
+        _exact_fields(item, {'base64', 'bytes', 'sha256'}, 'retained file')
+        if type(item['bytes']) is not int or item['bytes'] < 0:
+            raise ValueError('invalid collector retained byte count')
+        _sha256_text(item['sha256'], 'retained file')
+        try:
+            body = base64.b64decode(item['base64'], validate=True)
+        except (ValueError, TypeError) as exc:
+            raise ValueError('invalid collector retained base64') from exc
+        if (len(body) > _collector_limit(relative) or len(body) != item['bytes']
+                or digest(body) != item['sha256']):
+            raise ValueError('collector retained file hash/size mismatch')
+        files[relative] = body
+    return files
+
+
+def _require_collector_pin(manifest: dict[str, Any]) -> None:
+    name = 'scripts/benchmark_issue10_v3_collector.py'
+    if manifest.get('sources', {}).get(name) != digest((REPO / name).read_bytes()):
+        raise ValueError('plan does not pin the supported collector source')
+
+
+def import_collector(root: Path, number: int, attempt_dir: Path) -> None:
+    """Import a completed collector attempt without treating it as final-answer proof."""
+    manifest = load_plan(root)
+    _require_collector_pin(manifest)
+    slot = _slot(manifest, number)
+    files = _read_collector_attempt(attempt_dir)
+    receipts, report = _validate_collector_files(files)
+    record = {**_capture_projection(report, manifest, number), 'slot': number, 'review': None}
+    _validate_record(record)
+    for path in (root / 'records').glob('*.json'):
+        if _read_envelope(path)['record']['session_id'] == record['session_id']:
+            raise ValueError('session_id already used by an imported slot')
+    identity_origin = 'matching-streams' if report['session_id'] else 'local-slot-key'
+    evidence = {
+        'binding': {
+            'plan_digest': manifest['digest'], 'slot': slot,
+            'stage': COLLECTOR_BINDING_STAGE, 'pre_spawn_attestation': False,
+        },
+        'receipt_authenticity': 'not-attested',
+        'files': {name: _blob(body) for name, body in sorted(files.items())},
+        'receipts': receipts,
+        'report': report,
+        'identity_origin': identity_origin,
+        'final_answer_policy': {
+            'adapter_answer_state': 'lost', 'answer_bytes_supplied': False,
+            'reason': 'collector_finality_unknown',
+        },
+    }
+    envelope = {
+        'plan_digest': manifest['digest'], 'provenance': COLLECTOR_PROVENANCE,
+        'record': record, 'record_sha256': digest(encoded(record)),
+        'collector': evidence, 'collector_sha256': digest(encoded(evidence)),
+    }
+    data = encoded(envelope)
+    if len(data) > MAX_RECORD_BYTES:
+        raise ValueError('collector envelope exceeds storage bound')
+    legacy._write_new(root / 'records' / f'{number:03}.json', data)
+
+
+def _verify_collector(envelope: dict[str, Any], manifest: dict[str, Any], number: int) -> None:
+    _require_collector_pin(manifest)
+    _exact_fields(envelope, {
+        'plan_digest', 'provenance', 'record', 'record_sha256',
+        'collector', 'collector_sha256',
+    }, 'collector envelope')
+    evidence = envelope['collector']
+    _exact_fields(evidence, {
+        'binding', 'receipt_authenticity', 'files', 'receipts', 'report',
+        'identity_origin', 'final_answer_policy',
+    }, 'collector evidence')
+    if envelope['collector_sha256'] != digest(encoded(evidence)):
+        raise ValueError('collector evidence hash mismatch')
+    expected_binding = {
+        'plan_digest': manifest['digest'], 'slot': _slot(manifest, number),
+        'stage': COLLECTOR_BINDING_STAGE, 'pre_spawn_attestation': False,
+    }
+    if evidence.get('binding') != expected_binding:
+        raise ValueError('collector plan/slot binding mismatch')
+    if evidence.get('receipt_authenticity') != 'not-attested':
+        raise ValueError('collector receipt authenticity was upgraded')
+    files = _collector_files_from_evidence(evidence.get('files'))
+    receipts, report = _validate_collector_files(files)
+    if evidence.get('receipts') != receipts or evidence.get('report') != report:
+        raise ValueError('collector report/receipts differ from retained bytes')
+    expected_policy = {
+        'adapter_answer_state': 'lost', 'answer_bytes_supplied': False,
+        'reason': 'collector_finality_unknown',
+    }
+    if evidence.get('final_answer_policy') != expected_policy:
+        raise ValueError('collector final-answer policy mismatch')
+    origin = 'matching-streams' if report['session_id'] else 'local-slot-key'
+    if evidence.get('identity_origin') != origin:
+        raise ValueError('collector identity origin mismatch')
+    expected = {**_capture_projection(report, manifest, number),
+                'slot': number, 'review': None}
+    if envelope['record'] != expected:
+        raise ValueError('collector projection mismatch')
+
+
 def _verify_capture(envelope: dict[str, Any], manifest: dict[str, Any], number: int) -> None:
     evidence = envelope['capture']
     if envelope['capture_sha256'] != digest(encoded(evidence)):
@@ -291,8 +762,11 @@ def _read_record(root: Path, number: int, manifest: dict[str, Any]) -> dict[str,
     envelope = _read_envelope(root / 'records' / f'{number:03}.json')
     if envelope.get('provenance') == CAPTURE_PROVENANCE:
         _verify_capture(envelope, manifest, number)
+    elif envelope.get('provenance') == COLLECTOR_PROVENANCE:
+        _verify_collector(envelope, manifest, number)
     elif (envelope.get('provenance') != 'operator-supplied-offline-record'
-          or 'capture' in envelope or 'capture_sha256' in envelope):
+          or any(field in envelope for field in (
+              'capture', 'capture_sha256', 'collector', 'collector_sha256'))):
         raise ValueError('unknown record provenance')
     record = envelope['record']
     if envelope['plan_digest'] != manifest['digest'] or envelope['record_sha256'] != digest(encoded(record)):
@@ -376,9 +850,18 @@ def analyze_root(root: Path) -> dict[str, Any]:
             record = {**record, 'review': history[-1]['review']}
         records.append(record)
         envelope = _read_envelope(path)
-        provenance.append({'slot': number, 'kind': envelope['provenance'],
-                           'capture_sha256': envelope.get('capture_sha256'),
-                           'identity_origin': envelope.get('capture', {}).get('identity_origin')})
+        if envelope['provenance'] == COLLECTOR_PROVENANCE:
+            provenance.append({
+                'slot': number, 'kind': envelope['provenance'],
+                'collector_sha256': envelope['collector_sha256'],
+                'identity_origin': envelope['collector']['identity_origin'],
+            })
+        else:
+            provenance.append({
+                'slot': number, 'kind': envelope['provenance'],
+                'capture_sha256': envelope.get('capture_sha256'),
+                'identity_origin': envelope.get('capture', {}).get('identity_origin'),
+            })
     report = analyze(manifest, records)
     report['record_provenance'] = 'operator-supplied offline records; live capture not qualified'
     report['slot_provenance'] = provenance
@@ -405,6 +888,10 @@ def main() -> None:
         p.add_argument(f'--{name}', type=Path, required=True)
     p.add_argument('--answer', type=Path)
     p.add_argument('--answer-state', choices=capture_adapter.ANSWER_STATES)
+    p = sub.add_parser('import-collector', help='retain a completed collector attempt; never launches a process')
+    p.add_argument('root', type=Path)
+    p.add_argument('--slot', type=int, required=True)
+    p.add_argument('--attempt', type=Path, required=True)
     p = sub.add_parser('analyze')
     p.add_argument('root', type=Path)
     p = sub.add_parser('run-one', help='always refuses: live execution is not implemented or qualified')
@@ -426,6 +913,8 @@ def main() -> None:
         import_capture(args.root, args.slot, read_input(args.events), read_input(args.rollout),
                        read_input(args.process), read_input(args.answer) if args.answer else None,
                        answer_state=args.answer_state)
+    elif args.command == 'import-collector':
+        import_collector(args.root, args.slot, args.attempt)
     elif args.command == 'record-review':
         record_review(args.root, args.slot, legacy._read_json(args.file))
     elif args.command == 'analyze':

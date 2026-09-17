@@ -2,12 +2,15 @@
 """Offline v3 coordinator tests with synthetic records, never model/SSH sessions."""
 import base64
 import json
+import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import benchmark_issue10_v3 as runner
+import benchmark_issue10_v3_collector as collector
 from test_issue10_v3_capture import cli_records, rollout_records, process, jsonl
 
 
@@ -139,6 +142,32 @@ class CoordinatorTests(unittest.TestCase):
             runner.import_capture(self.root, number, **{**args, **changes})
         return runner._read_envelope(self.root / 'records' / f'{number:03}.json')
 
+    def collector_attempt(self, name='collector-attempt', *, thread='synthetic-thread',
+                          timeout=False, extra_candidates=()):
+        attempt = self.root.parent / name
+        answer = self.root.parent / f'{name}-answer'
+        rollout = self.root.parent / f'{name}-rollout'
+        cli = cli_records()
+        cli[0]['thread_id'] = thread
+        persisted = rollout_records()
+        persisted[0]['payload']['id'] = thread
+        events = jsonl(cli)
+        rollout.write_bytes(jsonl(persisted))
+        code = (
+            "import sys,time; from pathlib import Path; "
+            "Path(sys.argv[1]).write_bytes(b'Synthetic final answer'); "
+            "sys.stdout.buffer.write(bytes.fromhex(sys.argv[2])); sys.stdout.flush(); "
+            + ("time.sleep(60)" if timeout else "pass")
+        )
+        collector.collect_attempt(
+            attempt, [sys.executable, '-c', code, str(answer), events.hex()],
+            prompt=b'synthetic prompt',
+            env={'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'LC_ALL': 'C'},
+            cwd=self.root.parent, timeout_seconds=0.1 if timeout else 2,
+            rollout_candidates=[rollout, *extra_candidates], answer_path=answer,
+        )
+        return attempt
+
     def test_capture_roundtrip_raw_bytes_binding_and_review(self):
         envelope = self.capture()
         evidence = envelope['capture']
@@ -260,6 +289,211 @@ class CoordinatorTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 runner.main()
         self.assertFalse((self.root / 'records/002.json').exists())
+
+    def test_collector_import_retains_attempt_but_forces_unknown_finality(self):
+        self.assertIn('scripts/benchmark_issue10_v3_collector.py', self.plan['sources'])
+        attempt = self.collector_attempt()
+        with patch.object(collector, 'collect_attempt', side_effect=AssertionError('no collection')):
+            with patch.object(runner.legacy, '_bounded_process', side_effect=AssertionError('no process')):
+                runner.import_collector(self.root, 1, attempt)
+        envelope = runner._read_envelope(self.root / 'records/001.json')
+        self.assertEqual(envelope['provenance'], runner.COLLECTOR_PROVENANCE)
+        self.assertFalse(envelope['collector']['binding']['pre_spawn_attestation'])
+        self.assertEqual(envelope['collector']['receipt_authenticity'], 'not-attested')
+        retained = envelope['collector']['files']
+        self.assertIn('answer.txt', retained)
+        self.assertIn('rollout-candidates/001.jsonl', retained)
+        self.assertEqual(base64.b64decode(retained['answer.txt']['base64']),
+                         b'Synthetic final answer')
+        record = runner._read_record(self.root, 1, self.plan)
+        self.assertEqual(record['execution'], 'completed')
+        self.assertEqual(record['answer_state'], 'lost')
+        self.assertIsNone(record['final_answer'])
+        with self.assertRaisesRegex(ValueError, 'cannot grade'):
+            runner.record_review(self.root, 1, review())
+        report = runner.analyze_root(self.root)
+        row = next(item for item in report['slots'] if item['slot'] == 1)
+        self.assertEqual(row['quality']['status'], 'unknown')
+        self.assertEqual(row['quality']['reason'], 'final_answer_lost')
+        self.assertEqual(report['slot_provenance'][0]['kind'], runner.COLLECTOR_PROVENANCE)
+
+    def test_collector_timeout_and_lost_selection_retain_unknown_answers_and_candidates(self):
+        timeout_attempt = self.collector_attempt('timeout-attempt', thread='timeout-thread', timeout=True)
+        runner.import_collector(self.root, 1, timeout_attempt)
+        timeout_record = runner._read_record(self.root, 1, self.plan)
+        self.assertEqual(timeout_record['execution'], 'timeout')
+        self.assertEqual(timeout_record['answer_state'], 'lost')
+        self.assertIsNone(timeout_record['final_answer'])
+
+        malformed = self.root.parent / 'malformed-candidate'
+        malformed.write_bytes(b'{bad json}\n')
+        lost_attempt = self.collector_attempt(
+            'lost-rollout-attempt', thread='lost-rollout-thread',
+            extra_candidates=[malformed],
+        )
+        runner.import_collector(self.root, 2, lost_attempt)
+        envelope = runner._read_envelope(self.root / 'records/002.json')
+        files = envelope['collector']['files']
+        self.assertIn('rollout-candidates/001.jsonl', files)
+        self.assertIn('rollout-candidates/002.jsonl', files)
+        self.assertEqual(base64.b64decode(files['rollout.jsonl']['base64']), b'')
+        record = runner._read_record(self.root, 2, self.plan)
+        self.assertTrue(record['session_id'].startswith('unidentified-capture:'))
+        self.assertEqual(record['answer_state'], 'lost')
+
+    def test_collector_failure_deliveries_remain_importable_unknown_quality(self):
+        for number, kind in enumerate(('nonzero', 'empty', 'missing', 'start-failure',
+                                       'overflow', 'unreadable-candidate'), 1):
+            with self.subTest(kind=kind):
+                attempt = self.root.parent / f'failure-{kind}'
+                answer = self.root.parent / f'answer-{kind}'
+                candidate = self.root.parent / f'candidate-{kind}'
+                body = (
+                    "from pathlib import Path; import sys; "
+                    "Path(sys.argv[1]).write_bytes(b'candidate answer'); "
+                )
+                if kind == 'empty':
+                    body = "from pathlib import Path; import sys; Path(sys.argv[1]).write_bytes(b''); "
+                elif kind == 'missing':
+                    body = "import sys; "
+                body += "sys.exit(3)" if kind == 'nonzero' else "pass"
+                if kind == 'overflow':
+                    body += f"; sys.stdout.write('x' * {collector.MAX_STREAM_BYTES + 1})"
+                argv = [sys.executable, '-c', body, str(answer)]
+                if kind == 'start-failure':
+                    argv = [str(self.root.parent / 'nonexistent-executable')]
+                collector.collect_attempt(
+                    attempt, argv, prompt=b'synthetic', env={}, cwd=self.root.parent,
+                    timeout_seconds=2, answer_path=answer,
+                    rollout_candidates=[candidate] if kind == 'unreadable-candidate' else [],
+                )
+                runner.import_collector(self.root, number, attempt)
+                record = runner._read_record(self.root, number, self.plan)
+                self.assertEqual(record['answer_state'], 'lost')
+                self.assertIsNone(record['final_answer'])
+                report = runner.analyze_root(self.root)
+                row = next(item for item in report['slots'] if item['slot'] == number)
+                self.assertEqual(row['quality']['status'], 'unknown')
+                self.assertFalse(report['experimental_claim_eligible'])
+
+    def test_collector_replay_rejects_receipt_data_finality_slot_and_projection_tampering(self):
+        runner.import_collector(self.root, 1, self.collector_attempt())
+        path = self.root / 'records/001.json'
+        original = path.read_bytes()
+
+        def refreshed(document):
+            document['collector_sha256'] = runner.digest(runner.encoded(document['collector']))
+            path.write_bytes(runner.encoded(document))
+
+        for kind in ('receipt', 'data', 'finality', 'slot', 'projection'):
+            with self.subTest(kind=kind):
+                document = json.loads(original)
+                evidence = document['collector']
+                if kind == 'receipt':
+                    receipt = dict(evidence['receipts']['process'])
+                    receipt['execution'] = 'failed'
+                    body = runner.legacy._canon(receipt)
+                    evidence['files']['process.json'] = runner._blob(body)
+                    evidence['receipts']['process'] = receipt
+                elif kind == 'data':
+                    body = base64.b64decode(evidence['files']['events.jsonl']['base64']) + b'\n'
+                    evidence['files']['events.jsonl'] = runner._blob(body)
+                elif kind == 'finality':
+                    receipt = json.loads(base64.b64decode(
+                        evidence['files']['delivery.json']['base64']))
+                    receipt['answer']['finality'] = 'captured'
+                    body = runner.legacy._canon(receipt)
+                    evidence['files']['delivery.json'] = runner._blob(body)
+                    evidence['receipts']['delivery'] = receipt
+                elif kind == 'slot':
+                    evidence['binding']['slot'] = self.plan['slots'][1]
+                else:
+                    document['record']['answer_state'] = 'absent'
+                    document['record_sha256'] = runner.digest(runner.encoded(document['record']))
+                refreshed(document)
+                with self.assertRaises(ValueError):
+                    runner.analyze_root(self.root)
+        path.write_bytes(original)
+        runner.analyze_root(self.root)
+
+    def test_collector_missing_partial_and_unsafe_attempts_publish_nothing(self):
+        complete = self.collector_attempt()
+        partial = self.root.parent / 'partial-attempt'
+        runner.legacy._new_dir(partial)
+        runner.legacy._write_new(partial / 'attempt.json', (complete / 'attempt.json').read_bytes())
+        before = (partial / 'attempt.json').read_bytes()
+        with self.assertRaises(ValueError):
+            runner.import_collector(self.root, 1, partial)
+        self.assertEqual((partial / 'attempt.json').read_bytes(), before)
+        self.assertEqual([path.name for path in partial.iterdir()], ['attempt.json'])
+        self.assertFalse((self.root / 'records/001.json').exists())
+
+        missing = self.collector_attempt('missing-answer-attempt', thread='missing-answer-thread')
+        (missing / 'answer.txt').unlink()
+        with self.assertRaises(ValueError):
+            runner.import_collector(self.root, 1, missing)
+        self.assertFalse((self.root / 'records/001.json').exists())
+
+        unsafe = self.collector_attempt('unsafe-attempt', thread='unsafe-thread')
+        delivery_path = unsafe / 'delivery.json'
+        delivery = json.loads(delivery_path.read_bytes())
+        delivery['answer']['retained'] = '../outside'
+        delivery_path.write_bytes(runner.legacy._canon(delivery))
+        with self.assertRaisesRegex(ValueError, 'unsafe collector retained answer path'):
+            runner.import_collector(self.root, 1, unsafe)
+        self.assertFalse((self.root / 'records/001.json').exists())
+
+        linked = self.collector_attempt('linked-attempt', thread='linked-thread')
+        target = linked / 'answer-target'
+        (linked / 'answer.txt').rename(target)
+        (linked / 'answer.txt').symlink_to(target)
+        with self.assertRaisesRegex(ValueError, 'symlink'):
+            runner.import_collector(self.root, 1, linked)
+        self.assertFalse((self.root / 'records/001.json').exists())
+
+    def test_collector_duplicate_overwrite_and_cross_path_session_rejected(self):
+        attempt = self.collector_attempt()
+        runner.import_collector(self.root, 1, attempt)
+        original = (self.root / 'records/001.json').read_bytes()
+        with self.assertRaisesRegex(ValueError, 'session_id already used'):
+            runner.import_collector(self.root, 2, attempt)
+        with self.assertRaisesRegex(ValueError, 'session_id already used'):
+            runner.import_result(self.root, 2, result('synthetic-thread'))
+        other = self.collector_attempt('other-attempt', thread='other-thread')
+        with self.assertRaisesRegex(ValueError, 'refusing overwrite'):
+            runner.import_collector(self.root, 1, other)
+        self.assertEqual((self.root / 'records/001.json').read_bytes(), original)
+        self.assertFalse((self.root / 'records/002.json').exists())
+
+    def test_collector_cli_and_missing_source_pin(self):
+        attempt = self.collector_attempt()
+        with patch('sys.argv', ['runner', 'import-collector', str(self.root),
+                                '--slot', '1', '--attempt', str(attempt)]):
+            with patch.object(collector, 'collect_attempt', side_effect=AssertionError('no collection')):
+                runner.main()
+        self.assertTrue((self.root / 'records/001.json').is_file())
+
+        other = self.root.parent / 'study-without-collector-pin'
+        plan = runner.prepare(other, 'pilot')
+        plan['sources'].pop('scripts/benchmark_issue10_v3_collector.py')
+        plan['digest'] = runner.legacy._manifest_digest(plan)
+        (other / 'plan.json').write_bytes(runner.encoded(plan))
+        unpinned = self.collector_attempt('unpinned-attempt', thread='unpinned-thread')
+        with self.assertRaisesRegex(ValueError, 'does not pin'):
+            runner.import_collector(other, 1, unpinned)
+        self.assertFalse((other / 'records/001.json').exists())
+
+    def test_collector_envelope_bound_fails_before_atomic_publication(self):
+        candidates = []
+        for index in range(24):
+            path = self.root.parent / f'large-candidate-{index}'
+            path.write_bytes(b'x' * runner.capture_adapter.MAX_CAPTURE_BYTES)
+            candidates.append(path)
+        attempt = self.collector_attempt('large-attempt', extra_candidates=candidates)
+        with self.assertRaisesRegex(ValueError, 'envelope exceeds storage bound'):
+            runner.import_collector(self.root, 1, attempt)
+        self.assertFalse((self.root / 'records/001.json').exists())
+        self.assertTrue((attempt / 'delivery.json').is_file())
 
     def test_launch_refuses_without_probes(self):
         with patch('sys.argv',['benchmark_issue10_v3.py','run-one',str(self.root)]):

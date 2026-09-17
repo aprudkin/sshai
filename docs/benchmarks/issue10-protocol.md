@@ -904,8 +904,12 @@ and selects among
 explicit rollout candidates by thread identity. It does not configure or launch Codex, integrate
 with scheduled slots, qualify complete answers or actual-call coverage, or enable `run-one`.
 The API executes caller-supplied argv; it is not an access sandbox or authorization mechanism.
-Nonempty answer-file bytes remain unverified delivery evidence. See the analyzer guide for limits,
-synthetic checks and remaining qualification requirements. No live experiment is authorized.
+Nonempty answer-file bytes remain unverified delivery evidence. The subsequent offline
+`import-collector` path retains existing collector evidence in a scheduled slot, with import-time
+plan/slot binding and replay checks. It keeps unknown-finality answer bytes separate from the
+projected final answer: quality remains unknown and review is refused. This is not pre-spawn
+slot reservation or live collector integration. See the analyzer guide for limits, synthetic checks
+and remaining qualification requirements. No live experiment is authorized by this document.
 
 The manifest explicitly records unfrozen status, unqualified native formats and calibration grades,
 and each case's deviation from the recommended byte budget. Do not add padding just to clear the

@@ -549,8 +549,50 @@ regressions cover unresolved competitors in both candidate orders and a valid no
 Answer-finality regressions cover retained text after zero exit, nonzero exit and timeout, plus
 empty and missing files; both returned and persisted receipts retain explicit unknown finality.
 
-This stage does not enable experimental execution: coordinator integration, qualified actual-call
+This stage does not enable experimental execution: live coordinator integration, qualified actual-call
 coverage, compaction continuity, live delivery semantics and separate launch approval remain open.
+
+### Offline collector-to-slot import
+
+```sh
+python3 scripts/benchmark_issue10_v3.py import-collector ROOT --slot 1 --attempt ATTEMPT_DIRECTORY
+```
+
+This path imports an existing collector attempt without starting a process. It binds retained
+collector evidence to the prepared plan and full scheduled slot **at import time**, not before
+spawn. It does not attest that the process ran for that slot, used the planned prompt, accessed
+only the intended fixture, or used the selected model. New plans also pin the collector source.
+
+The private, atomic slot envelope retains the collector receipts and bounded evidence, including
+answer bytes independently of the projected answer state. Import checks receipt consistency and
+retained byte hashes/counts; analysis replays the evidence and verifies the plan/slot binding.
+Partial attempts or inconsistent retained files are rejected without rewriting or deleting the
+original attempt. A refused import is not permission to rerun an experimental slot. The existing
+32 MiB envelope ceiling still applies; retaining many candidate files may exceed it.
+
+Only the current collector's explicit unknown finality is supported. Delivered answer bytes are
+**not** supplied as a captured final answer to the adapter: the projection has `answer_state: lost`
+and `final_answer: null`. Here `lost` means unavailable qualified final-answer evidence, not that
+retained bytes disappeared. Quality remains unknown even after a timeout, exit zero, or matching
+CLI message text. Human review of this projected record is refused rather than assigning zero or
+promoting a candidate answer. Unsupported finality claims are rejected, not trusted.
+
+This import is distinct from `import-capture`, whose supplied final-answer option remains an
+operator declaration. Hashes and replay establish internal consistency, not collector authenticity
+or protection against rewriting all data and hashes. Raw receipts can contain private paths and
+errors; base64 is not sanitization. Keep the envelope and original attempt outside published data.
+`run-one` remains disabled and experimental claims remain false. Pre-spawn plan/slot reservation,
+qualified finality detection, complete audit coverage, live capture qualification and protocol
+freeze remain prerequisites, not results of this import.
+
+Synthetic verification covers successful and timed-out collection, nonzero exits, empty/missing
+answer files, start failure, stream overflow, unreadable and malformed candidates, receipt/data/
+slot/projection tampering, partial attempts, symlink refusal, duplicate-session and overwrite
+refusal, CLI import, source pins, grading refusal, and the envelope-size ceiling. The full v3
+suite passed 96 tests with warnings treated as errors (25 coordinator, 25 capture, 16 collector,
+6 collector contract, 11 analysis, 13 fixture). Historical offline runner/fixture checks and
+Go test/vet/build also passed; Go tests used cache. These are synthetic consistency checks, not
+real session qualification or measured token results.
 
 ## Historical runner interface
 
