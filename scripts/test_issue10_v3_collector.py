@@ -38,6 +38,36 @@ class CollectorTests(unittest.TestCase):
             cwd=root, timeout_seconds=kwargs.pop("timeout_seconds", 2), **kwargs,
         )
 
+    def test_answer_finality_is_unknown_independently_of_delivery_and_exit(self) -> None:
+        cases = [
+            ("success", "pass", b"Partial or final", "completed", "captured"),
+            ("nonzero", "sys.exit(7)", b"Partial or final", "failed", "captured"),
+            ("timeout", "time.sleep(5)", b"Partial or final", "timeout", "captured"),
+            ("empty", "pass", b"", "completed", "lost"),
+            ("missing", "pass", None, "completed", "lost"),
+        ]
+        for name, ending, data, execution, state in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                answer = root / "answer-source"
+                code = "import sys, time; from pathlib import Path; "
+                if data is not None:
+                    code += f"Path(sys.argv[1]).write_bytes({data!r}); "
+                result = self.collect(
+                    root, "attempt", python_command(code + ending, answer),
+                    answer_path=answer, timeout_seconds=0.5,
+                )
+                delivery = result["delivery"]["answer"]
+                self.assertEqual(result["process"]["execution"], execution)
+                self.assertEqual(delivery["state"], state)
+                self.assertEqual(delivery["finality"], "unknown")
+                self.assertEqual(delivery["finality_reason"],
+                                 "no_qualified_final_answer_evidence")
+                saved = json.loads((root / "attempt" / "delivery.json").read_bytes())
+                self.assertEqual(saved["answer"], delivery)
+                if state == "captured":
+                    self.assertEqual((root / "attempt" / "answer.txt").read_bytes(), data)
+
     def test_success_receipt_precedes_spawn_and_outputs_are_private(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

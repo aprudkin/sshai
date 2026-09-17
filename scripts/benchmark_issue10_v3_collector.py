@@ -340,7 +340,13 @@ def collect_attempt(
         "schema": DELIVERY_SCHEMA,
         "process_execution": process_receipt["execution"],
         "rollout": _collect_rollout(attempt, events, candidates, process_started),
-        "answer": _collect_answer(attempt, answer, process_started),
+        "answer": {
+            **_collect_answer(attempt, answer, process_started),
+            # Delivery is not finality evidence, even after a zero exit.
+            # Keep this explicit for lost bytes as well: loss proves no absence.
+            "finality": "unknown",
+            "finality_reason": "no_qualified_final_answer_evidence",
+        },
     }
     legacy._write_new(attempt / "delivery.json", legacy._canon(delivery))
     return {

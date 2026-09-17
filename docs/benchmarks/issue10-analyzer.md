@@ -506,6 +506,16 @@ produced no answer. Retained nonempty answer bytes still require adapter validat
 provenance qualification; partial files cannot be certified merely by their existence. Process
 success, answer delivery and rollout selection remain separate outcomes.
 
+Every collector answer receipt includes `finality: "unknown"` and
+`finality_reason: "no_qualified_final_answer_evidence"`, including lost delivery.
+`state: "captured"` denotes retained bytes only. Neither exit zero, matching CLI message text,
+nor a nonempty answer file certifies a complete final answer. Do not map this delivery state
+alone into the capture adapter's explicit captured-final-answer input or a gradable final answer.
+Unknown finality must remain unknown quality, not an automatic failure score or proven absence.
+A future qualified finality check must bind completion evidence to the retained answer bytes;
+this collector does not yet provide one. A later process failure must not revoke independently
+confirmed finality, and finality must not imply correct content or valid usage.
+
 Storage is private application-level no-overwrite publication, not WORM or crash-atomic multi-file
 storage. Receipts contain local paths and errors; raw captures may contain supplied command/output
 content. Keep all collector evidence private and unpublished. Disk-write failures may leave only a
@@ -531,11 +541,13 @@ means bytes were copied, not that full audit coverage or final-answer completene
 The helper uses POSIX process-group cleanup, not containment of descendants that start new sessions;
 Windows controllers, blocked spawn/filesystem calls and live model delivery are not qualified.
 
-Verification: 15 collector tests and 6 additional contract tests pass with warnings treated as
+Verification: 16 collector tests and 6 additional contract tests pass with warnings treated as
 errors, covering synthetic subprocesses, publication failures, bounds, stale-answer refusal and
 pipe-EOF timeout. The existing 66 v3 coordinator/capture/analysis/fixture tests also passed.
 Historical source modules remain unchanged; no live model/SSH session was used. The selection
 regressions cover unresolved competitors in both candidate orders and a valid nonmatching competitor.
+Answer-finality regressions cover retained text after zero exit, nonzero exit and timeout, plus
+empty and missing files; both returned and persisted receipts retain explicit unknown finality.
 
 This stage does not enable experimental execution: coordinator integration, qualified actual-call
 coverage, compaction continuity, live delivery semantics and separate launch approval remain open.
