@@ -515,6 +515,140 @@ non-promotion, file-change retention, declined/malformed commands, nullable exit
 separation, mixed observations and rehashed false execution claims. They run no model/SSH session.
 This revision requires fresh development plans; it does not migrate or rewrite frozen evidence.
 
+### Single-local-slot qualification specification
+
+**Status: preparation specification, not a frozen manifest, implemented controller, or launch
+approval.** This narrows the checklist above to one inspectable pilot target. It neither claims
+that the current collector can satisfy every requirement nor permits bypassing `run-one`.
+
+#### Target and budget
+
+Use the existing pilot schedule with seed `1010` as the reference: **slot 7**, pair `M01-r1`,
+case `M01`, series `M`, replicate `1`, arm `sshai`. Slot 8 is its baseline counterpart. These
+identities come from `schedule('pilot', 1010)`, not from selecting a favorable result. M01 is a
+small healthy-state case that limits initial diagnostic complexity; an artifact follow-up is
+possible, not guaranteed. This is a specification for that slot, **not permission to execute it
+first**: retain the frozen schedule and preceding outcomes. A different launch order requires a
+prospective documented protocol/schedule amendment before any affected session, not skipping slots
+or changing the seed until a convenient order appears. No such amendment is made here.
+
+The slot consumes one of the existing 12 pilot sessions, never an additional qualification session
+or one of the 108 measured sessions. It receives the ordinary rendered M01 task and sshai-arm
+instructions, without answer keys, required commands, required tool counts or a forced artifact read.
+Use a fresh, non-forked, non-ephemeral, one-user-turn session; no subagents or continuation prompt.
+Retain the candidate `gpt-5.6-sol` / `high`, subscription-only policy and proposed 600-second ceiling.
+Availability, exact pins and those limits must be qualified/frozen before launch; do not substitute
+an available model or use paid API fallback. A failed or uninformative slot is retained, not replaced.
+
+#### Required private launch record
+
+Before any model process, a future controller must bind the following values to the plan/slot and
+retain a private preflight record. Missing values mean **blocked**, not a default supplied at launch:
+
+| Field group | Concrete required evidence |
+| --- | --- |
+| Identity and pins | Plan digest and full scheduled slot; fixture manifest and rendered common/arm/task prompt hashes; actual model/reasoning; launcher and native binary paths/hashes/version; sshai executable hash/revision; collector/adapter revisions; declared paginated history. The reviewed Codex source is `78c290807ce710180111df227df3b7a4fe845452` / `0.151.0`; any different binary version requires a new source contract. |
+| Workspace | One fresh local case root with only M01 inputs; separate writable scratch and sshai artifact/state roots; private controller/evidence and evaluator roots unavailable to task tools. Record exact resolved paths privately, never in public examples. Verify starting fixture hashes and reread them afterward. |
+| Access | Observable effective tool names/schemas and exact supported configuration; tested restrictions on fixture writes, unrelated data, evaluator/evidence access and tool network. Runtime reads and scratch/artifact writes are explicit allowances. The historical writable-workspace canary does not by itself establish read-only fixture access or live parity. |
+| Capture | Exact argv, prompt/environment digests, working directory, limits and source paths; a fresh rollout provenance/selection method rather than a guessed filename or a broad search of user history; absent answer output before spawn. The controller may discover its own isolated session output, but supplies explicit bounded candidates to the collector. |
+| Handling | Private evidence destination and access modes, retention/deletion decision, reviewed publication policy, remaining pilot budget, frozen phase authorization and preflight outcome. Existing 90-day retention is only a proposal; no automatic deletion is selected here. |
+
+Use the collector's current bounds: **1,000,000 bytes each for stdout and stderr**; **1 MiB
+(1,048,576 bytes) each for prompt, answer and each supplied rollout candidate**; at most 32 candidates.
+The adapter also limits each JSONL line to 256 KiB and records to 20,000. The imported envelope limit
+remains 32 MiB, so the maximum set of individually valid inputs need not fit one import. Preserve oversize/partial attempts and their reasons; do not
+truncate silently, increase limits after seeing an outcome, or recollect the slot. Environment
+values and credentials are not public evidence. This specification does not inspect or provision
+login material, and task tools must not be able to read it.
+
+#### Minimal intended tool surface
+
+Select **local command execution only**, including any necessary lifecycle/terminal-interaction
+operation of the selected executor. Freeze the exact advertised names and schemas from the selected
+configuration rather than assuming that CLI `command_execution` is a model-facing tool name.
+Agent messages/reasoning and usage events are observations, not additional execution tools.
+
+- New fixture diagnostics use sshai's explicit local Bash path. Ordinary local tools may process
+  already captured output, read saved artifacts, and manage permitted scratch notes. They may not
+  read source fixtures directly in this arm. Diagnostic success and routing compliance are separate.
+- No SSH, web, MCP, dynamic/extension, collaboration, image, dedicated patch/file-change or other
+  non-command tool is intended for this target. Disable or restrict these through supported,
+  observably verified controls; prompt text or a zero-entry inventory is not that verification.
+  Local notes can use the allowed command path; fixture repair remains forbidden.
+- An unexpected advertised callable tool blocks this minimal configuration until its exclusion or
+  coverage is established. An actual prohibited operation is retained as a violation. An unsupported
+  record or uncertain execution is an audit gap, not automatic proof of a violation or harmlessness.
+- The launch collector is not an access sandbox. If the selected Codex configuration cannot supply
+  this surface or adequate observation, record the concrete missing capability. Do not silently
+  expose additional tools, claim the historical managed-MCP barrier solved, or implement every
+  optional TurnItem decoder merely to clear this preparation checklist.
+
+#### Independent action ledger and reconciliation
+
+Freeze a small expected-action matrix **outside the agent prompt**. It defines coverage cases,
+not a command prescription or an expected correct diagnosis:
+
+| Coverage case | Independent evidence needed | Comparison with captured evidence |
+| --- | --- | --- |
+| Routed diagnostic | Controller-side observation of the local diagnostic process/interaction and the input resources it actually accesses; initial/final fixture hashes; sshai artifact identity when produced | Retained command request/lifecycle plus source-local IDs, argv/cwd and outcome; distinguish request rejection, process start and completion. |
+| Saved-artifact follow-up | Independently observed access to a specific previously produced artifact, with artifact identity/hash and read range or an explicit range-unavailable marker | Retained command/interaction containing the read or query, linked to that artifact, not merely containing the word `cat`, `q` or `sshai`. A query need not read an artifact and does not count automatically. |
+| Auxiliary action | Observed scratch/output processing, resource identity and outcome | Classify separately from new fixture diagnostics; do not count every child process as a separate model tool call. |
+| Rejection, failure or repetition | Observed disposition and distinct interaction identity, including repeated identical requests where present | Preserve every request and outcome; no confirmation from a call-shaped suffix, exit zero alone or cross-stream ID equality. |
+
+The minimum ledger entry records an independent observer/event identifier, relative sequence,
+parent process or interaction reference, action class, resource identity/hash where applicable,
+observed disposition, evidence reference and observation limits. Record unreadable/ambiguous resource
+or interaction identity as unknown. Paths/arguments can be private; public reports use reviewed
+relative identifiers. The observer must be outside task-writable state and independent of the two
+Codex streams being compared. A second parse of those streams, an agent-authored note, sshai history
+alone or before/after file hashes is **not** a complete independent action ledger. Hashes show
+content integrity, not who read a file; process argv alone does not reveal accesses hidden inside a
+shell or interpreter. Independence here means a separate observation path, not owner-proof storage.
+
+First exercise this matrix offline using known synthetic processes and inputs. Synthetic ground
+truth can qualify decoder/reconciliation behavior, but cannot establish coverage of arbitrary live
+actions. The current v3 modules do **not** implement a qualified independent live observer or this
+reconciliation report. Selection and bounded verification of that observation path is the first
+implementation prerequisite; no OS-wide tracing, elevated access, new dependency or raw process
+recording is authorized merely by this document.
+
+For the real slot, reconcile ledger observations with retained source-local inventory. Keep missing,
+extra, rejected, ambiguous and unsupported observations explicit; do not add CLI and rollout counts
+or promote the compatibility `actual_call_confirmed` field into execution attestation. Ordinary
+artifact reads remain permitted and count toward session usage. If the autonomous agent performs no
+artifact follow-up, mark that coverage case **unobserved**, not failed task quality, audit success or
+permission to add a prompt/replacement session. Qualify it in a later already-planned pilot slot if
+observed; otherwise retain the coverage gap. The same rule applies to unobserved failure/retry paths.
+
+#### Qualification result, separate from task quality
+
+Record one result per row: `pass`, `fail`, `unobserved`, or `blocked`, with evidence references and
+limitations. These are proposed qualification outcomes, not new fields accepted by the current
+result importer. `pass` requires positive evidence; absence of a detected error is insufficient.
+
+| Check | Pass evidence | Failure or remaining limitation |
+| --- | --- | --- |
+| Preflight/access | All private record fields resolved; effective allowed surface and bounded access verified under the actual invocation | Missing target/configuration/observer evidence blocks launch; observed unauthorized access is a violation. Historical canaries alone are insufficient. |
+| Collection and identity | One reserved attempt; fresh session/turn bound to exact retained streams, prompt/slot and delivered bytes; no unresolved rollout competitor or lost/truncated evidence | Partial receipt, ambiguous selection, overflow or lost publication prevents complete-capture qualification; preserve originals and reservation. |
+| Usage | Supported pinned accumulation semantics plus agreement of terminal CLI counters and final rollout cumulative totals, counted once; full model-visible guidance/recovery included | Missing, decreasing, default-only or mismatched counters remain unavailable. Matching totals alone cannot prove complete recording or provider billing. Compaction continuity needs separate evidence if observed. |
+| Answer delivery | Exact-byte same-turn completion comparison plus independent validation of the selected binary's completed-turn/output-file delivery behavior | `matched` alone is not qualified finality. Missing/partial/unphased/unsupported output remains unknown, not an automatic zero score. A later process failure does not erase independently established completion. |
+| Actual-call coverage | Independent ledger reconciles all actions of the permitted surface and records uncertainty; required diagnostic and artifact-read coverage cases observed | Unmatched/unsupported actions leave coverage unqualified; no artifact read means unobserved coverage. Unique-call/follow-up metrics stay unavailable unless their counting unit and coverage are qualified. |
+| Quality | Captured qualified answer receives separate fact/citation checks and anonymized human diagnosis/evidence/recommendation assessment | Do not use correct task content as an instrumentation gate or invent human grades. Six accepted calibration anchors are not this slot's assessment. |
+
+A normal slot cannot establish timeout, overflow, compaction or interrupted-delivery behavior merely
+because none occurred. Retain the synthetic failure-path evidence separately and any remaining live
+qualification limits. Nor can one sshai slot qualify its baseline counterpart, Linux/Windows access,
+all tasks, or a token-saving effect. A wrong diagnosis may coexist with technically valid capture;
+a correct answer may coexist with invalid instrumentation. Keep both visible.
+
+**Current disposition: blocked for live qualification.** The exact launch record, verified minimal
+tool surface/access, fresh-rollout selection, independent live ledger, qualified usage/finality,
+review integration and phase approval are not supplied by this specification. Existing
+`collect_slot` binds a caller request, not its conformity to this record. Existing collector imports
+still project unknown-finality answers to `lost`/null and refuse grading. Keep `run-one` disabled,
+`experimental_claim_eligible=false` and all qualification flags unchanged. Only a separately verified
+implementation/qualification change may alter those contracts; this document is not a bypass.
+
 ### Offline capture-to-slot integration
 
 ```sh
@@ -613,8 +747,9 @@ partial attempt and must not be called successful capture. The caller still owns
 authentication provisioning, model/binary pins, fresh isolated sources, slot/plan binding and safe
 access restrictions. No sandbox or credential isolation is provided by this process collector.
 
-The explicit prompt is delivered on stdin. Bounds are 1 MiB each for prompt, stdout, stderr,
-answer and each rollout candidate. Raw `events.jsonl`, `stderr.txt`, `process.json`, candidate files,
+The explicit prompt is delivered on stdin. Bounds are 1 MiB each for prompt, answer and each
+rollout candidate; stdout and stderr each have a 1,000,000-byte bound inherited from the historical
+process helper. Raw `events.jsonl`, `stderr.txt`, `process.json`, candidate files,
 selected `rollout.jsonl`, optional `answer.txt` and `delivery.json` are separate publications.
 Oversized source files produce retained error receipts, not retained byte prefixes; original sources
 are not deleted. Only stream overflow retains a bounded prefix automatically.

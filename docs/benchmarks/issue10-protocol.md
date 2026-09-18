@@ -997,6 +997,15 @@ Before any experimental launch, resolve and approve:
 5. A tested implementation matching this design and phase-specific frozen manifests and launch
    approval within the 120-session/current-subscription ceiling.
 
+The [single-local-slot qualification specification](issue10-analyzer.md#single-local-slot-qualification-specification)
+now narrows preparation to reference pilot slot 7 (`M01-r1`, sshai, seed 1010). It specifies a minimal
+local command tool surface, private preflight record, independent action-ledger requirements and
+separate usage/completion/audit/quality checks. It does not authorize executing that slot ahead of
+the frozen schedule or allocate an extra session. Artifact-read and failure-path coverage not chosen
+by the autonomous agent remains unobserved; do not force commands, add turns or replace the slot.
+Its launch record, observer and live qualification are not implemented or approved by the document.
+No current eligibility, finality, access or launch gate is changed.
+
 The pilot may reveal necessary corrections; record them before freezing measurement. If the pilot
 fails qualification, do not proceed merely because measurement slots remain. Interview-summary
 confirmation validates shared understanding only; it does not satisfy these launch gates.
