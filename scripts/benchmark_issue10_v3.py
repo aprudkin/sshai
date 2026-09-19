@@ -90,7 +90,8 @@ def prepare(root: Path, phase: str = 'measurement', seed: int = 1010) -> dict[st
     pins = {}
     for name in ('benchmark_issue10_v3.py', 'benchmark_issue10_v3_analysis.py',
                  'benchmark_issue10_v3_capture.py', 'benchmark_issue10_v3_collector.py',
-                 'benchmark_issue10_v3_cases.py', 'prepare_issue10_v3_fixtures.py',
+                 'benchmark_issue10_v3_review.py', 'benchmark_issue10_v3_cases.py',
+                 'prepare_issue10_v3_fixtures.py',
                  'benchmark_issue10.py', 'benchmark_issue10_fixtures.py'):
         pins[f'scripts/{name}'] = digest((SOURCE / name).read_bytes())
     for name in ('issue10-protocol.md', 'issue10-analyzer.md'):
@@ -1013,6 +1014,13 @@ def main() -> None:
     p.add_argument('--attempt', type=Path, required=True)
     p = sub.add_parser('analyze')
     p.add_argument('root', type=Path)
+    p = sub.add_parser('export-review-packet', help='export a new private randomized human-review packet')
+    p.add_argument('root', type=Path)
+    p.add_argument('output', type=Path)
+    p = sub.add_parser('resolve-review-answer', help='verify a review packet and resolve its opaque answer ID')
+    p.add_argument('root', type=Path)
+    p.add_argument('--packet', required=True)
+    p.add_argument('--answer', required=True)
     p = sub.add_parser('run-one', help='always refuses: live execution is not implemented or qualified')
     p.add_argument('root', type=Path)
     args = parser.parse_args()
@@ -1038,6 +1046,12 @@ def main() -> None:
         record_review(args.root, args.slot, legacy._read_json(args.file))
     elif args.command == 'analyze':
         print(json.dumps(analyze_root(args.root), indent=2, allow_nan=False))
+    elif args.command == 'export-review-packet':
+        from benchmark_issue10_v3_review import export_packet
+        print(json.dumps(export_packet(args.root, args.output), sort_keys=True))
+    elif args.command == 'resolve-review-answer':
+        from benchmark_issue10_v3_review import resolve_answer
+        print(resolve_answer(args.root, args.packet, args.answer))
 
 
 if __name__ == '__main__':

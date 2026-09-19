@@ -503,6 +503,12 @@ using a rubric and calibration examples defined before measurement. Hide the bra
 randomize presentation; answer style may still reveal the arm, so do not promise perfect blinding.
 Retain disputed assessments explicitly. No additional model judge is selected.
 
+The offline coordinator now provides [private randomized review packets](issue10-analyzer.md#private-randomized-human-review-packets)
+for retained gradable answers. It copies exact answer text and neutral task evidence, hides coordinator
+branch/run metadata, and keeps the opaque-ID mapping separate for the owner. This is presentation
+infrastructure, not human assessment or verified blinding: answer wording can still reveal the arm.
+Unknown-finality collector answers remain ungradable, and no packet operation enables live execution.
+
 Report all task failures and all quality dimensions, not only successful pairs. A wrong answer is
 not successful savings. The selected descriptive criterion for “without observed degradation” is:
 in **each series**, sshai has no more failed tasks and no worse evidence or recommendation scores
@@ -1005,6 +1011,14 @@ the frozen schedule or allocate an extra session. Artifact-read and failure-path
 by the autonomous agent remains unobserved; do not force commands, add turns or replace the slot.
 Its launch record, observer and live qualification are not implemented or approved by the document.
 No current eligibility, finality, access or launch gate is changed.
+
+The subsequent [exec-server feasibility investigation](https://github.com/aprudkin/sshai/issues/10#issuecomment-5741452885)
+is recorded in the issue journal. It demonstrated partial process/filesystem RPC observation, not a
+complete independent resource-access observer: a known descendant interpreter read produced no
+separate child/file-read event. Retain that coverage gap rather than treating a proxy or matching
+stream totals as full qualification. The current implementation still has no qualified replacement
+observer. Effective forced termination was not established by that probe's closure check. No model
+or SSH study session was run by the probe, and its synthetic evidence is not a measured-study result.
 
 The pilot may reveal necessary corrections; record them before freezing measurement. If the pilot
 fails qualification, do not proceed merely because measurement slots remain. Interview-summary

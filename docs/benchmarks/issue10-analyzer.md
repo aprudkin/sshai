@@ -332,8 +332,9 @@ operator-supplied data does not prove an experimentally valid comparison.
 `run-one ROOT` unconditionally refuses before any process or network activity. There is no enable
 flag. Remaining work includes a qualified event/usage capture adapter, bounded target access,
 actual-call auditing including saved-output reads and compaction, rendered environment instructions,
-binary/model pins, anonymized/shuffled review presentation, protocol freeze, and phase-specific authorization. The old managed-MCP barrier
-also remains unchanged. Review revisions preserve evidence, but live event collection and automated
+binary/model pins, protocol freeze, and phase-specific authorization. Offline shuffled review
+presentation is implemented below; live human assessment remains outstanding. The old managed-MCP
+barrier also remains unchanged. Review revisions preserve evidence, but live event collection and automated
 fact checking of experimental answers are not implemented by this offline coordinator.
 
 Offline development tests:
@@ -343,6 +344,74 @@ python3 scripts/test_benchmark_issue10_v3.py
 python3 scripts/test_issue10_v3_analysis.py
 python3 scripts/test_issue10_v3_fixtures.py
 python3 scripts/test_benchmark_issue10_fixtures.py
+```
+
+### Private randomized human-review packets
+
+The offline `benchmark_issue10_v3_review.py` module prepares human-review working data without
+launching a process or assigning scores. Use a freshly prepared plan: coordinator source and document
+changes invalidate existing source pins; do not rewrite old plans to bypass that check.
+
+Keep both the study root and review output private and outside the repository. `OUTPUT` must be a
+new directory separate from `ROOT`, with neither directory nested in the other. Export includes all
+currently imported answers whose projected `answer_state` is `captured`, regardless of task quality,
+usage, execution outcome, or prior assessment. It is a snapshot, not a continuously updated packet.
+
+```sh
+python3 scripts/benchmark_issue10_v3.py export-review-packet ROOT OUTPUT
+```
+
+The command returns `packet_id`, `answer_count`, and `excluded_slot_count`. Reviewers use
+`OUTPUT/packet.json` for the shuffled answer order and opaque answer/task IDs. The directory contains
+exact UTF-8 final-answer text, neutral prepared task prompts, source fixtures, semantic keys, a 0–2
+rubric, and a privacy/status notice. It excludes branch instructions and coordinator slot, arm,
+session, usage, and prior-grade metadata. Answers are not redacted or rewritten: their wording,
+artifact references, and task material can reveal context or the arm. This hides coordinator labels,
+not all identifying content, and does not guarantee blinding or sanitize material for publication.
+
+IDs and ordering use `SystemRandom`; the owner mapping, rather than a public seed, preserves the
+assignment. Only the coordinator owner retains `ROOT/review-packets/PACKET_ID.json`, which binds the
+plan, record envelopes, capture digests where present, answers, and every reviewer file. Its slot
+inventory records an export or exclusion reason for every scheduled slot, including unattempted,
+reserved-without-result, absent, and lost answers. Collector-retained bytes with unknown finality
+remain projected as lost and are not exported as gradable answers. An empty export is permitted and
+is not evidence that any answer was assessed.
+
+Files are private (0600) under private directories (0700); existing destinations and symlink paths
+are rejected. Individual packet files and the owner map are each limited to 4 MiB. Oversize content
+is rejected before publication. Cross-directory publication is not atomic: a `.pending.json` owner
+receipt precedes output, `packet.json` is written after reviewer content, and a private
+`.complete.json` receipt is last. Success requires completion of the export, not merely the presence
+of `packet.json`. On failure, preserve partial files and the pending receipt for inspection; the
+resolver refuses an incomplete publication. Do not delete existing evidence or interpret a failed
+export as a completed assessment. Use a new output path for a later export after addressing its cause.
+
+Keep the reviewer packet unchanged and save the actual human assessment separately using the
+`record-review` schema above. After assessment, the owner resolves the opaque answer ID:
+
+```sh
+python3 scripts/benchmark_issue10_v3.py resolve-review-answer ROOT \
+  --packet PACKET_ID --answer ANSWER_ID
+python3 scripts/benchmark_issue10_v3.py record-review ROOT --slot RESOLVED_SLOT \
+  --file HUMAN_REVIEW.json
+```
+
+Replace `RESOLVED_SLOT` with the integer printed by the resolver. It verifies the completion receipt,
+packet inventory/permissions/hashes, pinned plan, replayed records, and the selected answer's original
+record binding before returning the slot. It uses the stored output location; moving or editing the
+packet prevents resolution. Do not expose the resolved slot or owner mapping to the grader before
+assessment. The two commands are separate: resolution does not record a grade, and `record-review`
+retains its existing record/capture-bound append-only revisions, not a new packet-bound review schema.
+These are consistency checks, not WORM storage, proof of human authorship, or protection against an
+owner rewriting all files and hashes.
+
+Declared offline captures remain declared evidence. Export/resolution does not qualify finality,
+usage, access, or experimental claims; `run-one` stays disabled. Automatic fact/citation checking of
+experimental answers and actual human grading are still separate unfinished work. Verify this path
+with synthetic data only:
+
+```sh
+python3 -W error scripts/test_issue10_v3_review.py
 ```
 
 ### Offline coordinator verification
