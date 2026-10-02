@@ -52,7 +52,11 @@ reads the body from stdin instead of a file).
 Output is a compact passport, not raw output: a status line carrying
 exactly one of exit=N, setup-error=windows-shell, or transport-error=R, then "file=<path>" pointing
 at the captured result on disk, then either the full captured body (when
-it fits the budget) or its last 3 lines ("tail3:"). Recognized SSH failures
+it fits the budget) or a suffix of its last 3 lines ("tail3:"). The body
+preview is bounded to 4 bytes per budget token, clipping at UTF-8 boundaries;
+framing and the "preview omitted" query notice add at most 80 bytes, excluding
+the status/path metadata and final newline. Preview omission does not change
+the retained artifact or imply truncated=1. Recognized SSH failures
 store only a safe canonical diagnostic in that artifact; raw SSH error text
 is never exposed. Only captured output up to the configured stream cap is
 retained; output beyond that cap is discarded and marked truncated=1.
@@ -139,6 +143,10 @@ Results use the same bounded artifacts, passports, JSON v1 envelope, state,
 delta, history, query, and retention machinery as remote runs. Stable targets
 "local-bash" and "local-pwsh" isolate shell state and appear in results and
 logs, but never in ` + "`hosts`" + `.
+The body preview uses at most 4 bytes per budget token plus at most 80 bytes
+of framing/omission notice, excluding status/path metadata and the final
+newline. Oversized tails are clipped at UTF-8 boundaries; "preview omitted"
+points to retained output via sshai q and does not imply truncated=1.
 
 Flags:
   --shell SHELL       required: "bash" or "pwsh"

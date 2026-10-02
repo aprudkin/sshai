@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type Meta struct {
@@ -83,6 +84,12 @@ func PipeAdvisory(command string) string {
 	return ""
 }
 
+// RenderPassport limits copied body bytes to 4*max(budgetTokens, 0). If the
+// body exceeds that estimate, it shows a suffix of the final three lines,
+// advancing a clipped start to a UTF-8 rune boundary. Tail framing and the
+// omission notice add at most 80 bytes; the unchanged status/path metadata
+// and any caller-added newline are outside that limit. It never mutates body
+// or the capture's Truncated flag.
 func RenderPassport(m Meta, artPath string, body []byte, budgetTokens int) string {
 	var b strings.Builder
 	b.WriteString(StatusLine(m))
@@ -99,9 +106,24 @@ func RenderPassport(m Meta, artPath string, body []byte, budgetTokens int) strin
 	if len(lines) < n {
 		n = len(lines)
 	}
-	b.WriteString("\ntail3:")
-	for _, ln := range lines[len(lines)-n:] {
-		b.WriteString("\n  " + ln)
+	tail := strings.Join(lines[len(lines)-n:], "\n")
+	if budgetTokens <= 0 {
+		tail = ""
+	} else if EstTokens([]byte(tail)) > budgetTokens {
+		// Multiply only after comparing to the tail size, so even an
+		// arbitrarily large requested budget cannot overflow this bound.
+		start := len(tail) - budgetTokens*4
+		for start < len(tail) && !utf8.RuneStart(tail[start]) {
+			start++
+		}
+		tail = tail[start:]
 	}
+	b.WriteString("\ntail3:")
+	if tail != "" {
+		for _, ln := range strings.Split(tail, "\n") {
+			b.WriteString("\n  " + ln)
+		}
+	}
+	b.WriteString("\npreview omitted; use sshai q <id> -- <tool> <args> (id above)")
 	return b.String()
 }
