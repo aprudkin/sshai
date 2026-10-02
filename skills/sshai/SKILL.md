@@ -11,6 +11,8 @@ Use `sshai` only when command text, script bodies, and expected output contain n
 
 ## Execute
 
+For remote `run`, put all sshai options before the first host. Use `sshai run [flags] <host...> -- <command>` for inline commands or `sshai run [flags] --body-file <file|-> <host...>` for file/stdin bodies. For example, use `sshai run --body-file check.ps1 windows01`, not `sshai run windows01 --body-file check.ps1`. At least one host is required in either form. In the inline form, everything after the host/command separator `--` is command text, not sshai options; do not move command options ahead of the host.
+
 For a short command:
 
 ```bash

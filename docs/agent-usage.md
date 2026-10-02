@@ -10,6 +10,23 @@
 
 Run `sshai help` for the full command list, `sshai help <command>` for flags.
 
+## Remote argument order
+
+All sshai options must appear before the first host. Remote `run` requires at least one host
+in both forms:
+
+```text
+sshai run [flags] <host...> -- <command>
+sshai run [flags] --body-file <file|-> <host...>
+```
+
+For example, use `sshai run --body-file check.ps1 windows01`, not
+`sshai run windows01 --body-file check.ps1`. Known sshai options before the command separator
+but after a host produce an ordering error (exit 96); they are not silently reordered.
+In the inline form, everything after the host/command separator `--` is command text,
+even if it looks like an sshai option. Keep command options there. A missing host is distinct
+from a host with no command/body; both are usage errors (exit 96).
+
 ## Default-use rule
 
 Use `sshai` by default when all of these are true:

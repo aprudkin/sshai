@@ -261,31 +261,38 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 	timeout := time.Duration(timeoutSec) * time.Second
 
 	rest := fs.Args()
+	before, after, found := splitAtDashDash(rest)
+	if !found {
+		before = rest
+	}
+	fromFile := *bodyFile != ""
+	// With no host, flag.Parse consumes the inline command separator itself.
+	// Keep the existing `-- host -- command` form, whose second separator
+	// remains in rest. A -- used as a flag value is not a separator.
+	if len(rest) == 0 || (!fromFile && (len(before) == 0 || (!found && consumedFlagTerminator(fs, args)))) {
+		fmt.Fprintln(stderr, "run: at least one host is required: use `sshai run [flags] <host...> -- <command>` or `sshai run [flags] --body-file <file|-> <host...>`")
+		return exitUsage
+	}
+	for _, arg := range before {
+		option, _, _ := strings.Cut(arg, "=")
+		name := strings.TrimPrefix(strings.TrimPrefix(option, "-"), "-")
+		if strings.HasPrefix(option, "-") && fs.Lookup(name) != nil {
+			fmt.Fprintf(stderr, "run: misplaced option %q: sshai options must appear before hosts; use `sshai run [flags] <host...> -- <command>` or `sshai run [flags] --body-file <file|-> <host...>`\n", option)
+			return exitUsage
+		}
+	}
 
 	var hosts []string
 	var command string
-	fromFile := *bodyFile != ""
 	if fromFile {
 		hosts = rest
-		body, err := loadBody(*bodyFile)
-		if err != nil {
-			fmt.Fprintf(stderr, "run: %v\n", err)
-			return exitUsage
-		}
-		command = body
 	} else {
-		before, after, found := splitAtDashDash(rest)
-		if !found {
+		hosts = before
+		command = strings.Join(after, " ")
+		if !found || strings.TrimSpace(command) == "" {
 			fmt.Fprintln(stderr, "run: a command is required: use `-- <command words>` or --body-file")
 			return exitUsage
 		}
-		hosts = before
-		command = strings.Join(after, " ")
-	}
-
-	if len(hosts) == 0 {
-		fmt.Fprintln(stderr, "run: at least one host is required")
-		return exitUsage
 	}
 	for _, host := range hosts {
 		if err := validateHost(host); err != nil {
@@ -308,6 +315,15 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 			fmt.Fprintln(stderr, "run: --accept-new-host-key must name exactly one host alias in this invocation")
 			return exitUsage
 		}
+	}
+
+	if fromFile {
+		body, err := loadBody(*bodyFile)
+		if err != nil {
+			fmt.Fprintf(stderr, "run: %v\n", err)
+			return exitUsage
+		}
+		command = body
 	}
 
 	// Resolve the artifact store: a caller-injected one (runWithStore)
@@ -540,6 +556,30 @@ func runInvocationFollow(deps Deps, hostOpts []Opts, mode resultModeOptions, std
 			deps.Follow.heartbeat()
 		}
 	}
+}
+
+// consumedFlagTerminator inspects only the prefix already accepted by fs.Parse.
+// Skip separate non-boolean flag values so a literal -- value is not mistaken
+// for the terminator. Parsing and validation remain owned by flag.FlagSet.
+func consumedFlagTerminator(fs *flag.FlagSet, args []string) bool {
+	parsed := args[:len(args)-len(fs.Args())]
+	for i := 0; i < len(parsed); i++ {
+		if parsed[i] == "--" {
+			return true
+		}
+		name, _, hasValue := strings.Cut(strings.TrimLeft(parsed[i], "-"), "=")
+		if hasValue {
+			continue
+		}
+		f := fs.Lookup(name)
+		if f != nil {
+			b, ok := f.Value.(interface{ IsBoolFlag() bool })
+			if !ok || !b.IsBoolFlag() {
+				i++
+			}
+		}
+	}
+	return false
 }
 
 // loadBody reads the command body from path — "-" means stdin, matching

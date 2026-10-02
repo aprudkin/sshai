@@ -40,6 +40,12 @@ var helpDetail = map[string]string{
 	"run": `sshai run [flags] <host...> -- <command>
 sshai run [flags] --body-file <file|-> <host...>
 
+Put all sshai options before the first host; at least one host is required.
+For example: sshai run --body-file check.ps1 windows01
+Not:         sshai run windows01 --body-file check.ps1
+In the inline form, everything after the host/command separator -- is command
+text, not sshai options. Misplaced known options are rejected, not reordered.
+
 Execute <command> on one or more hosts over SSH. Multiple hosts fan out
 concurrently; results print in host (argv) order, followed by one
 aggregate line ("hosts=N ok=X failed=Y transport-errors=Z", with
