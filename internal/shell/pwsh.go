@@ -57,6 +57,9 @@ func PwshScript(body string, st State, restore map[string]string, sentinel strin
 // PwshScriptFollow emits marker directly before the user's script block.
 // An empty marker keeps PwshScript byte-compatible.
 func PwshScriptFollow(body string, st State, restore map[string]string, sentinel, marker string) []byte {
+	// A file's encoding marker is not part of the embedded script block.
+	// Keep interior U+FEFF characters and the wrapper's own outer BOM intact.
+	body = strings.TrimPrefix(body, "\ufeff")
 	var b strings.Builder
 
 	// pwsh over OpenSSH defaults console encoding to cp437; non-cp437 glyphs
