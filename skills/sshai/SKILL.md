@@ -53,6 +53,28 @@ sshai local --shell pwsh --body-file check.ps1
 
 Use `--body-file <file|->` for multiline bodies so the body stays out of interpreter argv. Local execution is not SSH, a remote fallback, a readonly-policy check, an authorization layer, or a security sandbox. It rejects remote-only flags and `--follow`. It retains the same bounded artifacts, passports, JSON v1 envelope, `--delta`, shell/context state, history, `q`, and retention behavior as remote `run`; synthetic targets `local-bash` and `local-pwsh` appear in results and `log`, but never `hosts`. A normal local shell exit is mirrored. Interpreter `start`, `timeout`, and `output-limit` failures are stored as `local-error=<value>` and return process exit `96`; overflow retains the stream cap and `truncated=1`. Timeout or output overflow stops only the direct interpreter child, so cross-platform descendant-process cleanup is not guaranteed.
 
+For local project work, do not rely on the calling tool's cwd. Before the body runs, sshai restores saved cwd and selected environment values for `(local-bash|local-pwsh, ctx)` under the active `SSHAI_ROOT` (default `~/.sshai`). Context defaults to `$SSHAI_CTX` or `default`, not the project directory. Reusing a context across projects can override the caller's cwd and environment. Environment restoration re-applies new/changed exported values relative to the shell target's saved baseline, excluding volatile names; it is not a full reset and does not replay unsets.
+
+Use a project-specific `--ctx` and begin each project-local body with an explicit absolute cwd, stopping on failure. Set required non-secret environment values in the body too; changing cwd does not reset them. These examples use a Bash-compatible caller and quoted stdin bodies. Replace the path with the project's existing absolute local path (for example, `C:\work\project-a` in a PowerShell body on Windows):
+
+```bash
+sshai local --shell bash --ctx project-a --body-file - <<'BASH'
+cd -- '/absolute/path/to/project-a' || exit 1
+pwd
+# Run the authorized project check here, after cwd selection.
+BASH
+```
+
+```bash
+sshai local --shell pwsh --ctx project-a --body-file - <<'POWERSHELL'
+Set-Location -LiteralPath '/absolute/path/to/project-a' -ErrorAction Stop
+(Get-Location).Path
+# Run the authorized project check here, after cwd selection.
+POWERSHELL
+```
+
+Check the retained output for the intended cwd before interpreting relative-path results. A new context separates saved shell state but still inherits the caller's environment; it is not filesystem, process or authorization isolation. For remote `run`, `--ctx` also does not change or reset SSH control sockets. Even a project-specific context may retain a subdirectory, so repeat explicit cwd selection on subsequent project-local runs.
+
 For remote `run`, `--timeout N` is one per-host budget in seconds, not a fresh allowance for each step. It defaults to config `timeout_sec` (factory default 60). The clock starts before loading cached facts, after local policy/selector validation, and covers probing/setup, script staging and execution. Cached facts skip probing; each fan-out host has its own deadline. Slow first-contact setup leaves less time for the body, and Windows upload has no separate two-minute allowance. Both normal and follow transports allow up to 100 ms for pipe cleanup after cancellation, plus scheduling overhead; local result persistence/publication is outside this budget. `duration_ms` includes probing and staging from that same start. A timeout reports `transport-error=timeout`, not proof that remote work stopped or never ran. Check actual remote state before replaying side effects. Local execution's timeout contract is unchanged.
 
 The agent harness's shell-tool timeout is a separate outer deadline: increasing it does not change sshai's `--timeout` or configured default. For a long-running command, set an explicit task-appropriate `--timeout` and give the harness enough time for the whole CLI operation, including initialization, local cleanup and result persistence/publication. Do not set both deadlines to the same value. If the harness stops waiting first, the final passport or JSON result may be missing; that does not establish the remote outcome. Keep both limits finite and task-scoped, not automatic increases or retries after a timeout.

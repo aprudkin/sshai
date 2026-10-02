@@ -155,6 +155,48 @@ overflow are stored respectively as `local-error=start`, `local-error=timeout`, 
 and marks `truncated=1`. A timeout or output overflow stops only the direct interpreter child;
 descendant-process cleanup is not guaranteed across platforms.
 
+### Local cwd and project contexts
+
+Local runs restore saved cwd and selected environment values **before** executing the body.
+State is keyed by `(local-bash|local-pwsh, ctx)` under the active `SSHAI_ROOT` (default
+`~/.sshai`), not by the caller's project directory. Context defaults to `$SSHAI_CTX`, or
+`default` when unset. Reusing a context from another project can therefore override the
+calling tool's current directory and inherited environment: relative test paths may resolve
+in the previous project even when the tool starts in the right directory.
+
+Environment restoration re-applies new or changed exported values relative to the shell target's
+saved baseline, excluding volatile names; it is not a full environment snapshot restore and
+does not replay unsets. A new context has no saved cwd/environment overrides, but still inherits
+the caller's environment. Contexts isolate saved shell state, not files, permissions or processes.
+For remote `run`, changing `--ctx` also does **not** change or reset SSH control sockets.
+
+For project-local work, choose a distinct context per project and set an absolute cwd at the start
+of each body, stopping if that fails. Set any required non-secret environment values in the body
+as well; changing cwd alone does not reset restored environment values. These examples are entered
+from a Bash-compatible caller; replace the path with the project's existing absolute local path
+(and use a path such as `C:\work\project-a` inside the PowerShell body on Windows):
+
+```bash
+sshai local --shell bash --ctx project-a --body-file - <<'BASH'
+cd -- '/absolute/path/to/project-a' || exit 1
+pwd
+# Run the authorized project check here, after cwd selection.
+BASH
+```
+
+```bash
+sshai local --shell pwsh --ctx project-a --body-file - <<'POWERSHELL'
+Set-Location -LiteralPath '/absolute/path/to/project-a' -ErrorAction Stop
+(Get-Location).Path
+# Run the authorized project check here, after cwd selection.
+POWERSHELL
+```
+
+The retained output should show the selected project directory. On a later run, an explicit
+`cd`/`Set-Location` inside the body takes precedence over restored cwd. Merely changing the caller's
+cwd is insufficient; a project context can itself retain a subdirectory from an earlier command.
+These recipes do not change persistence defaults or introduce a `--cwd` option.
+
 ## Machine-readable mode
 
 `sshai run --result-format=json` and `sshai local --result-format=json` emit exactly one
