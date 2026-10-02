@@ -129,6 +129,106 @@ Use the final result and retained artifact to assess the outcome. Choose finite,
 limits before execution rather than automatically increasing them or retrying on timeout. When
 observation is lost, check actual remote state before replaying side effects.
 
+## Recoverable long-running operations
+
+When work must outlive an observer, use the target's **existing, authorized** scheduler or
+operation/result API. `sshai` is not a job manager: an `a123` artifact ID identifies a local
+observation, not a remote operation. Record the remote identity before submission where possible,
+retain the launch acknowledgment, and query that same operation after a timeout or disconnect.
+A successful submission is not successful completion. `--follow` heartbeats show elapsed time,
+not application progress; previews are non-authoritative, and loss of observation does not prove
+remote cancellation. `exec/unknown` failure evidence requires reconciliation; `not_started` refers
+only to that invocation's body, not to an earlier submission.
+
+### Conditional Linux systemd example
+
+Use this example only if the configured target already has a systemd user manager whose lifetime
+extends beyond the SSH login, supports the options below, and provides readable retained journals.
+Confirm those prerequisites and task authorization first; do not install a scheduler, enable
+lingering, elevate privileges or substitute `nohup`/`&` when they are absent. Use the established
+operation/result workflow instead, or report the missing capability. Transient units are not
+reboot-durable: manager restart, host reboot, cleanup or expired journals can leave an unknown result.
+
+The illustrative operation hashes one authorized, stable, non-secret input. Replace `linux01`,
+`/srv/reports/input.dat` and **every occurrence** of the example unit name before real use. Choose
+an unused task-owned name with a fresh unique suffix, and record the alias, user-manager identity,
+unit name, expected command/input, verification criteria and limits **before** submitting. Never
+reuse the example name, attach to an existing unit, or treat the name alone as proof of ownership.
+For side-effecting work, also retain the authorized preconditions, rollback and post-change checks.
+
+Submit once (Bash-compatible caller). The 300-second runtime and 10-second stop allowance are
+illustrative scheduler limits; choose them for the authorized operation. Each CLI call below uses
+15 seconds for remote setup/execution; give the outer harness, for example, 30 seconds per call
+for local overhead. These are separate finite limits, not a whole-operation cancellation guarantee.
+
+```bash
+sshai run --timeout 15 --body-file - linux01 <<'BASH'
+systemd-run --user --unit=sshai-report-example-001.service --property=Type=exec \
+  --property=RuntimeMaxSec=300 --property=TimeoutStopSec=10 \
+  --property=StandardOutput=journal --property=StandardError=journal \
+  --remain-after-exit -- /usr/bin/sha256sum -- /srv/reports/input.dat
+BASH
+```
+
+With `Type=exec`, a normal submission exit 0 acknowledges that the program started, not that its
+hash/result is correct or complete. `--remain-after-exit` retains the completed service for
+inspection; do not add `--collect`, `--wait`, `--pipe` or `--scope` to this detached-service recipe.
+The service does not inherit sshai's restored shell cwd/environment: use absolute paths and the
+scheduler's authorized environment contract, never embedded secrets.
+
+After acknowledgment **or lost observation**, read the pre-recorded unit, not a newly submitted one:
+
+```bash
+sshai run --timeout 15 --body-file - linux01 <<'BASH'
+systemctl --user show sshai-report-example-001.service \
+  --property=Id,LoadState,InvocationID,ActiveState,SubState,Result,ExecMainCode,ExecMainStatus,ExecStart
+BASH
+```
+
+Retain the first valid `InvocationID` with the operation record and require it to match on later
+reads. If the acknowledgment was lost, correlate the fresh unique name with the recorded target,
+user manager and `ExecStart` command/input before adopting the observed identity. Missing or conflicting
+identity is unknown, not permission to replay or clean up. Use at most three status checks, at
+least ten seconds apart; stop earlier on a terminal or unknown result. If still running at the
+limit, report pending with its identity rather than starting another observation round automatically.
+
+Synthetic post-timeout examples (all refer to the same recorded operation):
+
+| Observed scheduler evidence | Interpretation and next action |
+| --- | --- |
+| Matching identity; `loaded`, `active/exited`, `Result=success`, `ExecMainCode=1`, `ExecMainStatus=0` | Process completed successfully; retrieve its retained result and verify the task criteria. Do not resubmit. |
+| Matching identity; `loaded`, `active/running` (even with `Result=success` and status 0) | Still running; no completion claim, replay or cleanup. Use only the remaining observation budget. |
+| `LoadState=not-found`, missing/mismatched identity, unreadable status or conflicting evidence | Outcome unknown; preserve evidence and reconcile the existing result/actual target state. Absence is not proof the work never ran. |
+| Matching identity and a terminal failure | Report failure; inspect retained diagnostics and actual effects before considering any retry or rollback. |
+
+For a completed operation, retrieve a bounded journal slice into a separate sshai artifact:
+
+```bash
+sshai run --timeout 15 --body-file - linux01 <<'BASH'
+journalctl --user-unit=sshai-report-example-001.service --no-pager --lines=40 --output=cat
+BASH
+```
+
+Keep the status/result artifact IDs alongside the remote identity; use `sshai q` for local evidence
+retrieval. A 40-line journal tail, an empty journal, or truncated output is not a complete result
+guarantee. For this example, compare the hash of the stable input with the independently expected
+value; if needed evidence is absent, use the existing result source or report incomplete verification.
+Copy required evidence before scheduler/journal or sshai retention removes it.
+
+Cleanup is not rollback. Only after a verified terminal outcome, retained evidence and a fresh
+identity/ownership check, stop the exact task-owned unit once with
+`sshai run --timeout 15 linux01 -- systemctl --user stop sshai-report-example-001.service`
+(outer harness limit, for example, 30 seconds). Never use wildcards, stop unrelated units or clean up
+running/unknown work to make a retry possible. If cleanup loses observation, check status again
+within the remaining budget before deciding anything else. Replaying a mutation is safe only after
+its established idempotency/deduplication contract or verified target state rules out duplicate
+harm, and only within task authorization; otherwise leave completion unresolved. No automatic retries.
+
+This recipe follows [systemd-run](https://freedesktop.org/software/systemd/man/latest/systemd-run.html),
+[service lifetime/timeout semantics](https://www.freedesktop.org/software/systemd/man/252/systemd.service.html),
+and [journalctl filtering](https://www.freedesktop.org/software/systemd/man/247/journalctl.html).
+The examples are checked with disposable scheduler stand-ins, not a live Linux service manager.
+
 ## Explicit local execution
 
 Use `sshai local` only when the task explicitly calls for execution on the machine running `sshai`:
