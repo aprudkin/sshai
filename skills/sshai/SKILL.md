@@ -92,6 +92,34 @@ sshai run --timeout 300 --follow --follow-interval 5 <host> -- <command>
 
 Follow events are JSONL on stderr; the normal human passport or JSON v1 result remains on stdout. The interval is in seconds, defaults to `10`, and must be at least `1`. Follow mode accepts exactly one host. Treat heartbeats as truthful elapsed-time signals, not application progress. Live combined-output previews are bounded, may end with `output_suppressed`, and are not authoritative; use the saved artifact as the authoritative source for retained evidence. The stream is not persisted and does not imply polling, replay, retry, or authorization.
 
+### PowerShell required steps and optional probes
+
+For an authorized PowerShell check with required cmdlets and an optional probe, adapt this recipe rather than treating `exit=0` as proof that every step succeeded. PowerShell nonterminating errors can accompany exit 0. Use `$ErrorActionPreference = 'Stop'` within this body (or targeted `-ErrorAction Stop` on required cmdlets); sshai does not impose this on all scripts. For native executables, check `$LASTEXITCODE` immediately and handle failures explicitly: cmdlet error preferences are not a portable native-exit policy across PowerShell 7 and 5.1.
+
+This Bash-compatible caller uses a quoted heredoc so `$` expressions reach PowerShell unchanged and the body stays out of argv. Replace `windows01` with the authorized alias and `C:\Reports` with an existing, authorized directory containing the two required, non-secret report files. No secret values belong in the body or expected output; quoting and stdin do not make secrets safe.
+
+```bash
+sshai run --body-file - windows01 <<'POWERSHELL'
+$ErrorActionPreference = 'Stop'
+$root = 'C:\Reports'
+$rows = @(foreach ($name in @('report-a.txt', 'report-b.txt')) {
+    $item = Get-Item -LiteralPath (Join-Path $root $name) -ErrorAction Stop
+    [pscustomobject]@{ name = $name; bytes = $item.Length; label = "${name}: required" }
+})
+$optional = 'present'
+try {
+    $null = Get-Item -LiteralPath (Join-Path $root 'optional.txt') -ErrorAction Stop
+} catch [System.Management.Automation.ItemNotFoundException] {
+    $optional = 'not_found'
+}
+[pscustomobject]@{ files = $rows; optional = $optional } | ConvertTo-Json -Depth 3 -Compress
+POWERSHELL
+```
+
+Construct the collection with `$rows = @(foreach (...) { ... })`, then serialize it; do not pipe a bare `foreach` statement directly. Use `${name}:` to disambiguate a variable followed by a colon. Only the optional file's absence is tolerated and recorded as `not_found`; other errors propagate. A required-file failure stops before the JSON report and produces a nonzero command exit. On success, inspect the retained artifact for both file records and the explicit optional status; process exit 0 alone does not validate the report's meaning or completeness.
+
+The recipe uses PowerShell 5.1-compatible syntax. Parser and synthetic file tests exercise this exact body through local sshai with PowerShell 7.6.6; Windows PowerShell 5.1 and live Windows/OpenSSH were not tested. This is a reusable body pattern, not a mandatory extra remote preflight.
+
 ### Recover observation of long-running work
 
 When an operation must outlive observation, use only the target's existing, authorized scheduler or operation/result API; sshai and `--follow` do not provide a durable job lifecycle. Do not invent a scheduler, install/enable one, or fall back to `nohup`/`&` merely because a command timed out.

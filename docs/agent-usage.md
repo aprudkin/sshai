@@ -36,7 +36,7 @@ Use `sshai` by default when all of these are true:
   7, falls back to 5.1 when unavailable, and can require either host explicitly;
 - the operation executes a command and consumes text output, rather than transferring a file or
   driving an interactive program;
-- command text and expected output contain no secret value;
+- command text, script bodies, and expected output contain no secret values;
 - the operation is already authorized independently of the transport tool.
 
 Use `--body-file -` for multi-line commands so the body stays out of process arguments:
@@ -45,10 +45,14 @@ Use `--body-file -` for multi-line commands so the body stays out of process arg
 sshai run --body-file - <host>
 ```
 
-Feed the script body on standard input through the caller's protected input mechanism. `sshai`
-stores only the body hash in run metadata and audit records, but the remote staged script and
-captured output can still contain body-derived data; never embed passwords, tokens, keys, or other
-secret values in a body.
+Feed the script body on standard input through the caller's protected input mechanism, such as
+a quoted heredoc in a Bash-compatible caller. stdin/body-file keeps body text out of argv; it is
+not a secret-input channel. `sshai` stores only the body hash in run metadata and audit records,
+but temporary/staged scripts and captured output/artifacts can retain body-derived data.
+User-command output is not automatically redacted. Never embed passwords, tokens, keys, or other
+secret values in command text or bodies, or request output containing them. If secret input is
+required, use a separately approved, purpose-built workflow, not an implicit raw-SSH or
+archived-helper fallback.
 
 For a Linux host such as OpenWrt that lacks Bash, select its POSIX shell explicitly:
 

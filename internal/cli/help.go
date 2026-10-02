@@ -51,9 +51,14 @@ concurrently; results print in host (argv) order, followed by one
 aggregate line ("hosts=N ok=X failed=Y transport-errors=Z", with
 "setup-errors=N" only when applicable). The command
 body is never placed in ssh/scp argv: use "-- <words>" for a short inline
-command in sshai's own argv, or --body-file for anything long, multi-line,
-secret, or containing characters that would need shell escaping ("-"
-reads the body from stdin instead of a file).
+command in sshai's own argv, or --body-file for long, multi-line text or
+characters that would need shell escaping ("-" reads stdin instead of a file).
+
+Do not embed secret values in command text or script bodies, or request output
+containing them. stdin/body-file keeps body text out of argv, not out of staged
+scripts or captured output/artifacts. sshai does not redact user-command output.
+Secret input requires a separately authorized, purpose-built workflow,
+not an implicit raw-SSH or archived-helper fallback.
 
 Output is a compact passport, not raw output: a status line carrying
 exactly one of exit=N, setup-error=windows-shell, or transport-error=R, then "file=<path>" pointing
@@ -183,6 +188,12 @@ outside this command's contract.
 The body never enters interpreter argv. Bash runs as "bash -s" with the
 wrapped body on stdin. PowerShell runs only "pwsh -NoProfile -File" with a
 private temporary script; there is no Windows PowerShell 5.1 fallback.
+Do not embed secret values in command text or script bodies, or request output
+containing them. stdin/body-file keeps body text out of argv, not out of temporary
+scripts or captured output/artifacts. sshai does not redact user-command output.
+Secret input requires a separately authorized, purpose-built workflow,
+not an implicit raw-SSH or archived-helper fallback.
+
 Results use the same bounded artifacts, passports, JSON v1 envelope, state,
 delta, history, query, and retention machinery as remote runs. Stable targets
 "local-bash" and "local-pwsh" isolate shell state and appear in results and

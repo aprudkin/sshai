@@ -46,8 +46,9 @@ func pwq(s string) string {
 // new to sshai, not part of ps_ssh.py, which never captured state this way.
 // The returned bytes
 // are meant to be scp-staged to <RemoteDir>/<slug>.ps1 and invoked with
-// -File — body is never placed in argv, so it can carry arbitrary
-// content including secrets without leaking through the process table.
+// -File, keeping body text out of interpreter argv. This is argv protection,
+// not secret handling: staged scripts and captured output can retain body-derived
+// data; output is not redacted. Do not embed secret values in body.
 // Ported from ps_ssh.py (BOM + encoding preamble; the try/finally state
 // epilogue is new to sshai, matching BashWrap's trap-EXIT epilogue).
 func PwshScript(body string, st State, restore map[string]string, sentinel string) []byte {

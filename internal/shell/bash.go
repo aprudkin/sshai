@@ -54,9 +54,9 @@ func NewSentinel() string {
 // runs, it restores st.Cwd (when non-empty) and re-exports every
 // variable in restore, sorted by name so the generated script is
 // deterministic across runs with the same inputs. The returned bytes are
-// meant for `bash -s` on stdin — body is never placed in argv, so it can
-// carry arbitrary content including secrets without leaking through the
-// process table.
+// meant for `bash -s` on stdin, keeping body text out of interpreter argv.
+// This is argv protection, not secret handling: captured output can retain
+// body-derived data and is not redacted. Do not embed secret values in body.
 func BashWrap(body string, st State, restore map[string]string, sentinel string) []byte {
 	return BashWrapFollow(body, st, restore, sentinel, "")
 }
