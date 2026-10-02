@@ -211,10 +211,12 @@ host.
   exit are different outcomes.
 - `sshai local` is neither SSH nor a remote fallback, readonly-policy check, authorization layer, or
   security sandbox. It rejects remote-only flags and `--follow`.
-- Local interpreter start failures, timeouts, and output limits are recorded as
-  `local-error=start`, `local-error=timeout`, and `local-error=output-limit`; each returns process
-  exit `96`. On timeout or output overflow, only the direct child interpreter is stopped;
-  descendant-process cleanup is not guaranteed across platforms.
+- Local interpreter start failures, timeouts, output limits, and other capture failures are recorded
+  as `local-error=start`, `local-error=timeout`, `local-error=output-limit`, and `local-error=capture`;
+  each returns process exit `96`. The timeout includes draining inherited output to EOF after the
+  interpreter exits; a zero child exit alone does not prove complete capture. Cancellation stops
+  only the direct child interpreter and closes local capture; descendant-process cleanup is not
+  guaranteed across platforms.
 - The archived `ps_ssh.py` helper is not a fallback.
 
 See [agent usage](docs/agent-usage.md) for default-use and fallback rules.

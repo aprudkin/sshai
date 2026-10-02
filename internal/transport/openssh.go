@@ -37,6 +37,10 @@ const (
 // to a TransportError rather than passing it through as an honest exit.
 const execStartFailedRC = -2
 
+// execCaptureFailedRC carries incomplete capture through the legacy Runner
+// signature without presenting a direct-child exit as a remote result.
+const execCaptureFailedRC = -3
+
 // Transport diagnostics are deliberately an allowlist of fixed phrases.
 // ssh/scp stderr may contain hostnames, key fingerprints, algorithm offers,
 // paths, or configuration excerpts; none of that raw text may cross the
@@ -101,7 +105,8 @@ type OpenSSH struct {
 	// Runner executes argv (argv[0] is "ssh" or "scp"), feeding it stdin
 	// and enforcing timeout. It returns the remote process's exit code,
 	// its combined stdout+stderr, and whether timeout elapsed before the
-	// process exited. Exposed for injection in tests; NewOpenSSH wires it
+	// process exited and inherited output reached EOF. Exposed for injection
+	// in tests; NewOpenSSH wires it
 	// to a default backed by os/exec.
 	Runner func(argv []string, stdin []byte, timeout time.Duration) (rc int, out []byte, timedOut bool)
 }
@@ -284,7 +289,7 @@ func (tr *OpenSSH) lookupHostKeys(host string, sshOpts []string, timeout time.Du
 	argv := append([]string{"ssh", "-G"}, sshOpts...)
 	argv = append(argv, host)
 	result := runner.Run(argv, nil, min(remaining, hostKeyLookupTimeout), hostKeyConfigCap)
-	if result.StartErr != nil || result.TimedOut || result.Truncated || result.ExitCode != 0 {
+	if result.StartErr != nil || result.TimedOut || result.Truncated || result.CaptureErr != nil || result.ExitCode != 0 {
 		return nil, errHostKeyInspection
 	}
 	out := result.Output
@@ -468,8 +473,8 @@ func safeHostKeyAlgorithm(algorithm string) bool {
 // clean local process exit is reported the same way, since there is no
 // remote exit code to speak of either. Any other exit code, including 0,
 // is the remote command's own honest status. A context deadline exceeded
-// before the process finished maps to TransportError{"timeout"} regardless
-// of rc.
+// before the process finished and inherited output reached EOF maps to
+// TransportError{"timeout"} regardless of rc.
 func (tr *OpenSSH) Exec(host, command string, stdin []byte, timeout time.Duration) (Result, error) {
 	deadline := time.Now().Add(timeout)
 	if err := tr.prepareAcceptedHostKey(host, deadline); err != nil {
@@ -491,6 +496,9 @@ func (tr *OpenSSH) Exec(host, command string, stdin []byte, timeout time.Duratio
 	}
 	if rc == execStartFailedRC {
 		return Result{}, newTransportError("ssh", "ssh process failed to start")
+	}
+	if rc == execCaptureFailedRC {
+		return Result{}, newTransportError("ssh", "ssh output capture incomplete")
 	}
 	if rc == 255 {
 		return Result{}, NewTransportError("ssh", out)
@@ -721,6 +729,11 @@ func (tr *OpenSSH) Put(host, localPath, remotePath string, timeout time.Duration
 	if rc == execStartFailedRC {
 		return newTransportError("scp", "scp process failed to start")
 	}
+	// Put has no truncated-result surface. The legacy Runner encodes cap
+	// overflow as oversized output, even if the direct SCP child exited zero.
+	if rc == execCaptureFailedRC || int64(len(out)) > max(tr.streamCap, 0) {
+		return newTransportError("scp", "scp output capture incomplete")
+	}
 	if rc < 0 {
 		return NewTransportError("scp", out)
 	}
@@ -741,6 +754,9 @@ func (tr *OpenSSH) run(argv []string, stdin []byte, timeout time.Duration) (int,
 		// Runner's legacy function shape has no truncation result. Preserve it
 		// for OpenSSH callers with a private sentinel which Exec strips.
 		return result.ExitCode, append(result.Output, 0), result.TimedOut
+	}
+	if result.CaptureErr != nil {
+		return execCaptureFailedRC, nil, result.TimedOut
 	}
 	return result.ExitCode, result.Output, result.TimedOut
 }

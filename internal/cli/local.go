@@ -216,6 +216,9 @@ func runLocal(store *artifact.Store, streamCap int64, run localRunFunc, opts loc
 	case result.TimedOut:
 		localError = "timeout"
 		fmt.Fprintln(stderr, "local: execution timed out")
+	case result.CaptureErr != nil:
+		localError = "capture"
+		fmt.Fprintln(stderr, "local: output capture incomplete")
 	}
 
 	out := result.Output
@@ -253,8 +256,9 @@ func runLocal(store *artifact.Store, streamCap int64, run localRunFunc, opts loc
 	}
 	storedExit := result.ExitCode
 	if localError != "" {
-		// The direct child was not allowed to finish normally, so its
-		// signal/OS-specific ProcessState code is not an honest shell exit.
+		// This is a runner failure, not an unqualified shell result. The
+		// child may have exited before capture failed; zero is only the
+		// existing placeholder paired with LocalError, never a success claim.
 		storedExit = 0
 	}
 	meta := artifact.Meta{

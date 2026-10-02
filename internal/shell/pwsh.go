@@ -147,7 +147,7 @@ func LooksLikePwshDefault(output []byte) bool {
 
 // PwshParse splits the raw output of a PwshScript-wrapped script into the
 // command's real output and the state its try/finally epilogue appended.
-// It first runs raw through FilterCLIXML to drop the CLIXML wrapper pwsh
+// It first filters CLIXML lines (without trimming the tail) to drop the wrapper pwsh
 // emits around stderr/warning/verbose streams over a non-interactive SSH
 // session (ported from ps_ssh.py's filter_clixml), then strips a trailing
 // "\r" from every line — pwsh over OpenSSH writes CRLF, but ps_ssh.py
@@ -171,7 +171,7 @@ func LooksLikePwshDefault(output []byte) bool {
 // non-epilogue failure path would) and st is the zero State; the caller
 // simply does not update its stored state.
 func PwshParse(raw []byte, sentinel string) (out []byte, st State, ok bool) {
-	lines := FilterCLIXML(string(raw))
+	lines := filterCLIXMLLines(string(raw))
 	for i, line := range lines {
 		lines[i] = strings.TrimSuffix(line, "\r")
 	}

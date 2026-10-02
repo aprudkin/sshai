@@ -179,6 +179,9 @@ func TestLocalErrorsAreDistinctAndSaved(t *testing.T) {
 		{"start", runner.Result{StartErr: os.ErrNotExist}, "start", false, "", "failed to start"},
 		{"timeout", runner.Result{ExitCode: -1, Output: []byte("partial"), TimedOut: true}, "timeout", false, "partial", "timed out"},
 		{"output limit", runner.Result{ExitCode: -1, Output: []byte("1234"), Truncated: true}, "output-limit", true, "1234", ""},
+		{"capture", runner.Result{ExitCode: 3, Output: []byte("partial"), CaptureErr: os.ErrClosed}, "capture", false, "partial", "output capture incomplete"},
+		{"timeout after child exit", runner.Result{ExitCode: 3, Output: []byte("partial"), TimedOut: true, CaptureErr: os.ErrClosed}, "timeout", false, "partial", "timed out"},
+		{"cap after child exit", runner.Result{ExitCode: 3, Output: []byte("1234"), Truncated: true, CaptureErr: os.ErrClosed}, "output-limit", true, "1234", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

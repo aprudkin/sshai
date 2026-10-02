@@ -12,6 +12,15 @@ var clixmlPrefixes = []string{
 }
 
 func FilterCLIXML(text string) []string {
+	kept := filterCLIXMLLines(text)
+	for len(kept) > 0 && strings.TrimSpace(kept[len(kept)-1]) == "" {
+		kept = kept[:len(kept)-1]
+	}
+	return kept
+}
+
+// Preserve trailing lines when parsing framed state and descendant output.
+func filterCLIXMLLines(text string) []string {
 	var kept []string
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.ReplaceAll(line, "_x000D_", "")
@@ -25,9 +34,6 @@ func FilterCLIXML(text string) []string {
 		if !drop {
 			kept = append(kept, line)
 		}
-	}
-	for len(kept) > 0 && strings.TrimSpace(kept[len(kept)-1]) == "" {
-		kept = kept[:len(kept)-1]
 	}
 	return kept
 }

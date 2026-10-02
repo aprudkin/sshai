@@ -109,10 +109,10 @@ func BashWrapFollow(body string, st State, restore map[string]string, sentinel, 
 // BashParse splits the raw output of a BashWrap-wrapped script into the
 // command's real output and the state its trap-EXIT epilogue appended.
 // It scans from the end for the last line exactly equal to sentinel —
-// the epilogue always runs last, so this finds the real marker even if
-// the command's own output happens to contain the same text. out is
-// everything before that line, with the epilogue's own leading blank
-// line (from its `printf '\n%s\n'`) removed. The two lines that follow
+// this finds the final state marker even if the command's own output
+// happens to contain the same text. out excludes the epilogue's own
+// leading blank line (from its `printf '\n%s\n'`) and its three state
+// lines, but retains any descendant output after them. The two lines that follow
 // the sentinel are the cwd and the base64 env -0 dump; a missing
 // trailing newline after either is tolerated since it only changes
 // whether an extra empty line trails the split.
@@ -138,11 +138,10 @@ func BashParse(raw []byte, sentinel string) (out []byte, st State, ok bool) {
 }
 
 // splitAtSentinel scans lines from the end for the last line exactly
-// equal to sentinel — an epilogue always runs last, so this finds the
-// real marker even if the wrapped command's own output happens to
-// contain the same text. It returns everything before that line
-// re-joined with "\n" as out, and the lines that follow the sentinel
-// (state lines: cwd first, then the encoded env dump) as rest. ok is
+// equal to sentinel. It removes the marker, cwd and encoded env dump,
+// retaining output both before the epilogue and after its final newline.
+// Descendants can keep writing after the direct shell's epilogue. The
+// lines following the sentinel are returned as rest for state parsing. ok is
 // false when sentinel never appears in lines, in which case out and rest
 // are both nil — shared by BashParse and PwshParse, whose state lines
 // carry differently-encoded env dumps but split off the same way.
@@ -157,7 +156,11 @@ func splitAtSentinel(lines []string, sentinel string) (out []byte, rest []string
 	if idx == -1 {
 		return nil, nil, false
 	}
-	return []byte(strings.Join(lines[:idx], "\n")), lines[idx+1:], true
+	body := strings.Join(lines[:idx], "\n")
+	if idx+3 < len(lines) {
+		body += strings.Join(lines[idx+3:], "\n")
+	}
+	return []byte(body), lines[idx+1:], true
 }
 
 // decodeEnvDump decodes b64 — the base64 form of a NUL-separated

@@ -112,7 +112,8 @@ Flags:
   --timeout N         per-host budget in seconds; default from config timeout_sec
                       (factory default 60). Starts before cached facts are
                       loaded, after local policy/selector validation; covers
-                      probing/setup, script staging and execution together.
+                      probing/setup, script staging, execution and output
+                      draining to EOF, even after SSH exits.
                       Each later step gets only the remaining time; fan-out
                       hosts have independent budgets. --follow does not
                       extend it. Timeout reports transport-error=timeout,
@@ -197,18 +198,26 @@ Flags:
                       "-- command" form; use this for multiline bodies that must stay out of argv
   --delta             diff against the previous matching local shell/context/body
   --budget N          passport output budget in tokens (~bytes/4); default from config
-  --timeout N         execution timeout in seconds; default from config
+  --timeout N         interpreter and output-drain timeout in seconds;
+                      default from config; child exit alone does not end capture
   --ctx NAME          named state context; default $SSHAI_CTX or "default"
   --result-format FORMAT
                       "human" (default) or a JSON v1 envelope
   --result-out FILE   atomically write the private JSON envelope; requires
                       --result-format=json
 
-A normal shell exit is stored and mirrored. Start failure, timeout, and output
-overflow are stored as local-error=start, local-error=timeout, or
-local-error=output-limit and sshai exits 96. Overflow retains exactly the
-configured stream cap and marks truncated=1. Remote-only flags and --follow
-are rejected.
+A normal shell exit with complete capture is stored and mirrored. Output is
+drained to EOF within the same timeout, including descendant output after the
+shell exits and after its state epilogue. A pipe still open at the deadline is
+a timeout even if the shell exited zero.
+Start failure, timeout, output overflow, and other capture failure are stored
+as local-error=start, local-error=timeout, local-error=output-limit, or
+local-error=capture and sshai exits 96. Failures retain partial raw output,
+skip shell-state updates, and use metadata/JSON exit=0 only as a placeholder
+paired with local_error, not success. Overflow retains exactly the configured
+stream cap and marks truncated=1; truncated=false does not prove complete
+capture on a failed run. Pipe cleanup allows up to 100ms extra plus scheduling.
+Remote-only flags and --follow are rejected.
 `,
 	"q": `sshai q [--budget N] <id> -- <tool> <args...>
 

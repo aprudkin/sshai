@@ -95,14 +95,20 @@ avoid probing but do not change the budget rule. Remote result `duration_ms` (an
 measures from the same start through the remote outcome and local transport cleanup, including
 successful probes and staging rather than only execution.
 
+Normal and follow execution drain the combined output to EOF within the same budget, even if
+SSH exits first. A descendant holding the pipe open can therefore exhaust the budget after a
+zero SSH exit; that is incomplete observation, not an unqualified successful result. Output
+arriving after the shell's state epilogue is retained, not discarded with the state lines.
+
 On expiry, sshai stops the local SSH/SCP process and reports `transport-error=timeout` (exit 98).
-Normal and follow transports allow up to 100 ms for inherited-pipe cleanup after cancellation,
+Normal and follow transports allow up to 100 ms for pipe cleanup after cancellation,
 plus OS scheduling overhead. This is not a whole-CLI wall-clock guarantee: input/config/store
 initialization precedes the host clock, and local state/artifact persistence, result publication
 and retention follow remote work. Slow local I/O or a blocked output consumer can delay finalization.
 A local timeout or disconnect does **not** guarantee that the remote body stopped or never ran;
-check actual remote state before considering a replay of side-effecting work. Local execution's
-separate timeout semantics are unchanged.
+check actual remote state before considering a replay of side-effecting work. A timeout during
+execution or output draining has `failure_phase=exec` and `remote_completion=unknown`; remote
+failure artifacts contain only the canonical diagnostic, not partial raw transport output.
 
 ### CLI deadline versus the agent harness
 
@@ -249,11 +255,21 @@ passports, JSON v1 envelope, `--delta`, named state, history, local query, and r
 as `run`. Synthetic targets `local-bash` and `local-pwsh` isolate state by shell and context; they
 appear in results and `log`, but never in `hosts`.
 
-A normal local shell exit is stored and mirrored. Interpreter start failure, timeout, and output
-overflow are stored respectively as `local-error=start`, `local-error=timeout`, and
-`local-error=output-limit`, and `sshai` exits `96`. Overflow retains only the configured stream cap
-and marks `truncated=1`. A timeout or output overflow stops only the direct interpreter child;
-descendant-process cleanup is not guaranteed across platforms.
+A normal local shell exit with complete capture is stored and mirrored. The local `--timeout`
+covers the interpreter and draining inherited output to EOF, even after the interpreter exits.
+Delayed descendant output within that budget is retained, including output after the state
+epilogue. If a descendant keeps the pipe open past the deadline, the run is a timeout even if
+the interpreter exited zero; a child exit alone does not prove complete capture.
+
+Interpreter start failure, timeout, output overflow, and other output-capture failure are stored
+respectively as `local-error=start`, `local-error=timeout`, `local-error=output-limit`, and
+`local-error=capture`, and `sshai` exits `96`. Local failures retain the partial raw capture and
+do not update saved shell state. Their metadata/JSON `exit=0` is a placeholder paired with
+`local_error`, not a successful shell result. Overflow retains only the configured stream cap
+and marks `truncated=1`; `truncated=false` alone does not prove complete output on a failed run.
+Cancellation stops only the direct interpreter child and closes local capture; descendant-process
+cleanup is not guaranteed across platforms. Pipe cleanup allows up to 100 ms beyond the timeout,
+plus scheduling overhead.
 
 ### Local cwd and project contexts
 
