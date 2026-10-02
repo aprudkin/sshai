@@ -2,7 +2,13 @@
 
 **Issue:** [sshai#10](https://github.com/aprudkin/sshai/issues/10)
 
-**Status:** Design draft, not frozen or approved for execution. The documented interview selected
+**Current methodology:** The user subsequently selected the prospective
+[tool-audit and model-assessment amendment](issue10-methodology-amendment.md). It replaces the
+full descendant-resource observer, mandatory user grading and interleaved pilot order for new
+phases. Earlier requirements and authorization history below are preserved as context, not a
+veto on that explicit amendment. Concrete execution manifests still require qualification and freeze.
+
+**Original draft status:** Design draft, not frozen or approved for execution. The documented interview selected
 this target design; it did not authorize runner changes, model requests, remote access, additional
 spending, commits, or pushes. No measurements are reported here. Frozen v1.1 and v2.1 artifacts
 remain unchanged. See [the analyzer guide](issue10-analyzer.md) for the current implementation

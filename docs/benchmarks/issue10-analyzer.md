@@ -1,5 +1,11 @@
 # Issue 10 analyzer and run guide
 
+**Prospective methodology:** The user selected the
+[tool-audit and model-assessment amendment](issue10-methodology-amendment.md), including a
+separate local-first pilot. The old independent descendant-resource observer and mandatory user
+grading requirements below describe the earlier design. Existing v3 offline commands and their
+conservative flags remain unchanged; a new methodology is not retrospective capture qualification.
+
 **Status:** Separate v3 offline coordination work plus the historical local-only runner reference.
 This guide authorizes no model, remote, or network run. Read it with the authoritative
 [Issue 10 study protocol](issue10-protocol.md). Offline planning/import/analysis does not implement
