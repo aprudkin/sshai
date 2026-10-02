@@ -171,12 +171,21 @@ For automation, request a versioned JSON envelope:
 sshai run --result-format=json web01 -- uname -a
 ```
 
-For one long-running host command, opt into bounded JSONL events on stderr while preserving the
-normal final stdout result:
+For one authorized host check expected to take about four minutes, allow five minutes for setup
+and execution, and opt into bounded JSONL events on stderr while preserving the final stdout
+result. Replace `web01` and `long-running-check` with the configured alias and authorized command:
 
 ```bash
-sshai run --follow --follow-interval 5 web01 -- long-running-check
+sshai run --timeout 300 --follow --follow-interval 5 web01 -- long-running-check
 ```
+
+Set the agent harness's shell-tool timeout separately to allow the whole CLI operation (for example,
+330 seconds here, including local cleanup and result publication headroom). Increasing that outer
+limit does not change sshai's configured `timeout_sec` (factory default 60 seconds). These example
+limits are task-specific, not a guarantee for slow local I/O. `--follow` does not extend the CLI
+deadline; heartbeat frequency is not application progress. A timeout does not guarantee remote
+cancellation. See [remote timeout budgets](docs/agent-usage.md#remote-timeout-budget) before sizing
+limits or reconciling an interrupted operation.
 
 Recognized SSH failures expose only a canonical `transport_diagnostic`; raw SSH stderr remains
 private. If a Windows host cannot create its required scratch directory through either supported

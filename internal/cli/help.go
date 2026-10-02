@@ -103,7 +103,7 @@ Flags:
                       config (factory default 500).
                       Fan-out divides this across hosts, floored at
                       100 tokens/host
-  --timeout N         per-host budget in seconds; default from config
+  --timeout N         per-host budget in seconds; default from config timeout_sec
                       (factory default 60). Starts before cached facts are
                       loaded, after local policy/selector validation; covers
                       probing/setup, script staging and execution together.
@@ -137,6 +137,23 @@ Flags:
   --follow-interval N     heartbeat interval in seconds while following;
                           default 10, minimum 1, requires --follow
 
+
+Long-running example (replace web01 and long-running-check with an authorized
+alias and command expected to take about four minutes):
+  sshai run --timeout 300 --follow --follow-interval 5 web01 -- long-running-check
+
+The agent harness's shell-tool timeout is a separate outer deadline. Increasing
+it does not change sshai's --timeout or configured default. Set it separately
+with room for the whole CLI operation: initialization, the per-host budget,
+local cleanup and result persistence/publication. For this example, 330 seconds
+leaves 30 seconds of local-overhead headroom, not a guarantee for slow local I/O.
+Do not set both deadlines equal; choose finite task-appropriate limits before
+execution, not automatic increases or retries after a timeout. If the harness
+stops waiting first, the final passport or JSON result may be missing; that does
+not establish the remote outcome or guarantee cancellation.
+--follow does not extend or reset --timeout. --follow-interval only changes
+heartbeat frequency: heartbeats show elapsed time, not application progress.
+Live previews are non-authoritative; assess the final result and retained artifact.
 
 sshai's own process exit mirrors the remote command's exit code.
 Reserved: 96 usage error, 97 policy denied (host marked readonly,

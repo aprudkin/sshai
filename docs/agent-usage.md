@@ -87,6 +87,31 @@ A local timeout or disconnect does **not** guarantee that the remote body stoppe
 check actual remote state before considering a replay of side-effecting work. Local execution's
 separate timeout semantics are unchanged.
 
+### CLI deadline versus the agent harness
+
+The agent harness's shell-tool timeout is a separate outer deadline for the CLI invocation.
+Increasing it does not change sshai's `--timeout` or configured `timeout_sec`. For long work, set
+an explicit CLI budget and an outer deadline large enough for the whole operation: the remote
+budget plus local initialization, transport cleanup, artifact/state persistence and result
+publication. Equal values leave no headroom. If the harness stops waiting first, a final passport
+or JSON result may be missing; that is not evidence of remote completion or cancellation.
+
+For example, for one authorized check expected to take about four minutes, allow five minutes
+for the host's setup and execution, and set the harness's shell-tool timeout separately to, for
+example, 330 seconds. The extra 30 seconds is illustrative local-overhead headroom, not a universal
+guarantee. Replace `web01` with the configured alias and `long-running-check` with the authorized
+command; neither timeout setting grants authorization:
+
+```bash
+sshai run --timeout 300 --follow --follow-interval 5 web01 -- long-running-check
+```
+
+`--follow` does not extend or reset the CLI deadline, and `--follow-interval 5` only sets heartbeat
+frequency. Heartbeats show elapsed time, not application progress; previews are non-authoritative.
+Use the final result and retained artifact to assess the outcome. Choose finite, task-appropriate
+limits before execution rather than automatically increasing them or retrying on timeout. When
+observation is lost, check actual remote state before replaying side effects.
+
 ## Explicit local execution
 
 Use `sshai local` only when the task explicitly calls for execution on the machine running `sshai`:
@@ -181,8 +206,9 @@ still contain only the existing fixed or allowlisted diagnostic, not raw transpo
 
 ## Live follow events
 
-For one host, `sshai run --follow --follow-interval 10 ...` writes ephemeral
-JSONL v1 progress events to stderr. It emits `started` only after the remote
+For one host, `--follow` writes ephemeral JSONL v1 events to stderr; use an explicit
+CLI timeout and outer harness headroom for long work, as in the
+[deadline example](#cli-deadline-versus-the-agent-harness). It emits `started` only after the remote
 wrapper has begun the user body, then periodic `heartbeat` events and bounded
 combined-output previews. Output events have `stream: "combined"` and UTF-8
 `data`; preview payload is capped at 64 KiB and 256 lines, each event's raw

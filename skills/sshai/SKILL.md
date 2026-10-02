@@ -53,12 +53,16 @@ Use `--body-file <file|->` for multiline bodies so the body stays out of interpr
 
 For remote `run`, `--timeout N` is one per-host budget in seconds, not a fresh allowance for each step. It defaults to config `timeout_sec` (factory default 60). The clock starts before loading cached facts, after local policy/selector validation, and covers probing/setup, script staging and execution. Cached facts skip probing; each fan-out host has its own deadline. Slow first-contact setup leaves less time for the body, and Windows upload has no separate two-minute allowance. Both normal and follow transports allow up to 100 ms for pipe cleanup after cancellation, plus scheduling overhead; local result persistence/publication is outside this budget. `duration_ms` includes probing and staging from that same start. A timeout reports `transport-error=timeout`, not proof that remote work stopped or never ran. Check actual remote state before replaying side effects. Local execution's timeout contract is unchanged.
 
-For one long-running host command, request an ephemeral structured event stream explicitly; `--follow` does not extend the timeout:
+The agent harness's shell-tool timeout is a separate outer deadline: increasing it does not change sshai's `--timeout` or configured default. For a long-running command, set an explicit task-appropriate `--timeout` and give the harness enough time for the whole CLI operation, including initialization, local cleanup and result persistence/publication. Do not set both deadlines to the same value. If the harness stops waiting first, the final passport or JSON result may be missing; that does not establish the remote outcome. Keep both limits finite and task-scoped, not automatic increases or retries after a timeout.
+
+For example, if one authorized check is expected to take about four minutes, a five-minute per-host budget can leave time for setup. Set the harness's shell-tool timeout separately to, for example, 330 seconds to leave local-overhead headroom. These are illustrative limits, not a guarantee that 30 seconds always suffices; size both for the task and environment. Replace `<host>` with its configured alias and `<command>` with the authorized check:
 
 ```bash
-sshai run --follow <host> -- <command>
-sshai run --follow --follow-interval 5 <host> -- <command>
+sshai run --timeout 300 --follow <host> -- <command>
+sshai run --timeout 300 --follow --follow-interval 5 <host> -- <command>
 ```
+
+`--follow` enables ephemeral observation; it does not extend or reset `--timeout`. Changing `--follow-interval` only changes heartbeat frequency, not the execution budget.
 
 Follow events are JSONL on stderr; the normal human passport or JSON v1 result remains on stdout. The interval is in seconds, defaults to `10`, and must be at least `1`. Follow mode accepts exactly one host. Treat heartbeats as truthful elapsed-time signals, not application progress. Live combined-output previews are bounded, may end with `output_suppressed`, and are not authoritative; use the saved artifact as the authoritative source for retained evidence. The stream is not persisted and does not imply polling, replay, retry, or authorization.
 
