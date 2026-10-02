@@ -73,6 +73,26 @@ func TestHelpRunShowsFullFlagReference(t *testing.T) {
 	}
 }
 
+func TestHelpRunExplainsFailureEvidence(t *testing.T) {
+	var out, errB bytes.Buffer
+	if rc := Help([]string{"run"}, &out, &errB); rc != 0 {
+		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
+	}
+	for _, want := range []string{
+		"failure-phase=probe|stage|exec",
+		"remote-completion=not_started|unknown",
+		"failure_phase", "remote_completion",
+		"not_started means this invocation did not dispatch user-body execution",
+		"unknown means execution was attempted but completion is unconfirmed",
+		"Check actual remote state before replaying side effects",
+		"Missing fields are not evidence that the body did not run",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("help run missing failure evidence contract %q", want)
+		}
+	}
+}
+
 func TestHelpLocalDocumentsFlagsAndSafetyBoundary(t *testing.T) {
 	var out, errB bytes.Buffer
 	if rc := Help([]string{"local"}, &out, &errB); rc != 0 {

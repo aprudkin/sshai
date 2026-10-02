@@ -62,6 +62,19 @@ is never exposed. Only captured output up to the configured stream cap is
 retained; output beyond that cap is discarded and marked truncated=1.
 Query the file locally with ` + "`sshai q`" + ` or your own tools.
 
+Saved transport/setup failures add failure-phase=probe|stage|exec and
+remote-completion=not_started|unknown to the status line (JSON fields
+failure_phase and remote_completion, also in follow completed outcomes).
+probe covers discovery/setup; stage covers Windows script upload;
+exec covers the execution boundary, including deadline expiry before dispatch.
+not_started means this invocation did not dispatch user-body execution;
+unknown means execution was attempted but completion is unconfirmed.
+Probe/setup and stage failures are not_started. An exec failure is unknown
+unless the deadline expired before dispatch. These fields do not diagnose the
+root cause or prove cancellation. Check actual remote state before replaying side effects.
+Normal command results, local runs and older records omit the fields.
+Missing fields are not evidence that the body did not run.
+
 Flags:
   --body-file FILE   read the command body from FILE ("-" for stdin)
                       instead of the "-- command" form
@@ -127,8 +140,8 @@ Flags:
 
 sshai's own process exit mirrors the remote command's exit code.
 Reserved: 96 usage error, 97 policy denied (host marked readonly,
-command not on the allowlist), 98 transport error (delivery failed, the
-command may not have run at all), 99 Windows shell setup error (SSH
+command not on the allowlist), 98 transport error (delivery or observation
+failed; execution may have occurred), 99 Windows shell setup error (SSH
 connected but neither supported PowerShell setup form worked). A genuine remote
 exit of 96/97/98/99 is never confused with these: the status line's exit=N,
 setup-error=R, or transport-error=R is the source of truth, not the process

@@ -148,6 +148,37 @@ explicit accept-new path returns only the algorithm and SHA256 fingerprint of th
 same envelope bytes plus its trailing newline. The destination is mode
 `0600`; symlinks, directories, and other non-regular paths are refused.
 
+## Remote failure evidence
+
+Saved remote transport and Windows setup failures add two optional string fields to JSON v1,
+SQLite metadata, and the follow `completed.outcome`. Human passports use the corresponding
+`failure-phase` and `remote-completion` labels. They describe this invocation's user body, not
+previous runs or whether setup/upload changed remote scratch state.
+
+| `failure_phase` | Boundary where the failure was observed | `remote_completion` |
+| --- | --- | --- |
+| `probe` | Host discovery or Windows shell setup, before body dispatch | `not_started` |
+| `stage` | Windows script upload, before body dispatch | `not_started` |
+| `exec` | Deadline expired before the execution call was dispatched | `not_started` |
+| `exec` | Execution call was dispatched but transport failed | `unknown` |
+
+`not_started` means sshai did not dispatch user-body execution in this invocation. `unknown`
+means the body may not have started, may still be running, or may already have completed. The
+phase comes from the failed call site, never from parsing an SSH/SCP error message. Even a
+recognized transport diagnostic or a follow `started` event does not resolve completion.
+
+For example, a synthetic `transport_error: "timeout"`, `failure_phase: "exec"`,
+`remote_completion: "unknown"` result after submitting a state-changing command is not proof
+that the change failed. Check the actual target state or the operation's existing result before
+replaying side effects; neither timeout nor disconnect guarantees remote cancellation. These
+fields do not authorize a retry or establish the transport failure's root cause.
+
+Normal command results (including nonzero command exits), local execution, and older records
+omit both fields. Missing fields are not evidence that the body did not run. Existing error
+classes, summary counts, and exit codes are unchanged: Windows setup failure remains
+`setup_error: "windows-shell"` / exit `99`, now with `probe` / `not_started`. Artifact bodies
+still contain only the existing fixed or allowlisted diagnostic, not raw transport output.
+
 ## Live follow events
 
 For one host, `sshai run --follow --follow-interval 10 ...` writes ephemeral

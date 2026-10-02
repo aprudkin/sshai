@@ -697,7 +697,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 				return handleSetupError(deps, opts, se, time.Since(start).Milliseconds(), stdout, stderr)
 			}
 			if te, isTE := asTransportError(err); isTE {
-				return handleTransportError(deps, opts, te, time.Since(start).Milliseconds(), stdout, stderr)
+				return handleTransportError(deps, opts, te, "probe", "not_started", time.Since(start).Milliseconds(), stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: probe %s: %v\n", opts.Host, err)
 			return newInternalFailureOutcome(exitUsage)
@@ -737,11 +737,16 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 			return newInternalFailureOutcome(followUnavailable(stderr))
 		}
 	}
+	// Only an unattempted dispatch proves the body did not start. Once either
+	// execution API is called, a local error cannot establish remote completion,
+	// even if its diagnostic or a follow marker suggests otherwise.
+	remoteCompletion := "not_started"
 	exec := func(invocation string, body []byte) (transport.Result, error) {
 		remaining, err := transport.Remaining(deadline)
 		if err != nil {
 			return transport.Result{}, err
 		}
+		remoteCompletion = "unknown"
 		if deps.Follow != nil {
 			return deps.Tr.(transport.StreamingTransport).ExecStream(opts.Host, invocation, body, remaining, deps.Follow.output)
 		}
@@ -789,7 +794,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		}
 		if err != nil {
 			if te, isTE := asTransportError(err); isTE {
-				return handleTransportError(deps, opts, te, time.Since(start).Milliseconds(), stdout, stderr)
+				return handleTransportError(deps, opts, te, "stage", "not_started", time.Since(start).Milliseconds(), stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: put script to %s: %v\n", opts.Host, err)
 			return newInternalFailureOutcome(exitUsage)
@@ -799,7 +804,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		res, err := exec(invocation, nil)
 		if err != nil {
 			if te, isTE := asTransportError(err); isTE {
-				return handleTransportError(deps, opts, te, time.Since(start).Milliseconds(), stdout, stderr)
+				return handleTransportError(deps, opts, te, "exec", remoteCompletion, time.Since(start).Milliseconds(), stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: exec on %s: %v\n", opts.Host, err)
 			return newInternalFailureOutcome(exitUsage)
@@ -822,7 +827,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		res, err := exec(invocation, wrapped)
 		if err != nil {
 			if te, isTE := asTransportError(err); isTE {
-				return handleTransportError(deps, opts, te, time.Since(start).Milliseconds(), stdout, stderr)
+				return handleTransportError(deps, opts, te, "exec", remoteCompletion, time.Since(start).Milliseconds(), stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: exec on %s: %v\n", opts.Host, err)
 			return newInternalFailureOutcome(exitUsage)
@@ -970,14 +975,8 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 	return newSavedRunOutcome(savedMeta)
 }
 
-// handleTransportError records a failed delivery (the body may not have run
-// at all) the same way a completed run is recorded. A safe allowlisted
-// diagnostic, when available, becomes both the stored artifact body and
-// human/JSON metadata; raw SSH output is never persisted or rendered.
-// Meta.Exit stays 0 (the zero value), disambiguated from an honest exit 0 by
-// TransportErr being non-empty.
-// A Save failure becomes an explicit internal failure while retaining the
-// transport process exit used by the existing human-mode path.
+// handleSetupError records fixed Windows setup diagnostics. The user body
+// has not been dispatched during this probe phase.
 func handleSetupError(deps Deps, opts Opts, setupErr *session.RemoteSetupError, durationMs int64, stdout, stderr io.Writer) RunOutcome {
 	root := deps.Store.Root
 	diagnostic := setupErr.Diagnostic()
@@ -986,6 +985,7 @@ func handleSetupError(deps Deps, opts Opts, setupErr *session.RemoteSetupError, 
 	meta := artifact.Meta{
 		Host: opts.Host, Ctx: opts.Ctx, Command: deltaKeyCommand(opts),
 		SetupErr: setupErr.Class, SetupDiagnostic: diagnostic,
+		FailurePhase: "probe", RemoteCompletion: "not_started",
 		AcceptedHostKeyAlgorithm:   acceptedHostKeyAlgorithm,
 		AcceptedHostKeyFingerprint: acceptedHostKeyFingerprint,
 		DurationMs:                 durationMs,
@@ -1008,7 +1008,12 @@ func handleSetupError(deps Deps, opts Opts, setupErr *session.RemoteSetupError, 
 	return newSavedRunOutcome(savedMeta)
 }
 
-func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, durationMs int64, stdout, stderr io.Writer) RunOutcome {
+// handleTransportError records a failed delivery with control-flow evidence.
+// A safe allowlisted diagnostic becomes the artifact body; raw SSH output is
+// never persisted or rendered. Meta.Exit stays 0, distinguished by TransportErr.
+// A Save failure remains an unsaved internal outcome: absence of evidence on
+// that outcome must not be interpreted as proof of remote non-execution.
+func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, phase, completion string, durationMs int64, stdout, stderr io.Writer) RunOutcome {
 	root := deps.Store.Root
 
 	diagnostic := te.Diagnostic()
@@ -1017,6 +1022,7 @@ func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, du
 	meta := artifact.Meta{
 		Host: opts.Host, Ctx: opts.Ctx, Command: deltaKeyCommand(opts),
 		TransportErr: te.Reason, TransportDiagnostic: diagnostic, DurationMs: durationMs, Ts: time.Now(),
+		FailurePhase: phase, RemoteCompletion: completion,
 		AcceptedHostKeyAlgorithm:   acceptedHostKeyAlgorithm,
 		AcceptedHostKeyFingerprint: acceptedHostKeyFingerprint,
 	}

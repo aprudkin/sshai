@@ -36,6 +36,8 @@ type ResultEntry struct {
 	SetupError                 string `json:"setup_error,omitempty"`
 	SetupDiagnostic            string `json:"setup_diagnostic,omitempty"`
 	LocalError                 string `json:"local_error,omitempty"`
+	FailurePhase               string `json:"failure_phase,omitempty"`
+	RemoteCompletion           string `json:"remote_completion,omitempty"`
 	AcceptedHostKeyAlgorithm   string `json:"accepted_host_key_algorithm,omitempty"`
 	AcceptedHostKeyFingerprint string `json:"accepted_host_key_fingerprint,omitempty"`
 	ArtifactPath               string `json:"artifact_path"`
@@ -58,7 +60,8 @@ type envelope struct {
 
 // ResultEntryForMeta maps artifact metadata to the canonical v1 run schema.
 func ResultEntryForMeta(root string, m Meta) ResultEntry {
-	return ResultEntry{ID: m.ID, Host: m.Host, Ctx: m.Ctx, Command: m.Command, Exit: m.Exit, TransportError: m.TransportErr, TransportDiagnostic: m.TransportDiagnostic, SetupError: m.SetupErr, SetupDiagnostic: m.SetupDiagnostic, LocalError: m.LocalError, AcceptedHostKeyAlgorithm: m.AcceptedHostKeyAlgorithm, AcceptedHostKeyFingerprint: m.AcceptedHostKeyFingerprint, ArtifactPath: filepath.Join(root, "art", m.ID), Bytes: m.Bytes, Lines: m.Lines, SHA256: m.SHA256, DurationMs: m.DurationMs, Ts: m.Ts.UTC().Format(time.RFC3339Nano), Truncated: m.Truncated, Binary: m.Binary, DeltaBase: m.DeltaBase}
+	phase, completion := failureEvidence(m)
+	return ResultEntry{ID: m.ID, Host: m.Host, Ctx: m.Ctx, Command: m.Command, Exit: m.Exit, TransportError: m.TransportErr, TransportDiagnostic: m.TransportDiagnostic, SetupError: m.SetupErr, SetupDiagnostic: m.SetupDiagnostic, LocalError: m.LocalError, FailurePhase: phase, RemoteCompletion: completion, AcceptedHostKeyAlgorithm: m.AcceptedHostKeyAlgorithm, AcceptedHostKeyFingerprint: m.AcceptedHostKeyFingerprint, ArtifactPath: filepath.Join(root, "art", m.ID), Bytes: m.Bytes, Lines: m.Lines, SHA256: m.SHA256, DurationMs: m.DurationMs, Ts: m.Ts.UTC().Format(time.RFC3339Nano), Truncated: m.Truncated, Binary: m.Binary, DeltaBase: m.DeltaBase}
 }
 
 // RenderResult builds the v1 machine-readable envelope as a single JSON

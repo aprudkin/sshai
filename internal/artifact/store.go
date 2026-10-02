@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS runs (
   setup_error TEXT NOT NULL DEFAULT '',
   setup_diagnostic TEXT NOT NULL DEFAULT '',
   local_error TEXT NOT NULL DEFAULT '',
+  failure_phase TEXT NOT NULL DEFAULT '',
+  remote_completion TEXT NOT NULL DEFAULT '',
   accepted_host_key_algorithm TEXT NOT NULL DEFAULT '',
   accepted_host_key_fingerprint TEXT NOT NULL DEFAULT '',
   bytes INTEGER NOT NULL, lines INTEGER NOT NULL,
@@ -113,6 +115,8 @@ func ensureRunColumns(db *sql.DB) error {
 		{"setup_error", "setup_error TEXT NOT NULL DEFAULT ''"},
 		{"setup_diagnostic", "setup_diagnostic TEXT NOT NULL DEFAULT ''"},
 		{"local_error", "local_error TEXT NOT NULL DEFAULT ''"},
+		{"failure_phase", "failure_phase TEXT NOT NULL DEFAULT ''"},
+		{"remote_completion", "remote_completion TEXT NOT NULL DEFAULT ''"},
 		{"accepted_host_key_algorithm", "accepted_host_key_algorithm TEXT NOT NULL DEFAULT ''"},
 		{"accepted_host_key_fingerprint", "accepted_host_key_fingerprint TEXT NOT NULL DEFAULT ''"},
 	}
@@ -164,6 +168,7 @@ func runColumnExists(db *sql.DB, want string) (bool, error) {
 // row is updated with that art_id before the artifact file is written. The
 // returned Meta has ID, Bytes, Lines and SHA256 populated.
 func (s *Store) Save(m Meta, key string, data []byte) (Meta, error) {
+	m.FailurePhase, m.RemoteCompletion = failureEvidence(m)
 	m.Bytes = int64(len(data))
 	m.Lines = countLines(data)
 	sum := sha256.Sum256(data)
@@ -176,9 +181,9 @@ func (s *Store) Save(m Meta, key string, data []byte) (Meta, error) {
 	defer tx.Rollback()
 
 	res, err := tx.Exec(
-		`INSERT INTO runs (ts,host,ctx,command,key,exit,transport_error,transport_diagnostic,setup_error,setup_diagnostic,local_error,accepted_host_key_algorithm,accepted_host_key_fingerprint,bytes,lines,sha256,duration_ms,truncated,binary,delta_base)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		m.Ts.UTC().Format(time.RFC3339), m.Host, m.Ctx, m.Command, key, m.Exit, m.TransportErr, m.TransportDiagnostic, m.SetupErr, m.SetupDiagnostic, m.LocalError,
+		`INSERT INTO runs (ts,host,ctx,command,key,exit,transport_error,transport_diagnostic,setup_error,setup_diagnostic,local_error,failure_phase,remote_completion,accepted_host_key_algorithm,accepted_host_key_fingerprint,bytes,lines,sha256,duration_ms,truncated,binary,delta_base)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		m.Ts.UTC().Format(time.RFC3339), m.Host, m.Ctx, m.Command, key, m.Exit, m.TransportErr, m.TransportDiagnostic, m.SetupErr, m.SetupDiagnostic, m.LocalError, m.FailurePhase, m.RemoteCompletion,
 		m.AcceptedHostKeyAlgorithm, m.AcceptedHostKeyFingerprint, m.Bytes, m.Lines, m.SHA256, m.DurationMs,
 		boolToInt(m.Truncated), boolToInt(m.Binary), m.DeltaBase,
 	)
@@ -214,9 +219,9 @@ func (s *Store) Get(id string) (Meta, string, error) {
 	var tsStr string
 	var truncated, binary, pruned int
 	row := s.DB.QueryRow(
-		`SELECT art_id, ts, host, ctx, command, exit, transport_error, transport_diagnostic, setup_error, setup_diagnostic, local_error, accepted_host_key_algorithm, accepted_host_key_fingerprint, bytes, lines, sha256, duration_ms, truncated, binary, delta_base, pruned
+		`SELECT art_id, ts, host, ctx, command, exit, transport_error, transport_diagnostic, setup_error, setup_diagnostic, local_error, failure_phase, remote_completion, accepted_host_key_algorithm, accepted_host_key_fingerprint, bytes, lines, sha256, duration_ms, truncated, binary, delta_base, pruned
 		 FROM runs WHERE art_id=?`, id)
-	if err := row.Scan(&m.ID, &tsStr, &m.Host, &m.Ctx, &m.Command, &m.Exit, &m.TransportErr, &m.TransportDiagnostic, &m.SetupErr, &m.SetupDiagnostic, &m.LocalError,
+	if err := row.Scan(&m.ID, &tsStr, &m.Host, &m.Ctx, &m.Command, &m.Exit, &m.TransportErr, &m.TransportDiagnostic, &m.SetupErr, &m.SetupDiagnostic, &m.LocalError, &m.FailurePhase, &m.RemoteCompletion,
 		&m.AcceptedHostKeyAlgorithm, &m.AcceptedHostKeyFingerprint, &m.Bytes, &m.Lines, &m.SHA256, &m.DurationMs,
 		&truncated, &binary, &m.DeltaBase, &pruned); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -231,6 +236,7 @@ func (s *Store) Get(id string) (Meta, string, error) {
 		return Meta{}, "", fmt.Errorf("parse ts for run %s: %w", id, err)
 	}
 	m.Ts = ts
+	m.FailurePhase, m.RemoteCompletion = failureEvidence(m)
 
 	if pruned != 0 {
 		// The row is retained for audit history even after its artifact
@@ -249,9 +255,9 @@ func (s *Store) LastByKey(key string) (Meta, bool, error) {
 	var tsStr string
 	var truncated, binary int
 	row := s.DB.QueryRow(
-		`SELECT art_id, ts, host, ctx, command, exit, transport_error, transport_diagnostic, setup_error, setup_diagnostic, local_error, accepted_host_key_algorithm, accepted_host_key_fingerprint, bytes, lines, sha256, duration_ms, truncated, binary, delta_base
+		`SELECT art_id, ts, host, ctx, command, exit, transport_error, transport_diagnostic, setup_error, setup_diagnostic, local_error, failure_phase, remote_completion, accepted_host_key_algorithm, accepted_host_key_fingerprint, bytes, lines, sha256, duration_ms, truncated, binary, delta_base
 		 FROM runs WHERE key=? AND pruned=0 AND setup_error='' ORDER BY id DESC LIMIT 1`, key)
-	if err := row.Scan(&m.ID, &tsStr, &m.Host, &m.Ctx, &m.Command, &m.Exit, &m.TransportErr, &m.TransportDiagnostic, &m.SetupErr, &m.SetupDiagnostic, &m.LocalError,
+	if err := row.Scan(&m.ID, &tsStr, &m.Host, &m.Ctx, &m.Command, &m.Exit, &m.TransportErr, &m.TransportDiagnostic, &m.SetupErr, &m.SetupDiagnostic, &m.LocalError, &m.FailurePhase, &m.RemoteCompletion,
 		&m.AcceptedHostKeyAlgorithm, &m.AcceptedHostKeyFingerprint, &m.Bytes, &m.Lines, &m.SHA256, &m.DurationMs,
 		&truncated, &binary, &m.DeltaBase); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -266,6 +272,7 @@ func (s *Store) LastByKey(key string) (Meta, bool, error) {
 		return Meta{}, false, fmt.Errorf("parse ts for key %s: %w", key, err)
 	}
 	m.Ts = ts
+	m.FailurePhase, m.RemoteCompletion = failureEvidence(m)
 	return m, true, nil
 }
 

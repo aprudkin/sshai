@@ -16,6 +16,8 @@ type Meta struct {
 	SetupErr                   string
 	SetupDiagnostic            string
 	LocalError                 string
+	FailurePhase               string
+	RemoteCompletion           string
 	AcceptedHostKeyAlgorithm   string
 	AcceptedHostKeyFingerprint string
 	Bytes, Lines               int64
@@ -24,6 +26,28 @@ type Meta struct {
 	Truncated, Binary          bool
 	DeltaBase                  string
 	Ts                         time.Time
+}
+
+// failureEvidence accepts only paired, control-flow evidence on remote errors.
+// Empty legacy metadata is never upgraded by inference from an error or exit.
+func failureEvidence(m Meta) (phase, completion string) {
+	if m.LocalError != "" || (m.SetupErr == "" && m.TransportErr == "") {
+		return "", ""
+	}
+	if m.SetupErr != "" && (m.FailurePhase != "probe" || m.RemoteCompletion != "not_started") {
+		return "", ""
+	}
+	switch m.FailurePhase {
+	case "probe", "stage":
+		if m.RemoteCompletion == "not_started" {
+			return m.FailurePhase, m.RemoteCompletion
+		}
+	case "exec":
+		if m.RemoteCompletion == "not_started" || m.RemoteCompletion == "unknown" {
+			return m.FailurePhase, m.RemoteCompletion
+		}
+	}
+	return "", ""
 }
 
 func EstTokens(b []byte) int { return (len(b) + 3) / 4 }
@@ -57,6 +81,9 @@ func StatusLine(m Meta) string {
 		fmt.Fprintf(&b, " transport-error=%s", m.TransportErr)
 	} else {
 		fmt.Fprintf(&b, " exit=%d", m.Exit)
+	}
+	if phase, completion := failureEvidence(m); phase != "" {
+		fmt.Fprintf(&b, " failure-phase=%s remote-completion=%s", phase, completion)
 	}
 	if m.AcceptedHostKeyAlgorithm != "" && m.AcceptedHostKeyFingerprint != "" {
 		fmt.Fprintf(&b, " accepted-host-key-algorithm=%s accepted-host-key-fingerprint=%s",
