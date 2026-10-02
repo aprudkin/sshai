@@ -29,7 +29,9 @@ func (f *setupFailureTr) Exec(_ string, command string, _ []byte, _ time.Duratio
 	f.calls = append(f.calls, command)
 	return transport.Result{ExitCode: 1, Output: []byte(rawSetupOutput)}, nil
 }
-func (*setupFailureTr) Put(string, string, string) error { panic("user body must not be staged") }
+func (*setupFailureTr) Put(string, string, string, time.Duration) error {
+	panic("user body must not be staged")
+}
 
 func (f *setupFailureTr) callCount() int {
 	f.mu.Lock()

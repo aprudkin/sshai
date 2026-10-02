@@ -32,7 +32,9 @@ func (f passportBodyTr) Exec(_ string, cmd string, stdin []byte, _ time.Duration
 	return transport.Result{Output: []byte(out)}, nil
 }
 
-func (passportBodyTr) Put(_, _, _ string) error { return fmt.Errorf("unexpected upload") }
+func (passportBodyTr) Put(_, _, _ string, _ time.Duration) error {
+	return fmt.Errorf("unexpected upload")
+}
 
 // Catches a renderer bypass or a lost per-host allocation in either caller,
 // and ensures clipping cannot masquerade as truncation of the saved stream.

@@ -68,17 +68,29 @@ func (e *TransportError) Error() string {
 // honest exit status, whatever that status is.
 // StreamingTransport is an optional additive capability for transports that can
 // deliver the remote combined stream as it arrives. Implementations must
-// preserve its pipe order for wrapper parsing. Transport remains unchanged so
-// existing callers and fakes do not need to implement streaming.
+// preserve its pipe order for wrapper parsing. This capability is separate from
+// Transport, so callers and fakes do not need to implement streaming.
 type StreamingTransport interface {
 	ExecStream(host, command string, stdin []byte, timeout time.Duration, output func([]byte)) (Result, error)
 }
 
+// Remaining returns the positive time left in a shared remote-work budget.
+// Expired budgets use the same canonical timeout as execution cancellation.
+func Remaining(deadline time.Time) (time.Duration, error) {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return 0, newTransportError("timeout", "operation timed out")
+	}
+	return remaining, nil
+}
+
 type Transport interface {
 	// Exec runs command on host, feeding it stdin, and returns once the
-	// command exits, timeout elapses, or the transport fails outright.
+	// command exits, timeout elapses, or the transport fails outright. The supplied
+	// budget includes any transport preparation and host-key observation.
 	Exec(host, command string, stdin []byte, timeout time.Duration) (Result, error)
 
-	// Put copies the local file at localPath to remotePath on host.
-	Put(host, localPath, remotePath string) error
+	// Put copies the local file at localPath to remotePath on host within timeout,
+	// including transport preparation and host-key observation.
+	Put(host, localPath, remotePath string, timeout time.Duration) error
 }

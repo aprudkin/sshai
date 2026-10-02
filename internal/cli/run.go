@@ -178,7 +178,7 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 	proxyJump := fs.String("proxy-jump", "", `one-invocation jump-route override: "none"`)
 	wantDelta := fs.Bool("delta", false, "print diff vs previous run of same (host, ctx, command)")
 	budget := fs.Int("budget", 0, "output budget in tokens (~bytes/4); default from config")
-	timeoutFlag := fs.Int("timeout", 0, "timeout in seconds; default from config")
+	timeoutFlag := fs.Int("timeout", 0, "per-host probe, staging and execution budget in seconds; default from config")
 	ctxFlag := fs.String("ctx", "", `named state context; default $SSHAI_CTX or "default"`)
 	resultFormat := fs.String("result-format", "human", `output format: "human" (default) or "json"`)
 	resultOut := fs.String("result-out", "", `write the JSON envelope to FILE (requires --result-format=json)`)
@@ -677,20 +677,27 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		return newInternalFailureOutcome(exitUsage)
 	}
 
+	// Each fan-out worker owns its deadline. Start before cache/state loading
+	// so first-contact probing and Windows staging cannot renew the budget.
+	start := time.Now()
+	deadline := start.Add(opts.Timeout)
 	facts, ok, err := session.LoadFacts(root, opts.Host)
 	if err != nil {
 		fmt.Fprintf(stderr, "run: load facts for %s: %v\n", opts.Host, err)
 		return newInternalFailureOutcome(exitUsage)
 	}
 	if !ok {
-		probeStart := time.Now()
-		facts, err = session.Probe(deps.Tr, opts.Host, selectedPowerShell, opts.PowerShellHost == "", opts.Timeout)
+		var remaining time.Duration
+		remaining, err = transport.Remaining(deadline)
+		if err == nil {
+			facts, err = session.Probe(deps.Tr, opts.Host, selectedPowerShell, opts.PowerShellHost == "", remaining)
+		}
 		if err != nil {
 			if se, isSetup := asRemoteSetupError(err); isSetup {
-				return handleSetupError(deps, opts, se, time.Since(probeStart).Milliseconds(), stdout, stderr)
+				return handleSetupError(deps, opts, se, time.Since(start).Milliseconds(), stdout, stderr)
 			}
 			if te, isTE := asTransportError(err); isTE {
-				return handleTransportError(deps, opts, te, time.Since(probeStart).Milliseconds(), stdout, stderr)
+				return handleTransportError(deps, opts, te, time.Since(start).Milliseconds(), stdout, stderr)
 			}
 			fmt.Fprintf(stderr, "run: probe %s: %v\n", opts.Host, err)
 			return newInternalFailureOutcome(exitUsage)
@@ -725,11 +732,20 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		parseOK    bool
 	)
 
-	start := time.Now()
 	if deps.Follow != nil {
 		if _, ok := deps.Tr.(transport.StreamingTransport); !ok {
 			return newInternalFailureOutcome(followUnavailable(stderr))
 		}
+	}
+	exec := func(invocation string, body []byte) (transport.Result, error) {
+		remaining, err := transport.Remaining(deadline)
+		if err != nil {
+			return transport.Result{}, err
+		}
+		if deps.Follow != nil {
+			return deps.Tr.(transport.StreamingTransport).ExecStream(opts.Host, invocation, body, remaining, deps.Follow.output)
+		}
+		return deps.Tr.Exec(opts.Host, invocation, body, remaining)
 	}
 
 	if facts.OS == "windows" {
@@ -767,7 +783,11 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		// RemoteDir on every single call).
 		slug := shell.BodySlug([]byte(opts.Command))
 		remotePath := shell.RemoteDir + "/" + slug + ".ps1"
-		if err := deps.Tr.Put(opts.Host, tmp.Name(), remotePath); err != nil {
+		remaining, err := transport.Remaining(deadline)
+		if err == nil {
+			err = deps.Tr.Put(opts.Host, tmp.Name(), remotePath, remaining)
+		}
+		if err != nil {
 			if te, isTE := asTransportError(err); isTE {
 				return handleTransportError(deps, opts, te, time.Since(start).Milliseconds(), stdout, stderr)
 			}
@@ -776,12 +796,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		}
 
 		invocation := shell.PwshInvocation(facts.Form, powerShell, "-NoProfile -ExecutionPolicy Bypass -File "+remotePath)
-		var res transport.Result
-		if deps.Follow != nil {
-			res, err = deps.Tr.(transport.StreamingTransport).ExecStream(opts.Host, invocation, nil, opts.Timeout, deps.Follow.output)
-		} else {
-			res, err = deps.Tr.Exec(opts.Host, invocation, nil, opts.Timeout)
-		}
+		res, err := exec(invocation, nil)
 		if err != nil {
 			if te, isTE := asTransportError(err); isTE {
 				return handleTransportError(deps, opts, te, time.Since(start).Milliseconds(), stdout, stderr)
@@ -804,12 +819,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		if opts.PosixShell != "" {
 			invocation = shell.POSIXShellInvocation(opts.PosixShell)
 		}
-		var res transport.Result
-		if deps.Follow != nil {
-			res, err = deps.Tr.(transport.StreamingTransport).ExecStream(opts.Host, invocation, wrapped, opts.Timeout, deps.Follow.output)
-		} else {
-			res, err = deps.Tr.Exec(opts.Host, invocation, wrapped, opts.Timeout)
-		}
+		res, err := exec(invocation, wrapped)
 		if err != nil {
 			if te, isTE := asTransportError(err); isTE {
 				return handleTransportError(deps, opts, te, time.Since(start).Milliseconds(), stdout, stderr)

@@ -29,7 +29,7 @@ type bomPowerShellTransport struct {
 	streamed          bool
 }
 
-func (f *bomPowerShellTransport) Put(_ string, local, remote string) error {
+func (f *bomPowerShellTransport) Put(_ string, local, remote string, _ time.Duration) error {
 	f.localPath, f.remote = local, remote
 	return nil
 }

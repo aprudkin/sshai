@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aprudkin/sshai/internal/artifact"
 )
@@ -41,7 +42,7 @@ func TestRunHostOutcomeSuccess(t *testing.T) {
 	deps := Deps{Tr: &fakeTr{rc: 0}, Store: openOutcomeTestStore(t, root)}
 
 	var stdout, stderr bytes.Buffer
-	outcome := runHost(deps, Opts{Host: "web01", Ctx: "default", Command: "true", Budget: 500}, &stdout, &stderr)
+	outcome := runHost(deps, Opts{Host: "web01", Ctx: "default", Command: "true", Budget: 500, Timeout: time.Minute}, &stdout, &stderr)
 
 	if outcome.Kind() != runOutcomeSuccess {
 		t.Fatalf("kind=%v, want success", outcome.Kind())
@@ -61,7 +62,7 @@ func TestRunHostOutcomeRemoteNonZero(t *testing.T) {
 	deps := Deps{Tr: &fakeTr{rc: 23}, Store: openOutcomeTestStore(t, root)}
 
 	var stdout, stderr bytes.Buffer
-	outcome := runHost(deps, Opts{Host: "web01", Ctx: "default", Command: "exit 23", Budget: 500}, &stdout, &stderr)
+	outcome := runHost(deps, Opts{Host: "web01", Ctx: "default", Command: "exit 23", Budget: 500, Timeout: time.Minute}, &stdout, &stderr)
 
 	if outcome.Kind() != runOutcomeRemoteNonZero {
 		t.Fatalf("kind=%v, want remote-non-zero", outcome.Kind())
@@ -100,7 +101,7 @@ func TestRunHostOutcomeTransportFailure(t *testing.T) {
 	deps := Deps{Tr: &probeFailsTr{}, Store: openOutcomeTestStore(t, root)}
 
 	var stdout, stderr bytes.Buffer
-	outcome := runHost(deps, Opts{Host: "web01", Ctx: "default", Command: "true", Budget: 500}, &stdout, &stderr)
+	outcome := runHost(deps, Opts{Host: "web01", Ctx: "default", Command: "true", Budget: 500, Timeout: time.Minute}, &stdout, &stderr)
 
 	if outcome.Kind() != runOutcomeTransportFailure {
 		t.Fatalf("kind=%v, want transport-failure", outcome.Kind())
@@ -142,7 +143,7 @@ func TestRunHostOutcomeSaveFailure(t *testing.T) {
 	deps := Deps{Tr: &fakeTr{rc: 0}, Store: store}
 
 	var stdout, stderr bytes.Buffer
-	outcome := runHost(deps, Opts{Host: "web01", Ctx: "default", Command: "true", Budget: 500}, &stdout, &stderr)
+	outcome := runHost(deps, Opts{Host: "web01", Ctx: "default", Command: "true", Budget: 500, Timeout: time.Minute}, &stdout, &stderr)
 
 	if outcome.Kind() != runOutcomeInternalFailure {
 		t.Fatalf("kind=%v, want internal-failure", outcome.Kind())
@@ -165,7 +166,7 @@ func TestRunHostOutcomePreSaveFailure(t *testing.T) {
 	deps := Deps{Tr: &fakeTr{rc: 0}, Store: openOutcomeTestStore(t, root)}
 
 	var stdout, stderr bytes.Buffer
-	outcome := runHost(deps, Opts{Host: "web01", Ctx: "default", Command: "true", Budget: 500}, &stdout, &stderr)
+	outcome := runHost(deps, Opts{Host: "web01", Ctx: "default", Command: "true", Budget: 500, Timeout: time.Minute}, &stdout, &stderr)
 
 	if outcome.Kind() != runOutcomeInternalFailure {
 		t.Fatalf("kind=%v, want internal-failure", outcome.Kind())

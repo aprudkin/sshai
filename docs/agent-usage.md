@@ -63,6 +63,30 @@ Two narrow SSH exceptions remain inside `sshai`:
 
 Omitting either flag preserves the strict host-key and managed-route defaults.
 
+## Remote timeout budget
+
+`sshai run --timeout N` sets one budget in seconds per host. When omitted (or non-positive),
+`timeout_sec` from config applies; its factory default is 60 seconds. Each host's clock starts
+just before loading cached facts, after local readonly-policy and interpreter-selector validation.
+It covers facts/state loading, all probe and Windows setup candidates, script preparation/upload,
+and command execution. Later steps receive only the remaining time and do not start after expiry.
+Fan-out hosts have independent clocks; `--follow` does not extend them.
+
+This replaces separate per-step limits: an uncached host can now spend part of its execution
+allowance on setup, and Windows upload no longer gets an independent two minutes. Cached facts
+avoid probing but do not change the budget rule. Remote result `duration_ms` (and human `time=`)
+measures from the same start through the remote outcome and local transport cleanup, including
+successful probes and staging rather than only execution.
+
+On expiry, sshai stops the local SSH/SCP process and reports `transport-error=timeout` (exit 98).
+Normal and follow transports allow up to 100 ms for inherited-pipe cleanup after cancellation,
+plus OS scheduling overhead. This is not a whole-CLI wall-clock guarantee: input/config/store
+initialization precedes the host clock, and local state/artifact persistence, result publication
+and retention follow remote work. Slow local I/O or a blocked output consumer can delay finalization.
+A local timeout or disconnect does **not** guarantee that the remote body stopped or never ran;
+check actual remote state before considering a replay of side-effecting work. Local execution's
+separate timeout semantics are unchanged.
+
 ## Explicit local execution
 
 Use `sshai local` only when the task explicitly calls for execution on the machine running `sshai`:

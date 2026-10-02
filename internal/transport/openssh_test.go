@@ -159,7 +159,7 @@ func TestInvocationOverridesAreScopedToConfiguredAlias(t *testing.T) {
 	})
 	accepted := HostKey{Algorithm: "ssh-ed25519", Fingerprint: "SHA256:accepted"}
 	lookupCalls := 0
-	tr.hostKeyLookup = func(host string, _ []string) (map[string]HostKey, error) {
+	tr.hostKeyLookup = func(host string, _ []string, _ time.Duration) (map[string]HostKey, error) {
 		lookupCalls++
 		if host != "new-host" {
 			t.Fatalf("host-key lookup called for unscoped host %q", host)
@@ -213,7 +213,7 @@ func TestInvocationOverridesApplyToSCP(t *testing.T) {
 		ProxyJumpNone:    true,
 	})
 	lookupCalls := 0
-	tr.hostKeyLookup = func(string, []string) (map[string]HostKey, error) {
+	tr.hostKeyLookup = func(string, []string, time.Duration) (map[string]HostKey, error) {
 		lookupCalls++
 		if lookupCalls == 1 {
 			return map[string]HostKey{}, nil
@@ -227,7 +227,7 @@ func TestInvocationOverridesApplyToSCP(t *testing.T) {
 		captured = append([]string(nil), argv...)
 		return 0, nil, false
 	}
-	if err := tr.Put("win01", "/local/script.ps1", "/remote/script.ps1"); err != nil {
+	if err := tr.Put("win01", "/local/script.ps1", "/remote/script.ps1", time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	if captured[0] != "scp" {
@@ -298,7 +298,7 @@ func TestParseKnownHostsConfigUsesAliasAndNonDefaultPort(t *testing.T) {
 func TestPutNonZeroIsTransportError(t *testing.T) {
 	tr := NewOpenSSH(t.TempDir(), "15m", 1<<20, OpenSSHOptions{})
 	tr.Runner = fake(1, "scp: No such file or directory", false)
-	err := tr.Put("h1", "/local/script.sh", "/remote/script.sh")
+	err := tr.Put("h1", "/local/script.sh", "/remote/script.sh", time.Minute)
 	var te *TransportError
 	if !errors.As(err, &te) || te.Reason != "scp" {
 		t.Fatalf("want TransportError{scp}, got %v", err)
@@ -448,7 +448,7 @@ func TestExecNegativeLocalExitIsTransportError(t *testing.T) {
 func TestPutNegativeLocalExitIsTransportError(t *testing.T) {
 	tr := NewOpenSSH(t.TempDir(), "15m", 1<<20, OpenSSHOptions{})
 	tr.Runner = fake(-1, "Read from remote host h1: Unknown error", false)
-	err := tr.Put("h1", "/local/script.sh", "/remote/script.sh")
+	err := tr.Put("h1", "/local/script.sh", "/remote/script.sh", time.Minute)
 	var te *TransportError
 	if !errors.As(err, &te) || te.Reason != "scp" {
 		t.Fatalf("want TransportError{scp}, got %v", err)

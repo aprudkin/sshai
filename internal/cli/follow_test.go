@@ -24,7 +24,7 @@ type followTr struct {
 func (f *followTr) Exec(host, command string, stdin []byte, timeout time.Duration) (transport.Result, error) {
 	return transport.Result{}, &transport.TransportError{Reason: "ssh"}
 }
-func (f *followTr) Put(host, local, remote string) error { return nil }
+func (f *followTr) Put(host, local, remote string, _ time.Duration) error { return nil }
 func (f *followTr) ExecStream(host, command string, stdin []byte, timeout time.Duration, out func([]byte)) (transport.Result, error) {
 	f.calls++
 	marker := ""
@@ -142,7 +142,7 @@ type transportFailFollowTr struct {
 func (f *transportFailFollowTr) Exec(host, command string, stdin []byte, timeout time.Duration) (transport.Result, error) {
 	panic("follow mode must not call Exec")
 }
-func (f *transportFailFollowTr) Put(host, local, remote string) error { return nil }
+func (f *transportFailFollowTr) Put(host, local, remote string, _ time.Duration) error { return nil }
 func (f *transportFailFollowTr) ExecStream(host, command string, stdin []byte, timeout time.Duration, out func([]byte)) (transport.Result, error) {
 	f.calls++
 	time.Sleep(f.delay)

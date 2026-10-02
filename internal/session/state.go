@@ -257,9 +257,18 @@ func (e *RemoteSetupError) Diagnostic() string { return RemoteSetupDiagnostic }
 // New-Item, trying PowerShell executable candidates and invocation forms until
 // one command succeeds. A transport failure is returned immediately. If no
 // candidate can create the scratch dir, Probe returns RemoteSetupError instead
-// of saving a guessed shell form or retaining remote setup output.
+// of saving a guessed shell form or retaining remote setup output. All candidates
+// share timeout; no later candidate starts after that budget expires.
 func Probe(tr transport.Transport, host, pwshShell string, allowWindowsPowerShellFallback bool, timeout time.Duration) (Facts, error) {
-	res, err := tr.Exec(host, "uname -s", nil, timeout)
+	deadline := time.Now().Add(timeout)
+	exec := func(command string) (transport.Result, error) {
+		remaining, err := transport.Remaining(deadline)
+		if err != nil {
+			return transport.Result{}, err
+		}
+		return tr.Exec(host, command, nil, remaining)
+	}
+	res, err := exec("uname -s")
 	if err != nil {
 		return Facts{}, err
 	}
@@ -279,7 +288,7 @@ func Probe(tr transport.Transport, host, pwshShell string, allowWindowsPowerShel
 	for _, candidate := range candidates {
 		for _, form := range []string{"cmd", "pwsh"} {
 			cmd := shell.PwshInvocation(form, candidate, tail)
-			res, err := tr.Exec(host, cmd, nil, timeout)
+			res, err := exec(cmd)
 			if err != nil {
 				return Facts{}, err
 			}

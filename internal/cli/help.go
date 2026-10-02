@@ -90,9 +90,16 @@ Flags:
                       config (factory default 500).
                       Fan-out divides this across hosts, floored at
                       100 tokens/host
-  --timeout N         per-host timeout in seconds; default from config
-                      (factory default 60). On
-                      timeout the passport reports transport-error=timeout
+  --timeout N         per-host budget in seconds; default from config
+                      (factory default 60). Starts before cached facts are
+                      loaded, after local policy/selector validation; covers
+                      probing/setup, script staging and execution together.
+                      Each later step gets only the remaining time; fan-out
+                      hosts have independent budgets. --follow does not
+                      extend it. Timeout reports transport-error=timeout,
+                      not guaranteed remote cancellation. Local SSH/SCP
+                      pipe cleanup allows up to 100ms extra plus scheduling;
+                      result persistence/publication is outside this budget
   --ctx NAME          named state context: cwd and env persist per
                       (host, ctx) between calls; default $SSHAI_CTX or
                       "default"

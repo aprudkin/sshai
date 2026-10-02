@@ -21,12 +21,6 @@ import (
 	"github.com/aprudkin/sshai/internal/runner"
 )
 
-// defaultPutTimeout bounds the underlying scp invocation for Put. Unlike
-// Exec, Put's signature (see Transport) carries no caller-supplied
-// timeout, so a fixed budget is used — generous enough for pushing a
-// small script body, not meant for bulk file transfer.
-const defaultPutTimeout = 2 * time.Minute
-
 const (
 	hostKeyConfigCap     = 256 << 10
 	knownHostsReadCap    = 8 << 20
@@ -102,7 +96,7 @@ type OpenSSH struct {
 	acceptedHostKey HostKey
 	hostKeyPrepared bool
 	hostKeyErr      error
-	hostKeyLookup   func(host string, sshOpts []string) (map[string]HostKey, error)
+	hostKeyLookup   func(host string, sshOpts []string, timeout time.Duration) (map[string]HostKey, error)
 
 	// Runner executes argv (argv[0] is "ssh" or "scp"), feeding it stdin
 	// and enforcing timeout. It returns the remote process's exit code,
@@ -190,7 +184,10 @@ var (
 // prepareAcceptedHostKey snapshots the exact alias's known keys before the
 // first connection that carries accept-new. Failure is fail-closed: ssh/scp
 // is not started unless ssh_config and known_hosts can be inspected.
-func (tr *OpenSSH) prepareAcceptedHostKey(host string) error {
+func (tr *OpenSSH) prepareAcceptedHostKey(host string, deadline time.Time) error {
+	if _, err := Remaining(deadline); err != nil {
+		return err
+	}
 	if host != tr.options.AcceptNewHostKey {
 		return nil
 	}
@@ -200,8 +197,16 @@ func (tr *OpenSSH) prepareAcceptedHostKey(host string) error {
 	if tr.hostKeyPrepared {
 		return tr.hostKeyErr
 	}
+	remaining, err := Remaining(deadline)
+	if err != nil {
+		return err
+	}
 	tr.hostKeyPrepared = true
-	before, err := tr.hostKeyLookup(host, tr.sshOpts(host))
+	before, err := tr.hostKeyLookup(host, tr.sshOpts(host), remaining)
+	if _, budgetErr := Remaining(deadline); budgetErr != nil {
+		tr.hostKeyErr = errHostKeyInspection
+		return budgetErr
+	}
 	if err != nil {
 		tr.hostKeyErr = errHostKeyInspection
 		return tr.hostKeyErr
@@ -213,7 +218,7 @@ func (tr *OpenSSH) prepareAcceptedHostKey(host string) error {
 // observeAcceptedHostKey compares known_hosts after a connection attempt.
 // StrictHostKeyChecking=accept-new itself refuses changed keys; this records
 // only a genuinely new entry and never retains raw ssh output or key bytes.
-func (tr *OpenSSH) observeAcceptedHostKey(host string) {
+func (tr *OpenSSH) observeAcceptedHostKey(host string, deadline time.Time) {
 	if host != tr.options.AcceptNewHostKey {
 		return
 	}
@@ -223,7 +228,16 @@ func (tr *OpenSSH) observeAcceptedHostKey(host string) {
 	if tr.hostKeyErr != nil || tr.acceptedHostKey.Fingerprint != "" {
 		return
 	}
-	after, err := tr.hostKeyLookup(host, tr.sshOpts(host))
+	remaining, err := Remaining(deadline)
+	if err != nil {
+		tr.hostKeyErr = errHostKeyInspection
+		return
+	}
+	after, err := tr.hostKeyLookup(host, tr.sshOpts(host), remaining)
+	if _, budgetErr := Remaining(deadline); budgetErr != nil {
+		tr.hostKeyErr = errHostKeyInspection
+		return
+	}
 	if err != nil {
 		tr.hostKeyErr = errHostKeyInspection
 		return
@@ -261,10 +275,15 @@ func (tr *OpenSSH) AcceptedHostKey(host string) (HostKey, bool, error) {
 	return tr.acceptedHostKey, true, nil
 }
 
-func (tr *OpenSSH) lookupHostKeys(host string, sshOpts []string) (map[string]HostKey, error) {
+func (tr *OpenSSH) lookupHostKeys(host string, sshOpts []string, timeout time.Duration) (map[string]HostKey, error) {
+	deadline := time.Now().Add(timeout)
+	remaining, err := Remaining(deadline)
+	if err != nil {
+		return nil, err
+	}
 	argv := append([]string{"ssh", "-G"}, sshOpts...)
 	argv = append(argv, host)
-	result := runner.Run(argv, nil, hostKeyLookupTimeout, hostKeyConfigCap)
+	result := runner.Run(argv, nil, min(remaining, hostKeyLookupTimeout), hostKeyConfigCap)
 	if result.StartErr != nil || result.TimedOut || result.Truncated || result.ExitCode != 0 {
 		return nil, errHostKeyInspection
 	}
@@ -276,7 +295,14 @@ func (tr *OpenSSH) lookupHostKeys(host string, sshOpts []string) (map[string]Hos
 	if err != nil {
 		return nil, err
 	}
-	return readKnownHostKeys(lookup, paths)
+	if _, err := Remaining(deadline); err != nil {
+		return nil, err
+	}
+	keys, err := readKnownHostKeys(lookup, paths)
+	if _, budgetErr := Remaining(deadline); budgetErr != nil {
+		return nil, budgetErr
+	}
+	return keys, err
 }
 
 func parseKnownHostsConfig(output []byte) (string, []string, error) {
@@ -445,12 +471,20 @@ func safeHostKeyAlgorithm(algorithm string) bool {
 // before the process finished maps to TransportError{"timeout"} regardless
 // of rc.
 func (tr *OpenSSH) Exec(host, command string, stdin []byte, timeout time.Duration) (Result, error) {
-	if err := tr.prepareAcceptedHostKey(host); err != nil {
+	deadline := time.Now().Add(timeout)
+	if err := tr.prepareAcceptedHostKey(host, deadline); err != nil {
+		if _, budgetErr := Remaining(deadline); budgetErr != nil {
+			return Result{}, budgetErr
+		}
 		return Result{}, newTransportError("ssh", "host key inspection failed")
 	}
 	argv := tr.sshArgv(host, command)
-	rc, out, timedOut := tr.Runner(argv, stdin, timeout)
-	tr.observeAcceptedHostKey(host)
+	remaining, err := Remaining(deadline)
+	if err != nil {
+		return Result{}, err
+	}
+	rc, out, timedOut := tr.Runner(argv, stdin, remaining)
+	tr.observeAcceptedHostKey(host, deadline)
 
 	if timedOut {
 		return Result{}, newTransportError("timeout", "operation timed out")
@@ -485,7 +519,11 @@ func (tr *OpenSSH) Exec(host, command string, stdin []byte, timeout time.Duratio
 // ExecStream is Exec with live delivery of the remote combined stream. SSH's
 // own diagnostics are diverted to a private log so they cannot enter events.
 func (tr *OpenSSH) ExecStream(host, command string, stdin []byte, timeout time.Duration, output func([]byte)) (Result, error) {
-	if err := tr.prepareAcceptedHostKey(host); err != nil {
+	deadline := time.Now().Add(timeout)
+	if err := tr.prepareAcceptedHostKey(host, deadline); err != nil {
+		if _, budgetErr := Remaining(deadline); budgetErr != nil {
+			return Result{}, budgetErr
+		}
 		return Result{}, newTransportError("ssh", "host key inspection failed")
 	}
 	logDir, err := os.MkdirTemp("", "sshai-ssh-*")
@@ -503,18 +541,48 @@ func (tr *OpenSSH) ExecStream(host, command string, stdin []byte, timeout time.D
 		return Result{}, newTransportError("ssh", "ssh diagnostics unavailable")
 	}
 	defer os.Remove(logName)
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	if _, err := Remaining(deadline); err != nil {
+		return Result{}, err
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	argv := tr.sshArgv(host, command)
 	argv = append([]string{argv[0], "-E", logName}, argv[1:]...)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- argv is built for the fixed system ssh executable without a shell.
+	// Bound os/exec's stdin cleanup. Own the combined output pipe separately:
+	// WaitDelay would otherwise close it soon after child exit, losing delayed
+	// descendant output even when the host budget still has time remaining.
+	cmd.WaitDelay = 100 * time.Millisecond
 	cmd.Stdin = bytes.NewReader(stdin)
+	readPipe, writePipe, err := os.Pipe()
+	if err != nil {
+		return Result{}, newTransportError("ssh", "ssh output capture unavailable")
+	}
+	defer readPipe.Close()
+	defer writePipe.Close()
 	w := newObservingWriter(newStreamCapWriter(tr.streamCap, cancel), output)
-	// Identical writers make os/exec retain one pipe and its actual byte order.
-	cmd.Stdout, cmd.Stderr = w, w
-	_ = cmd.Run()
-	tr.observeAcceptedHostKey(host)
-	if ctx.Err() == context.DeadlineExceeded {
+	cmd.Stdout, cmd.Stderr = writePipe, writePipe
+	startErr := cmd.Start()
+	_ = writePipe.Close() // only the child/descendants may now keep output open
+	var captureErr error
+	if startErr == nil {
+		// Child exit is not EOF. Drain until EOF or the same host deadline;
+		// closing our reader on cancellation also releases inherited pipes.
+		stopClose := context.AfterFunc(ctx, func() { _ = readPipe.Close() })
+		defer stopClose()
+		drained := make(chan error, 1)
+		go func() {
+			_, err := io.Copy(w, readPipe)
+			drained <- err
+		}()
+		_ = cmd.Wait()
+		captureErr = <-drained
+	}
+	// Evidence observation may consume the last remaining time, but must not
+	// turn an already completed command into a timeout.
+	timedOut := ctx.Err() == context.DeadlineExceeded
+	tr.observeAcceptedHostKey(host, deadline)
+	if timedOut {
 		return Result{}, newTransportError("timeout", "operation timed out")
 	}
 	rc := execStartFailedRC
@@ -532,6 +600,9 @@ func (tr *OpenSSH) ExecStream(host, command string, stdin []byte, timeout time.D
 		return Result{}, NewTransportError("ssh", diagnostic)
 	}
 	out, truncated := w.Bytes()
+	if captureErr != nil && !truncated {
+		return Result{}, newTransportError("ssh", "ssh output capture incomplete")
+	}
 	if rc < 0 && !truncated {
 		diagnostic, err := boundedSSHLog(logName)
 		if err != nil {
@@ -628,13 +699,21 @@ func (w *observingWriter) Bytes() ([]byte, bool) { return w.w.Bytes() }
 // Unlike ssh's Exec discrimination, scp's exit 255 is not special-cased
 // here — per the ported semantics, any non-zero rc from scp (255
 // included) is reported as TransportError{"scp"}.
-func (tr *OpenSSH) Put(host, localPath, remotePath string) error {
-	if err := tr.prepareAcceptedHostKey(host); err != nil {
+func (tr *OpenSSH) Put(host, localPath, remotePath string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	if err := tr.prepareAcceptedHostKey(host, deadline); err != nil {
+		if _, budgetErr := Remaining(deadline); budgetErr != nil {
+			return budgetErr
+		}
 		return newTransportError("scp", "host key inspection failed")
 	}
 	argv := tr.scpArgv(host, localPath, remotePath)
-	rc, out, timedOut := tr.Runner(argv, nil, defaultPutTimeout)
-	tr.observeAcceptedHostKey(host)
+	remaining, err := Remaining(deadline)
+	if err != nil {
+		return err
+	}
+	rc, out, timedOut := tr.Runner(argv, nil, remaining)
+	tr.observeAcceptedHostKey(host, deadline)
 
 	if timedOut {
 		return newTransportError("timeout", "operation timed out")

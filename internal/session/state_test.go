@@ -271,7 +271,7 @@ func (f *fakeTransport) Exec(host, command string, stdin []byte, timeout time.Du
 	return r.res, r.err
 }
 
-func (f *fakeTransport) Put(host, localPath, remotePath string) error {
+func (f *fakeTransport) Put(host, localPath, remotePath string, _ time.Duration) error {
 	panic("fakeTransport: Put not expected during Probe")
 }
 

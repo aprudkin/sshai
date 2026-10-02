@@ -51,7 +51,9 @@ sshai local --shell pwsh --body-file check.ps1
 
 Use `--body-file <file|->` for multiline bodies so the body stays out of interpreter argv. Local execution is not SSH, a remote fallback, a readonly-policy check, an authorization layer, or a security sandbox. It rejects remote-only flags and `--follow`. It retains the same bounded artifacts, passports, JSON v1 envelope, `--delta`, shell/context state, history, `q`, and retention behavior as remote `run`; synthetic targets `local-bash` and `local-pwsh` appear in results and `log`, but never `hosts`. A normal local shell exit is mirrored. Interpreter `start`, `timeout`, and `output-limit` failures are stored as `local-error=<value>` and return process exit `96`; overflow retains the stream cap and `truncated=1`. Timeout or output overflow stops only the direct interpreter child, so cross-platform descendant-process cleanup is not guaranteed.
 
-For one long-running host command, request an ephemeral structured event stream explicitly:
+For remote `run`, `--timeout N` is one per-host budget in seconds, not a fresh allowance for each step. It defaults to config `timeout_sec` (factory default 60). The clock starts before loading cached facts, after local policy/selector validation, and covers probing/setup, script staging and execution. Cached facts skip probing; each fan-out host has its own deadline. Slow first-contact setup leaves less time for the body, and Windows upload has no separate two-minute allowance. Both normal and follow transports allow up to 100 ms for pipe cleanup after cancellation, plus scheduling overhead; local result persistence/publication is outside this budget. `duration_ms` includes probing and staging from that same start. A timeout reports `transport-error=timeout`, not proof that remote work stopped or never ran. Check actual remote state before replaying side effects. Local execution's timeout contract is unchanged.
+
+For one long-running host command, request an ephemeral structured event stream explicitly; `--follow` does not extend the timeout:
 
 ```bash
 sshai run --follow <host> -- <command>

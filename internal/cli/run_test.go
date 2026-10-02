@@ -36,7 +36,7 @@ func (f *probeThenRunTr) Exec(host, cmd string, stdin []byte, _ time.Duration) (
 	return transport.Result{ExitCode: 0, Output: out}, nil
 }
 
-func (f *probeThenRunTr) Put(host, l, r string) error { return nil }
+func (f *probeThenRunTr) Put(host, l, r string, _ time.Duration) error { return nil }
 
 // TestRunProbesFactsWhenNotCached covers the facts cache-miss branch
 // (session.Probe): with no facts pre-seeded, runHost must probe before
@@ -86,7 +86,7 @@ func (f *probeFailsTr) Exec(host, cmd string, stdin []byte, _ time.Duration) (tr
 	return transport.Result{}, &transport.TransportError{Reason: "ssh"}
 }
 
-func (f *probeFailsTr) Put(host, l, r string) error { return nil }
+func (f *probeFailsTr) Put(host, l, r string, _ time.Duration) error { return nil }
 
 // TestRunProbeTransportErrorProducesTransportErrorPassport covers the
 // facts cache-miss branch's transport-error path: session.Probe itself
@@ -160,7 +160,7 @@ type pwshTr struct {
 	sentinel string
 }
 
-func (f *pwshTr) Put(host, localPath, remotePath string) error {
+func (f *pwshTr) Put(host, localPath, remotePath string, _ time.Duration) error {
 	f.putPaths = append(f.putPaths, remotePath)
 	data, err := os.ReadFile(localPath)
 	if err != nil {
@@ -231,7 +231,7 @@ type windowsTransportErrorTr struct {
 	putCalls, execCalls int
 }
 
-func (f *windowsTransportErrorTr) Put(_, _, _ string) error {
+func (f *windowsTransportErrorTr) Put(_, _, _ string, _ time.Duration) error {
 	f.putCalls++
 	if f.failAt == "put" {
 		time.Sleep(f.delay)
@@ -419,7 +419,7 @@ func (f *fakeTr) Exec(host, cmd string, stdin []byte, _ time.Duration) (transpor
 	return transport.Result{ExitCode: f.rc, Output: out}, nil
 }
 
-func (f *fakeTr) Put(host, l, r string) error {
+func (f *fakeTr) Put(host, l, r string, _ time.Duration) error {
 	f.calls++
 	return nil
 }
@@ -596,7 +596,7 @@ func (f *partialParseTr) Exec(host, cmd string, stdin []byte, _ time.Duration) (
 	return transport.Result{ExitCode: 0, Output: out}, nil
 }
 
-func (f *partialParseTr) Put(host, l, r string) error { return nil }
+func (f *partialParseTr) Put(host, l, r string, _ time.Duration) error { return nil }
 
 // TestRunLinuxPartialParseMergesWithPreviousState covers constraint 2: a
 // partial epilogue must not clobber a known-good previously saved Cwd/Env
@@ -669,7 +669,7 @@ func (f *multiHostTr) Exec(host, cmd string, stdin []byte, _ time.Duration) (tra
 	return transport.Result{ExitCode: f.rcs[host], Output: out}, nil
 }
 
-func (f *multiHostTr) Put(host, l, r string) error { return nil }
+func (f *multiHostTr) Put(host, l, r string, _ time.Duration) error { return nil }
 
 func (f *multiHostTr) AcceptedHostKey(host string) (transport.HostKey, bool, error) {
 	key, ok := f.acceptedHostKeys[host]
@@ -1005,7 +1005,7 @@ func TestRunHostDeltaKeysDoNotCollideAcrossHosts(t *testing.T) {
 
 	f := &fakeTr{rc: 0}
 	deps := Deps{Tr: f, Store: store}
-	base := Opts{Ctx: "t1", Command: "echo hello", Budget: 500, Delta: true}
+	base := Opts{Ctx: "t1", Command: "echo hello", Budget: 500, Delta: true, Timeout: time.Minute}
 
 	opts1 := base
 	opts1.Host = "h1"
