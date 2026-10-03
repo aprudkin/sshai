@@ -266,13 +266,20 @@ def _parse_cli(records: Any) -> dict[str, Any]:
             continue
         if kind in ("turn.completed", "turn.failed"):
             terminals.append({"record": number, "type": kind})
+            if kind == "turn.failed":
+                issues.append(_issue(source, "failed_turn", "CLI turn failed", record=number))
             if len(terminals) > 1:
                 issues.append(_issue(source, "duplicate_turn_terminal", "multiple terminal turn records", record=number))
             usage = _strict_usage(event.get("usage"), source, number, issues)
             if usage is not None:
                 snapshots.append({"record": number, "usage": usage, "terminal": True})
             continue
-        if kind in ("error", "turn.aborted"):
+        if kind == "error":
+            # Pinned exec emits this notification before a separate turn.failed.
+            # Retain the failure, but do not invent a second turn terminal.
+            issues.append(_issue(source, "reported_error", "CLI reported an error", record=number))
+            continue
+        if kind == "turn.aborted":
             terminals.append({"record": number, "type": kind})
             continue
         if kind not in ("item.started", "item.updated", "item.completed"):
@@ -555,6 +562,13 @@ def _parse_rollout(records: Any) -> dict[str, Any]:
             response(payload, number, "rollout.response_item")
         elif record_type == "turn_context":
             pass
+        elif record_type == "world_state":
+            # WorldStateItem at pinned 0.151.0 is persisted context-diff metadata,
+            # not a tool request. Its state values intentionally have no schema.
+            if (set(payload) != {"full", "state"} or type(payload["full"]) is not bool
+                    or not isinstance(payload["state"], dict)):
+                issues.append(_issue(source, "malformed_payload",
+                    "world_state requires only boolean full and object state", record=number))
         else:
             issues.append(_issue(source, "unknown_record_type", f"unrecognized rollout record type {record_type!r}",
                 record=number, invalid=False))

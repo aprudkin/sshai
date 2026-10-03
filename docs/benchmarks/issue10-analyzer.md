@@ -896,6 +896,22 @@ suite passed 96 tests with warnings treated as errors (25 coordinator, 25 captur
 Go test/vet/build also passed; Go tests used cache. These are synthetic consistency checks, not
 real session qualification or measured token results.
 
+### Pinned startup metadata and failure notifications
+
+Codex 0.151.0 persists [`world_state`](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/protocol/src/protocol.rs#L3107-L3123)
+with a boolean `full` and object `state`. The adapter recognizes these typed full/patch
+context snapshots as metadata, not tool invocations. State values remain opaque JSON;
+text mentioning a tool does not constitute a call. Missing, extra or wrongly typed payload
+fields remain capture errors; other unknown record kinds retain their audit gaps.
+
+The pinned [exec processor](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/exec/src/event_processor_with_jsonl_output.rs#L439-L450)
+emits an `error` notification while still running, followed by a separate
+[`turn.failed`](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/exec/src/event_processor_with_jsonl_output.rs#L530-L550)
+on failed completion. The notification is a retained error, not a duplicate terminal.
+An error without a terminal remains unfinished. These corrections do not make a failed
+turn successful, supply missing usage/answers, qualify finality or attest OS execution.
+Synthetic regressions cover both shapes; historical failed-slot evidence is not rewritten.
+
 ### Source-shaped answer completion comparison
 
 `benchmark_issue10_v3_capture.completion_evidence_bytes(events, rollout, answer)` compares bounded

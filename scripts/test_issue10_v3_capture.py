@@ -115,6 +115,48 @@ class PureCaptureTests(unittest.TestCase):
             "boundary": "unknown",
         })
 
+    def test_world_state_is_typed_metadata_not_a_tool_call(self) -> None:
+        original = adapter.capture(cli_records(), rollout_records(), process())
+        records = rollout_records()
+        for full in (True, False):
+            records.insert(2, {"type": "world_state", "payload": {
+                "full": full, "state": {"instructions": "exec_command is a tool name",
+                                       "nested": {"type": "function_call"}},
+            }})
+        report = adapter.capture(cli_records(), records, process())
+        self.assertFalse(report["issues"])
+        self.assertEqual(report["usage"], original["usage"])
+        self.assertEqual(len(report["calls"]["inventory"]), len(original["calls"]["inventory"]))
+        self.assertEqual(report["instrumentation"]["status"], "unknown")
+        self.assertFalse(report["experimental_claim_eligible"])
+
+    def test_world_state_malformed_shapes_remain_capture_errors(self) -> None:
+        for payload in ({}, {"full": 1, "state": {}}, {"full": True, "state": []},
+                        {"full": True, "state": {}, "tool_call": {}}, None):
+            with self.subTest(payload=payload):
+                records = rollout_records()
+                records.insert(2, {"type": "world_state", "payload": payload})
+                report = adapter.capture(cli_records(), records, process())
+                self.assertIn("malformed_payload", {i["code"] for i in report["issues"]})
+                self.assertFalse(report["experimental_claim_eligible"])
+
+    def test_error_notification_does_not_duplicate_failed_turn_terminal(self) -> None:
+        cli = cli_records()[:2] + [
+            {"type": "error", "message": "Synthetic startup failure"},
+            {"type": "turn.failed", "error": {"message": "Synthetic startup failure"}},
+        ]
+        report = adapter.capture(cli, rollout_records(), process(exit_code=1))
+        codes = {i["code"] for i in report["issues"] if i["source"] == "cli"}
+        self.assertNotIn("duplicate_turn_terminal", codes)
+        self.assertIn("reported_error", codes)
+        self.assertIn("failed_turn", codes)
+        self.assertFalse(report["usage"]["complete"])
+        self.assertEqual(report["execution"]["execution"], "failed")
+        self.assertFalse(report["experimental_claim_eligible"])
+        # An error notification alone is not a terminal record either.
+        report = adapter.capture(cli[:-1], rollout_records(), process(exit_code=1))
+        self.assertIn("unfinished_turn", {i["code"] for i in report["issues"]})
+
     def test_actual_call_inventory_keeps_unknown_names_without_policy_inference(self) -> None:
         cli = cli_records()
         cli.insert(-1, {"type": "item.started", "item": {
