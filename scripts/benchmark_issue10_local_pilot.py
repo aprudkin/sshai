@@ -79,6 +79,15 @@ REQUIRED_CODEX_OVERRIDES = [
     'features.browser_use_full_cdp_access=false', 'features.computer_use=false',
 ]
 ENVIRONMENT_KEYS = sandbox.ENVIRONMENT_KEYS
+CONTINUATION_SCHEMA = "sshai-benchmark/issue10-local-pilot-continuation-1"
+# Exact ad1532b controller: its inventory guard precedes attempt-directory creation
+# and _bounded_process; run_slot preserves model-attempt-requested uncertainty.
+PREPROCESS_CONTROLLER_SHA256 = "f7741cd99ad17de4c852802d2ffb8e294102416fa036b9353ea26abc2219fafc"
+SOURCE_PATHS = {
+    "scripts/benchmark_issue10_local_pilot.py", "scripts/benchmark_issue10_v3_capture.py",
+    "scripts/benchmark_issue10_v3_collector.py", "scripts/benchmark_issue10_sandbox.py",
+    "scripts/benchmark_issue10.py", "docs/benchmarks/issue10-methodology-amendment.md",
+}
 
 # Injectable only for synthetic tests; production uses the concrete implementations.
 _BINARY_PROBE: Callable[[Path, Path, dict[str, Any]], dict[str, Any]] | None = None
@@ -400,7 +409,8 @@ def _render_prompt(source: bytes, fixture: Path, scratch: Path, arm: str, sshai_
 def prepare(root: Path, fixture_bundle: Path, codex_path: Path, sshai_path: Path,
             config_path: Path, model_catalog_path: Path, tool_overrides_path: Path,
             auth_path: Path, assessment_instructions_path: Path,
-            assessment_rubric_path: Path, *, seed: int = DEFAULT_SEED) -> dict[str, Any]:
+            assessment_rubric_path: Path, *, seed: int = DEFAULT_SEED,
+            _continuation: dict[str, Any] | None = None) -> dict[str, Any]:
     """Create a new immutable private four-slot plan without launching a model."""
     root = legacy._physical(Path(root), must_exist=False)
     bundle_root = legacy._physical(Path(fixture_bundle))
@@ -502,6 +512,19 @@ def prepare(root: Path, fixture_bundle: Path, codex_path: Path, sshai_path: Path
                           "auditor_grade": "unknown", "independent_model_assessment": "unknown"},
         "experimental_savings_claim_eligible": False,
     }
+    if _continuation is not None:
+        predecessor = _bound_predecessor(_continuation, root, require_owner=False)
+        _same_continuation_plan(manifest, predecessor, root, Path(_continuation["predecessor_root"]))
+        if root.exists() or root.is_symlink():
+            raise PilotInputError("continuation requires a fresh root")
+        owner = _continuation_owner(_continuation, root)
+        try:
+            legacy._write_new(Path(_continuation["predecessor_root"]) / "continuation-owner.json",
+                              _pretty(owner))
+        except ValueError as exc:
+            raise PilotInputError("predecessor continuation is already claimed") from exc
+        _continuation["owner_sha256"] = _sha(_pretty(owner))
+        manifest["continuation"] = _continuation
     manifest["digest"] = _digest_object(manifest)
     legacy._new_dir(root)
     legacy._mkdir_private(root / "slots")
@@ -533,7 +556,7 @@ def prepare(root: Path, fixture_bundle: Path, codex_path: Path, sshai_path: Path
     return manifest
 
 
-def load_manifest(root: Path) -> dict[str, Any]:
+def load_manifest(root: Path, *, _source_root: Path | None = None) -> dict[str, Any]:
     root = legacy._physical(Path(root))
     manifest = _json_file(root / "manifest.json", "pilot manifest")
     if manifest.get("schema") != MANIFEST_SCHEMA or manifest.get("digest") != _digest_object(manifest):
@@ -550,10 +573,12 @@ def load_manifest(root: Path) -> dict[str, Any]:
         raise PilotInputError("pilot config digest mismatch")
     if _json_file(root / "config.json", "retained pilot config") != config:
         raise PilotInputError("retained pilot config changed")
-    for name, expected in manifest.get("sources", {}).items():
-        if not name.startswith(("scripts/", "docs/benchmarks/")) or ".." in Path(name).parts:
-            raise PilotInputError("unsafe source pin")
-        if legacy._file_digest(REPO / name) != expected:
+    source_root = REPO if _source_root is None else legacy._physical(_source_root)
+    if set(manifest.get("sources", {})) != SOURCE_PATHS:
+        raise PilotInputError("source pin inventory changed")
+    for name, expected in manifest["sources"].items():
+        _hex_digest(expected, "source pin")
+        if legacy._file_digest(legacy._physical(source_root / name)) != expected:
             raise PilotInputError(f"controller source changed since preparation: {name}")
     if Path(manifest["codex"]["path"]) != EXPECTED_CODEX_PATH:
         raise PilotInputError("frozen Codex path changed from the selected native binary")
@@ -607,7 +632,187 @@ def load_manifest(root: Path) -> dict[str, Any]:
             if (legacy._file_digest(source) != expected["sha256"]
                     or source.stat().st_size != expected["bytes"]):
                 raise PilotInputError("prepared fixture changed")
+    if "continuation" in manifest:
+        if _source_root is not None:
+            raise PilotInputError("nested continuation predecessors are unsupported")
+        predecessor = _bound_predecessor(manifest["continuation"], root)
+        _same_continuation_plan(manifest, predecessor, root, Path(manifest["continuation"]["predecessor_root"]))
+        if (root / "slots" / "001").exists() or (root / "slots" / "001").is_symlink():
+            raise PilotInputError("inherited consumed slot cannot exist in the prospective root")
     return manifest
+
+
+def _preprocess_prefix(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    """Only the original slot-1 arg0 inventory failure; not general recovery."""
+    if "continuation" in manifest:
+        raise PilotInputError("nested continuation predecessors are unsupported")
+    if manifest["sources"]["scripts/benchmark_issue10_local_pilot.py"] != PREPROCESS_CONTROLLER_SHA256:
+        raise PilotInputError("predecessor source does not prove the reviewed guard-before-process contract")
+    load_readiness(root, manifest)
+    _fixture_inventory(Path(manifest["fixture_bundle"]["path"]))
+    if {path.name for path in (root / "slots").iterdir()} != {"001"}:
+        raise PilotInputError("only consumed slot 1 and wholly absent slots 2..4 are eligible")
+    base = legacy._physical(root / "slots" / "001")
+    reservation = _json_file(base / "reservation.json", "predecessor reservation")
+    if (set(reservation) != {"manifest_digest", "slot", "approval_sha256", "one_shot"}
+            or reservation["manifest_digest"] != manifest["digest"]
+            or reservation["slot"] != manifest["slots"][0] or reservation["one_shot"] is not True):
+        raise PilotInputError("predecessor reservation is malformed")
+    _hex_digest(reservation["approval_sha256"], "predecessor approval hash")
+    expected = _failure_result(manifest["slots"][0], "model-attempt-requested")
+    expected["launch"] = "attempted-or-unknown"
+    if _json_file(base / "result.json", "predecessor failure") != expected:
+        raise PilotInputError("predecessor is not the retained blocked pre-process outcome")
+    home = base / "codex-home"
+    runtime = _native_runtime_inventory(home)
+    if not runtime["present"] or not runtime["entries"]:
+        raise PilotInputError("predecessor has no recognized arg0 inventory-guard trigger")
+    auth = home / "auth.json"
+    if not auth.is_symlink() or auth.readlink() != Path(manifest["auth"]["path"]):
+        raise PilotInputError("predecessor provisioned auth link changed")
+    if legacy._file_digest(home / "model-catalog.json") != manifest["model_catalog"]["sha256"]:
+        raise PilotInputError("predecessor provisioned catalog changed")
+    receipt = _validated_access_receipt(_json_file(base / "evidence/access-receipt.json", "predecessor access"))
+    if legacy._file_digest(base / "evidence/prompt.txt") != manifest["slot_material"]["1"]["rendered_prompt_sha256"]:
+        raise PilotInputError("predecessor rendered prompt changed")
+    # An exact bounded census rejects even empty attempt/session directories,
+    # process/answer files, and unknown evidence anywhere in the consumed slot.
+    allowed = {"reservation.json", "result.json", "fixture", "scratch", "evidence", "home",
+               "codex-home", "scratch/sshai-root", "scratch/tmp", "home/.config", "home/.cache",
+               "home/.local-share", "codex-home/auth.json", "codex-home/model-catalog.json",
+               "codex-home/tmp", "evidence/access-receipt.json", "evidence/prompt.txt"}
+    directory_paths = {"fixture", "scratch", "evidence", "home", "codex-home", "scratch/sshai-root",
+                       "scratch/tmp", "home/.config", "home/.cache", "home/.local-share", "codex-home/tmp"}
+    material = manifest["slot_material"]["1"]["fixture_files"]
+    for name, metadata in material.items():
+        relative = Path("fixture") / _safe_relative(name, "predecessor fixture")
+        allowed.add(str(relative))
+        parents = {str(parent) for parent in relative.parents if str(parent) != "."}
+        allowed.update(parents)
+        directory_paths.update(parents)
+        if legacy._file_digest(base / relative) != metadata["sha256"]:
+            raise PilotInputError("predecessor fixture changed")
+    aliases = {"codex-home/" + row["path"] for row in runtime["entries"]
+               if row["kind"] == "native-alias"}
+    allowed.update("codex-home/" + row["path"] for row in runtime["entries"])
+    directory_paths.update("codex-home/" + row["path"] for row in runtime["entries"]
+                           if row["kind"] == "directory")
+    inventory = {}
+    for current, directories, files in os.walk(base, followlinks=False, onerror=_incomplete_scan):
+        for name in sorted([*directories, *files]):
+            path = Path(current) / name
+            relative = str(path.relative_to(base))
+            if len(inventory) >= MAX_DISCOVERY_ENTRIES or relative not in allowed:
+                raise PilotInputError("predecessor contains attempt or unsupported evidence")
+            mode = path.lstat().st_mode
+            if stat.S_ISLNK(mode) and relative in aliases | {"codex-home/auth.json"}:
+                inventory[relative] = {"link": str(path.readlink())}
+            elif stat.S_ISDIR(mode) and relative in directory_paths:
+                inventory[relative] = {"directory": True}
+            elif stat.S_ISREG(mode) and relative not in directory_paths | aliases | {"codex-home/auth.json"}:
+                inventory[relative] = {"sha256": legacy._file_digest(path)}
+            else:
+                raise PilotInputError("predecessor contains unsupported evidence type")
+    if set(inventory) != allowed:
+        raise PilotInputError("predecessor pre-process inventory is incomplete")
+    return {"slot_inventory": inventory, "access_receipt_digest": receipt["digest"]}
+
+
+def _continuation_owner(binding: dict[str, Any], root: Path) -> dict[str, Any]:
+    identity = dict(binding)
+    identity.pop("owner_sha256", None)
+    return {"schema": CONTINUATION_SCHEMA, "continuation_root": str(root),
+            "binding_sha256": _sha(_encoded(identity)), "executable_slots": [2, 3, 4],
+            "one_shot": True, "launch_approval": False}
+
+
+def _bound_predecessor(binding: dict[str, Any], root: Path, *, require_owner: bool = True) -> dict[str, Any]:
+    fields = {"schema", "predecessor_root", "source_snapshot", "predecessor_digest",
+              "original_sources", "original_hashes", "prefix_evidence", "inherited_slots",
+              "executable_slots", "reason", "authorization_note"}
+    if require_owner:
+        fields.add("owner_sha256")
+    _exact_object(binding, fields, "continuation receipt")
+    if (binding["schema"] != CONTINUATION_SCHEMA or binding["inherited_slots"] != [1]
+            or binding["executable_slots"] != [2, 3, 4]
+            or any(not isinstance(binding[key], str) or not binding[key].strip()
+                   for key in ("reason", "authorization_note"))):
+        raise PilotInputError("unsupported continuation receipt")
+    old_root = legacy._physical(Path(binding["predecessor_root"]))
+    if old_root == root or old_root.parent != root.parent:
+        raise PilotInputError("continuation must be a fresh sibling of its predecessor")
+    old = load_manifest(old_root, _source_root=Path(binding["source_snapshot"]))
+    if old["digest"] != binding["predecessor_digest"] or old["sources"] != binding["original_sources"]:
+        raise PilotInputError("bound predecessor manifest changed")
+    hashes = {name: legacy._file_digest(old_root / name) for name in
+              ("manifest.json", "slots/001/reservation.json", "slots/001/result.json",
+               "readiness/result.json", "readiness/access-M01.json", "readiness/access-M02.json")}
+    if hashes != binding["original_hashes"] or _preprocess_prefix(old_root, old) != binding["prefix_evidence"]:
+        raise PilotInputError("bound predecessor evidence changed")
+    if require_owner:
+        owner_path = old_root / "continuation-owner.json"
+        if (legacy._file_digest(legacy._physical(owner_path)) != binding["owner_sha256"]
+                or _json_file(owner_path, "continuation ownership") != _continuation_owner(binding, root)):
+            raise PilotInputError("continuation ownership changed or belongs to another root")
+    return old
+
+
+def _same_continuation_plan(manifest: dict[str, Any], old: dict[str, Any],
+                            root: Path, old_root: Path) -> None:
+    for key in ("phase", "schedule_seed", "random_generator", "slots", "session_count",
+                "original_diagnostic_session_ceiling", "assessor_context_ceiling", "no_retry_no_resume",
+                "local_only", "fixture_bundle", "codex", "sshai", "auth", "config", "config_sha256",
+                "assessment_inputs", "qualification", "experimental_savings_claim_eligible"):
+        if manifest[key] != old[key]:
+            raise PilotInputError(f"continuation changed original plan: {key}")
+    for key in ("model_catalog", "tool_overrides"):
+        if {k: v for k, v in manifest[key].items() if k != "source_path"} != {
+                k: v for k, v in old[key].items() if k != "source_path"}:
+            raise PilotInputError(f"continuation changed original plan: {key}")
+    for number in ("1", "2", "3", "4"):
+        for key in ("fixture_files", "source_prompt_sha256"):
+            if manifest["slot_material"][number][key] != old["slot_material"][number][key]:
+                raise PilotInputError("continuation changed fixture or prompt")
+    # Re-render at BOTH roots. Equal source-prompt hashes alone would not catch
+    # changed branch guidance. Only the fixture/scratch path substitutions differ.
+    for slot in old["slots"]:
+        number = str(slot["slot"])
+        source = legacy._read_bounded(old_root / "prepared/prompts" / f"{slot['case_id']}.md",
+                                      collector.MAX_PROMPT_BYTES)
+        for plan, plan_root in ((old, old_root), (manifest, root)):
+            base = plan_root / "slots" / f"{slot['slot']:03}"
+            rendered = _render_prompt(source, base / "fixture", base / "scratch",
+                                      slot["arm"], plan["sshai"]["path"])
+            if _sha(rendered) != plan["slot_material"][number]["rendered_prompt_sha256"]:
+                raise PilotInputError("continuation changed frozen rendered instructions")
+
+
+def prepare_continuation(root: Path, predecessor: Path, source_snapshot: Path, *,
+                         reason: str, authorization_note: str) -> dict[str, Any]:
+    """Prepare remaining slots 2..4, retaining consumed slot 1 without retry."""
+    root = legacy._physical(Path(root), must_exist=False)
+    predecessor = legacy._physical(Path(predecessor))
+    snapshot = legacy._physical(Path(source_snapshot))
+    old = load_manifest(predecessor, _source_root=snapshot)
+    prefix = _preprocess_prefix(predecessor, old)
+    if (predecessor / "continuation-owner.json").exists() or (predecessor / "continuation-owner.json").is_symlink():
+        raise PilotInputError("predecessor continuation is already claimed")
+    binding = {
+        "schema": CONTINUATION_SCHEMA, "predecessor_root": str(predecessor),
+        "source_snapshot": str(snapshot), "predecessor_digest": old["digest"],
+        "original_sources": old["sources"], "prefix_evidence": prefix,
+        "original_hashes": {name: legacy._file_digest(predecessor / name) for name in
+                            ("manifest.json", "slots/001/reservation.json", "slots/001/result.json",
+                             "readiness/result.json", "readiness/access-M01.json", "readiness/access-M02.json")},
+        "inherited_slots": [1], "executable_slots": [2, 3, 4],
+        "reason": reason, "authorization_note": authorization_note,
+    }
+    return prepare(root, Path(old["fixture_bundle"]["path"]), Path(old["codex"]["path"]),
+                   Path(old["sshai"]["path"]), predecessor / "config.json",
+                   predecessor / "model-catalog.json", predecessor / "tool-overrides.json",
+                   Path(old["auth"]["path"]), predecessor / "prepared/assessment/instructions.md",
+                   predecessor / "prepared/assessment/rubric.md", seed=old["schedule_seed"],
+                   _continuation=binding)
 
 
 def _approval(manifest: dict[str, Any], path: Path, allow_model_run: bool) -> dict[str, Any]:
@@ -1217,7 +1422,14 @@ def run_slot(root: Path, number: int, approval_path: Path, *,
     load_readiness(root, manifest)
     approval = _approval(manifest, approval_path, allow_model_run)
     slot = _slot(manifest, number)
+    inherited = manifest.get("continuation", {}).get("inherited_slots", [])
+    if number in inherited:
+        raise PilotInputError("inherited consumed slot cannot be executed or retried")
+    if (root / "continuation-owner.json").exists() or (root / "continuation-owner.json").is_symlink():
+        raise PilotInputError("remaining slots belong to the prospective continuation")
     for prior in range(1, number):
+        if prior in inherited:
+            continue  # Only the manifest-bound, revalidated pre-process exception.
         prior_result = root / "slots" / f"{prior:03}" / "result.json"
         if not prior_result.is_file() or prior_result.is_symlink():
             raise PilotInputError("fixed schedule requires a retained result for every prior slot")
@@ -1382,6 +1594,13 @@ def summarize(root: Path) -> dict[str, Any]:
     manifest = load_manifest(root)
     rows = []
     for slot in manifest["slots"]:
+        if slot["slot"] in manifest.get("continuation", {}).get("inherited_slots", []):
+            old_root = Path(manifest["continuation"]["predecessor_root"])
+            retained = _json_file(old_root / "slots/001/result.json", "inherited failure")
+            row = _result_summary(retained)
+            row.update({"state": "retained-failure", "retryable": False})
+            rows.append(row)
+            continue
         base = root / "slots" / f"{slot['slot']:03}"
         path = base / "result.json"
         if not path.exists() and not path.is_symlink():
@@ -1433,6 +1652,12 @@ def _main(argv: list[str] | None = None) -> int:
     prep.add_argument("--assessment-instructions", type=Path, required=True)
     prep.add_argument("--assessment-rubric", type=Path, required=True)
     prep.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    continuation = commands.add_parser("prepare-continuation", help="prepare only original unreserved slots 2..4")
+    continuation.add_argument("root", type=Path)
+    continuation.add_argument("--predecessor", type=Path, required=True)
+    continuation.add_argument("--predecessor-sources", type=Path, required=True)
+    continuation.add_argument("--reason", required=True)
+    continuation.add_argument("--authorization-note", required=True)
     ready = commands.add_parser("preflight", help="run retained no-model readiness canaries")
     ready.add_argument("root", type=Path)
     run = commands.add_parser("run-slot", help="attempt one approved one-shot slot")
@@ -1450,6 +1675,13 @@ def _main(argv: list[str] | None = None) -> int:
                            args.assessment_rubric, seed=args.seed)
         output = {"schema": MANIFEST_SCHEMA, "phase": manifest["phase"],
                   "manifest_digest": manifest["digest"], "scheduled_sessions": SESSION_COUNT,
+                  "model_launches": 0, "approval_required": True}
+    elif args.command == "prepare-continuation":
+        manifest = prepare_continuation(args.root, args.predecessor, args.predecessor_sources,
+                                        reason=args.reason, authorization_note=args.authorization_note)
+        output = {"schema": MANIFEST_SCHEMA, "phase": manifest["phase"],
+                  "manifest_digest": manifest["digest"], "scheduled_sessions": SESSION_COUNT,
+                  "inherited_consumed_slots": [1], "executable_slots": [2, 3, 4],
                   "model_launches": 0, "approval_required": True}
     elif args.command == "preflight":
         output = preflight(args.root)

@@ -150,6 +150,15 @@ implements a separate local preparation and capture path. It does not enable the
 historical v3 `run-one` command or implement model assessment or measured analysis.
 The [reusable assessor instructions](issue10-assessment-instructions.md) define the
 separate assessment prompt and response contract; they are not an assessor runner.
+The [offline assessment bridge](../../scripts/benchmark_issue10_local_assessment.py)
+provides `packet` and `validate` commands for a single-task, branch-hidden packet and
+an explicitly supplied assessment response. Its private owner inventory retains all
+planned slots and exclusion reasons. Finality qualification is caller-declared provenance,
+not established by this bridge; unknown-finality bytes are not exported as answers.
+Validation retains malformed responses and independently valid rows, checks supplied
+citation coordinates separately, and does not verify semantic correctness, assign grades,
+launch an assessor, import pilot results or promote experimental eligibility. Use its
+`--help` for the bounded input contract and expose only `assessor/`, never `owner/`.
 
 - `prepare` creates a new private manifest and freezes the inputs, rendered prompts,
   binary/configuration pins, four-slot schedule, and assessment instructions/rubric.
@@ -212,6 +221,84 @@ Passing this check establishes that boundary's compatibility, not live model ava
 usage/finality qualification or completion of a pilot. A previously consumed slot remains
 immutable and non-retryable after a controller fix; changed source pins require prospective
 preparation, not editing the old manifest or replacing the failed outcome.
+
+### Bounded prospective continuation after the first inventory failure
+
+The [continuation decision](https://github.com/aprudkin/sshai/issues/10#issuecomment-5971609730)
+authorizes a new preparation for **only original slots 2–4**, not a replacement pilot
+or a retry of slot 1. `prepare-continuation` requires a new sibling private root,
+`--predecessor`, an explicit `--predecessor-sources` snapshot root, a descriptive
+`--reason`, and the current `--authorization-note`. The note records the preparation
+authority; it is not a model-launch approval. No model runs during preparation.
+
+This is a narrow exception to the prior-result continuation barrier above:
+
+- The predecessor must have a successful, unchanged no-model preflight, exactly one
+  reserved directory (`001`), its reservation and its original blocked
+  `model-attempt-requested` failure result. Slots 2–4 must have no directories at all.
+  Other consumed prefixes and nested continuations are unsupported.
+- The predecessor controller must be the exact
+  [ad1532b source](https://github.com/aprudkin/sshai/blob/ad1532b/scripts/benchmark_issue10_local_pilot.py),
+  SHA-256 `f7741cd99ad17de4c852802d2ffb8e294102416fa036b9353ea26abc2219fafc`.
+  In that source the exact CODEX_HOME inventory guard precedes attempt-directory
+  creation and the model subprocess. The current validator reads all six pinned
+  source/protocol files from the explicit old snapshot and verifies their hashes;
+  it does not ignore old pins or import/execute old Python code.
+- The consumed slot must retain the recognized native arg0 layout that triggered
+  the old inventory guard, its successful access receipt, unchanged fixture,
+  provisioned catalog/auth link and exact rendered prompt. A bounded exact census
+  of provisioned directories, regular files and allowed native/auth links rejects
+  any attempt directory (even empty), process/answer/rollout evidence, unexpected
+  file, symlink or entry type. Missing results or mere absence of process files do
+  not qualify. The inference relies on the pinned source ordering and retained
+  provisioning evidence, not an independent OS/process attestation.
+- The new manifest binds the predecessor digest, complete original source pins,
+  byte hashes of its manifest, reservation, result, readiness result and both
+  readiness access receipts, plus the consumed-slot census and access-receipt digest.
+  It preserves the complete four-outcome schedule, fixture/source-prompt bytes,
+  model, executable/configuration/catalog/control pins, assessment inputs and all
+  ceilings. Rendered prompts are checked at both roots; only fixture/scratch path
+  substitutions may differ. The new manifest pins current sources and this amended
+  protocol without changing the old manifest, pins, results or source snapshot.
+- Preparation atomically publishes `continuation-owner.json` in the predecessor
+  root, without overwrite. This separate control receipt binds the sole prospective
+  root, remaining slots and preparation receipt; its byte hash is bound in the new
+  manifest. A duplicate or copied-root continuation cannot launch the same slots.
+  If preparation is interrupted after ownership publication, ownership stays consumed;
+  this operation has no automatic recovery or second-owner path.
+
+The new root still requires a **fresh current-source `preflight`**, newly
+manifest-bound approval and `--allow-model-run`. The controller revalidates old
+sources, retained evidence and ownership on every manifest load, including before
+launch. It never provisions or runs inherited slot 1. The first executable slot is
+2; subsequent original slots require acceptable new prior results and remain one-shot.
+Captured, unsafe, unknown-attempt or other model failures receive no bypass.
+
+`summary` retains all four planned outcomes and labels inherited slot 1
+`retained-failure`, with its original `attempted-or-unknown` launch status, blocked
+continuation, unknown quality/usage and no compliant or savings claim. Eligibility
+for the remaining preparation does not rewrite that launch uncertainty or count
+slot 1 as a successful diagnostic session. Three successful remaining sessions would
+still not establish a full four-session pilot success or a completed experiment.
+
+The existing 53 local-controller checks, including the optional installed no-model
+smoke check, remain. The focused synthetic continuation suite additionally exercises
+immutable inherited failure, execution starting at slot 2, fixed order and one-shot
+refusals, duplicate ownership, tampered source/binary/configuration/fixture/catalog
+and retained evidence, attempt-evidence rejection, unsupported prefixes, changed
+branch instructions and failed fresh readiness. It patches the accepted historical
+source digest only in synthetic fixtures: these tests validate state and ownership
+behavior, **not authentic old-source ordering or live model readiness**. They need
+neither Git history nor an installed model or real credentials. Run both suites with:
+
+```sh
+python3 -W error -m unittest discover -s scripts -p 'test_issue10_local_pilot*.py'
+```
+
+The original-source integration check is separate and must retain the exact frozen
+source bytes and verify the ordering/hash contract without replacing the old outcome.
+No synthetic test or preparation receipt establishes live finality, usage completeness,
+semantic routing, model assessment, comparative savings or completion of any phase.
 
 ## Readiness and reporting
 
