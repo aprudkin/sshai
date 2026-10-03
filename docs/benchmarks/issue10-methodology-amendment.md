@@ -392,6 +392,43 @@ Accepted historical digests are patched only in synthetic fixtures; authentic-so
 qualification and live backend acceptance remain separate checks for the coordinator.
 The existing opt-in installed smoke and first-continuation checks remain unchanged.
 
+## Single-context assessor runner
+
+[`scripts/benchmark_issue10_assessment_runner.py`](../../scripts/benchmark_issue10_assessment_runner.py)
+launches at most one separately prepared assessment context. It is not a study
+coordinator, finality qualifier, grade importer or replacement for the serial ledger.
+The caller first qualifies diagnostic finals outside grading and constructs the
+single-task bridge packet. Empty eligible batches refuse before any model attempt;
+their planned missing outcomes remain in the bridge owner inventory.
+
+- `prepare` freezes the exact packet and owner/completion receipt hashes, native
+  executable, full model catalog, configuration, sources, model/version/effort,
+  instructions/rubric pins, argv, isolated environment, protected paths and caller
+  budget provenance. It does not launch a model or read credential contents.
+- `preflight` is one-shot and launches no model. Existing named-permission canaries
+  plus exact packet read/write-denial checks qualify the prepared profile. Of the
+  study evidence, only the copied self-contained input is assessor-readable;
+  owner/control records, original packet and protected diagnostics are denied.
+  The profile also permits reviewed minimal/runtime and Homebrew reads and writable
+  scratch. Shell and unified-exec model tools are disabled alongside the existing
+  non-command capability controls.
+- `run` requires a successful unchanged preflight, caller-recorded manifest-bound
+  advance approval and `--allow-model-run`. It reserves the context before fresh
+  canaries and collection. Every reservation/failure remains non-retryable. The
+  selected model is `gpt-5.6-sol/high`, with a 600-second wall bound; no substitution,
+  auth repair or paid fallback is provided. Any recorded tool activity blocks use.
+
+Input remains within the collector's 1 MiB prompt cap; assessment-response eligibility
+is limited to 64 KiB. Raw streams, rollout and final bytes retain the existing bounded
+collector evidence, including oversized responses as invalid rather than truncated
+answers. Outputs remain private. Finality and quality stay unknown: the caller must
+separately qualify delivered final JSON and invoke bridge validation. Usage is retained
+separately from diagnostic usage, with unavailable measurements never treated as zero.
+Named canaries and zero recorded calls do not establish complete OS observation or
+absence of managed/cloud configuration. The frozen budget is caller-declared provenance,
+not a trusted global attestation; the main serial ledger owns the 24-context allocation.
+Use the runner's `--help` for its explicit configuration and approval contracts.
+
 ## Readiness and reporting
 
 A prospective manifest must bind this amendment, concrete source/binary/configuration
