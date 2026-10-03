@@ -939,10 +939,61 @@ def load_readiness(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     return readiness
 
 
+def _incomplete_scan(error: OSError) -> None:
+    raise PilotInputError("incomplete CODEX_HOME traversal") from error
+
+
+def _native_runtime_inventory(codex_home: Path) -> dict[str, Any]:
+    """Recognize only Darwin arg0 aliases from the pinned Codex source.
+
+    sandbox startup can leave tmp/arg0 behind before the model process starts.
+    These are runtime aliases, not rollouts or proof that a tool was invoked.
+    Source: codex-rs/arg0/src/lib.rs:327-445 at SOURCE_CONTRACT['revision'].
+    """
+    runtime = codex_home / "tmp"
+    entries = []
+    present = runtime.exists() or runtime.is_symlink()
+    if present:
+        if runtime.is_symlink() or not runtime.is_dir():
+            raise PilotInputError("unexpected native runtime root")
+        for current, directories, files in os.walk(runtime, followlinks=False,
+                                                   onerror=_incomplete_scan):
+            for name in sorted([*directories, *files]):
+                if len(entries) >= MAX_DISCOVERY_ENTRIES:
+                    raise PilotInputError("native runtime inventory entry bound exceeded")
+                path = Path(current) / name
+                parts = path.relative_to(runtime).parts
+                mode = path.lstat().st_mode
+                kind = None
+                if ((len(parts) == 1 and parts[0] == "arg0")
+                        or (len(parts) == 2 and parts[0] == "arg0"
+                            and parts[1].startswith("codex-arg0")
+                            and parts[1] != "codex-arg0")):
+                    if stat.S_ISDIR(mode):
+                        kind = "directory"
+                elif len(parts) == 3 and parts[0] == "arg0":
+                    if (parts[2] == ".lock" and stat.S_ISREG(mode)
+                            and path.stat().st_size == 0):
+                        kind = "lock"
+                    elif (parts[2] in {"apply_patch", "applypatch", "codex-execve-wrapper"}
+                          and stat.S_ISLNK(mode)
+                          and path.readlink() == EXPECTED_CODEX_PATH):
+                        kind = "native-alias"
+                if kind is None:
+                    raise PilotInputError("unexpected native runtime entry")
+                entries.append({"path": str(path.relative_to(codex_home)), "kind": kind})
+    return {"classification": "pinned-arg0-layout", "present": present,
+            "entries": sorted(entries, key=lambda row: row["path"])}
+
+
 def _discover_rollouts(codex_home: Path) -> tuple[list[Path], dict[str, Any]]:
+    native_runtime = _native_runtime_inventory(codex_home)
+    native_aliases = {codex_home / row["path"] for row in native_runtime["entries"]
+                      if row["kind"] == "native-alias"}
     candidates: list[Path] = []
     entry_count = 0
-    for current, directories, files in os.walk(codex_home, topdown=True, followlinks=False):
+    for current, directories, files in os.walk(codex_home, topdown=True, followlinks=False,
+                                               onerror=_incomplete_scan):
         directories.sort()
         files.sort()
         current_path = Path(current)
@@ -952,7 +1003,7 @@ def _discover_rollouts(codex_home: Path) -> tuple[list[Path], dict[str, Any]]:
                 raise PilotInputError("isolated CODEX_HOME discovery entry bound exceeded")
             path = current_path / name
             if path.is_symlink():
-                if path == codex_home / "auth.json":
+                if path == codex_home / "auth.json" or path in native_aliases:
                     continue
                 raise PilotInputError("unexpected symlink in isolated CODEX_HOME")
         for name in files:
@@ -964,7 +1015,7 @@ def _discover_rollouts(codex_home: Path) -> tuple[list[Path], dict[str, Any]]:
     if len(candidates) > collector.MAX_ROLLOUT_CANDIDATES:
         raise PilotInputError("isolated CODEX_HOME produced too many rollout candidates")
     return candidates, {"root": str(codex_home), "entry_count": entry_count,
-                        "candidate_count": len(candidates),
+                        "candidate_count": len(candidates), "native_runtime": native_runtime,
                         "method": "bounded recursive scan of this slot's initially empty CODEX_HOME only"}
 
 
@@ -975,7 +1026,10 @@ def _collect_local_attempt(attempt_dir: Path, argv: Sequence[str], *, prompt: by
     """Collector specialization whose only post-spawn discovery root is fresh CODEX_HOME."""
     (output, command, environment, work, timeout, _, answer) = collector._validate_request(
         attempt_dir, argv, prompt, env, cwd, timeout_seconds, (), answer_path)
+    native_runtime = _native_runtime_inventory(codex_home)
     expected_inventory = {codex_home / "auth.json", codex_home / "model-catalog.json"}
+    if native_runtime["present"]:
+        expected_inventory.add(codex_home / "tmp")
     if set(codex_home.iterdir()) != expected_inventory:
         raise PilotInputError("dedicated CODEX_HOME inventory changed after controlled provisioning")
     request = collector._request_receipt(command, prompt, environment, work, timeout, [], answer)
@@ -989,7 +1043,8 @@ def _collect_local_attempt(attempt_dir: Path, argv: Sequence[str], *, prompt: by
     request.update({"schema": collector.ASSOCIATED_ATTEMPT_SCHEMA,
                     "association": retained_association,
                     "rollout_discovery": {"root": str(codex_home),
-                                          "initial_inventory": ["auth.json", "model-catalog.json"],
+                                          "initial_inventory": sorted(path.name for path in expected_inventory),
+                                          "native_runtime": native_runtime,
                                           "entry_bound": MAX_DISCOVERY_ENTRIES,
                                           "candidate_bound": collector.MAX_ROLLOUT_CANDIDATES}})
     attempt = collector._private_new_directory(output)

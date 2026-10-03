@@ -433,6 +433,150 @@ sys.stdout.buffer.write(cli)
         self.assertFalse(raw_audit["shell_substring_classification"])
         self.assertEqual(raw_audit["semantic_routing"]["status"], "unknown")
 
+    def native_runtime(self, codex_home):
+        directory = codex_home / "tmp" / "arg0" / "codex-arg0Synthetic"
+        directory.mkdir(parents=True)
+        write(directory / ".lock", b"")
+        for name in ("apply_patch", "applypatch", "codex-execve-wrapper"):
+            (directory / name).symlink_to(self.codex)
+        return directory
+
+    def test_qualification_native_runtime_survives_collection_and_discovery(self):
+        # Installed sandbox startup leaves these aliases before collection.
+        # Rejecting all tmp entries, or all discovery symlinks, breaks this path.
+        def access(codex, sshai, scratch, fixture, protected, environment, files):
+            self.native_runtime(Path(environment["CODEX_HOME"]))
+            return PilotFixture.fake_access(codex, sshai, scratch, fixture, protected,
+                                            environment, files)
+        with patch.object(self, "fake_access", side_effect=access):
+            summary = self.run_slot(1, self.successful_collector)
+        self.assertEqual(summary["continuation"], {"allowed": True, "blockers": []})
+        attempt = self.root / "slots/001/evidence/attempt"
+        request = json.loads((attempt / "attempt.json").read_text())
+        self.assertEqual(request["rollout_discovery"]["initial_inventory"],
+                         ["auth.json", "model-catalog.json", "tmp"])
+        discovery = json.loads((attempt / "delivery.json").read_text())["rollout_discovery"]
+        self.assertEqual(discovery["candidate_count"], 1)
+        self.assertEqual(len(discovery["native_runtime"]["entries"]), 6)
+        self.assertEqual(discovery["native_runtime"]["classification"], "pinned-arg0-layout")
+        self.assertTrue((self.root / "slots/001/codex-home/tmp/arg0/codex-arg0Synthetic/apply_patch").is_symlink())
+
+    def test_native_runtime_does_not_admit_unknown_files_or_foreign_aliases(self):
+        for variant in ("foreign-alias", "regular-alias", "extra-jsonl", "linked-tmp",
+                        "nested-directory", "nonempty-lock", "linked-lock", "entry-overflow"):
+            with self.subTest(variant=variant):
+                home = self.private / ("runtime-" + variant)
+                home.mkdir()
+                runtime = self.native_runtime(home)
+                if variant == "foreign-alias":
+                    (runtime / "apply_patch").unlink()
+                    (runtime / "apply_patch").symlink_to(self.sshai)
+                elif variant == "regular-alias":
+                    (runtime / "apply_patch").unlink()
+                    write(runtime / "apply_patch", b"not-an-alias")
+                elif variant == "extra-jsonl":
+                    write(runtime / "hidden.jsonl", b"{}\n")
+                elif variant == "linked-tmp":
+                    (home / "tmp").rename(home / "elsewhere")
+                    (home / "tmp").symlink_to(home / "elsewhere")
+                elif variant == "nested-directory":
+                    (runtime / "nested").mkdir()
+                elif variant == "nonempty-lock":
+                    write(runtime / ".lock", b"unexpected")
+                elif variant == "linked-lock":
+                    (runtime / ".lock").unlink()
+                    (runtime / ".lock").symlink_to(self.auth)
+                else:
+                    for index in range(pilot.MAX_DISCOVERY_ENTRIES):
+                        (home / "tmp/arg0" / f"codex-arg0{index}").mkdir()
+                with patch.object(pilot, "EXPECTED_CODEX_PATH", self.codex), \
+                     self.assertRaises(pilot.PilotInputError):
+                    pilot._discover_rollouts(home)
+
+    def test_process_created_native_aliases_are_not_lost_rollout_evidence(self):
+        original = pilot.legacy._bounded_process
+        def process(command, prompt, environment, cwd, timeout):
+            captured = original(command, prompt, environment, cwd, timeout)
+            self.native_runtime(Path(environment["CODEX_HOME"]))
+            return captured
+        with patch.object(pilot.legacy, "_bounded_process", side_effect=process):
+            summary = self.run_slot(1, self.successful_collector)
+        self.assertTrue(summary["continuation"]["allowed"])
+        self.assertEqual(summary["completion_evidence"]["status"], "matched")
+
+    def test_process_created_foreign_alias_preserves_capture_but_stops_next_slot(self):
+        original = pilot.legacy._bounded_process
+        def process(command, prompt, environment, cwd, timeout):
+            captured = original(command, prompt, environment, cwd, timeout)
+            directory = self.native_runtime(Path(environment["CODEX_HOME"]))
+            (directory / "applypatch").unlink()
+            (directory / "applypatch").symlink_to(self.auth)
+            return captured
+        with patch.object(pilot.legacy, "_bounded_process", side_effect=process):
+            summary = self.run_slot(1, self.successful_collector)
+        self.assert_capture_stops_later_slots(summary, "rollout_discovery_failed")
+
+    def test_incomplete_initial_runtime_scan_refuses_before_process_receipt(self):
+        scandir = os.scandir
+        blocked = []
+        def fail(path):
+            if blocked and Path(path) == blocked[0]:
+                raise PermissionError("synthetic unreadable runtime subtree")
+            return scandir(path)
+        def collect(attempt_dir, argv, **kwargs):
+            blocked.append(self.native_runtime(kwargs["codex_home"]))
+            return self.successful_collector(attempt_dir, argv, **kwargs)
+        with patch.object(os, "scandir", side_effect=fail):
+            with self.assertRaises(pilot.PilotInputError):
+                self.run_slot(1, collect)
+        self.assertFalse((self.root / "slots/001/evidence/attempt").exists())
+        with self.assertRaises(pilot.PilotInputError):
+            self.run_slot(2, self.successful_collector)
+        self.assertFalse((self.root / "slots/002").exists())
+
+    def assert_post_process_scan_failure_stops(self, native_runtime):
+        original, scandir = pilot.legacy._bounded_process, os.scandir
+        blocked = []
+        def process(command, prompt, environment, cwd, timeout):
+            captured = original(command, prompt, environment, cwd, timeout)
+            home = Path(environment["CODEX_HOME"])
+            if native_runtime:
+                blocked.append(self.native_runtime(home))
+            else:
+                hidden = home / "sessions/hidden"
+                hidden.mkdir()
+                blocked.append(hidden)
+            return captured
+        def fail(path):
+            if blocked and Path(path) == blocked[0]:
+                raise PermissionError("synthetic incomplete discovery")
+            return scandir(path)
+        with patch.object(pilot.legacy, "_bounded_process", side_effect=process), \
+             patch.object(os, "scandir", side_effect=fail):
+            summary = self.run_slot(1, self.successful_collector)
+        self.assert_capture_stops_later_slots(summary, "rollout_discovery_failed")
+        attempt = self.root / "slots/001/evidence/attempt"
+        self.assertEqual((attempt / "answer.txt").read_bytes(), ANSWER.encode())
+        self.assertTrue((attempt / "events.jsonl").stat().st_size)
+
+    def test_incomplete_post_process_runtime_scan_stops_continuation(self):
+        self.assert_post_process_scan_failure_stops(native_runtime=True)
+
+    def test_incomplete_post_process_rollout_scan_stops_continuation(self):
+        self.assert_post_process_scan_failure_stops(native_runtime=False)
+
+    def test_unknown_initial_content_still_refuses_before_process_receipt(self):
+        def collect(attempt_dir, argv, **kwargs):
+            self.native_runtime(kwargs["codex_home"])
+            write(kwargs["codex_home"] / "prior.jsonl", b"{}\n")
+            return self.successful_collector(attempt_dir, argv, **kwargs)
+        with self.assertRaises(pilot.PilotInputError):
+            self.run_slot(1, collect)
+        self.assertFalse((self.root / "slots/001/evidence/attempt").exists())
+        with self.assertRaises(pilot.PilotInputError):
+            self.run_slot(2, self.successful_collector)
+        self.assertFalse((self.root / "slots/002").exists())
+
     def test_unsupported_tool_record_stops_later_slots_without_replacement(self):
         summary = self.run_slot(1, self.unsupported_record_collector)
         self.assertFalse(summary["continuation"]["allowed"])
@@ -774,6 +918,43 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(audit["observation_count"], 2)
         self.assertIsNone(audit["unique_tool_call_count"])
         self.assertEqual(audit["status"], "unqualified")
+
+
+class InstalledRuntimeTests(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("SSHAI_TEST_CODEX_RUNTIME_SSHAI"),
+                         "opt-in installed Codex no-model runtime check")
+    def test_real_access_helper_then_synthetic_collection(self):
+        # Reproduce the actual qualification -> collector boundary without a
+        # model, real auth material, retained study slots, or live host access.
+        codex = pilot.EXPECTED_CODEX_PATH
+        sshai = Path(os.environ["SSHAI_TEST_CODEX_RUNTIME_SSHAI"]).resolve(strict=True)
+        # Codex refuses arg0 helpers beneath the OS temporary directory.
+        with tempfile.TemporaryDirectory(prefix="issue10-runtime-test-", dir="/Users/Shared") as tmp:
+            base = Path(tmp)
+            base.chmod(0o700)
+            scratch, fixture = base / "scratch", base / "fixture"
+            home, codex_home = base / "home", base / "codex-home"
+            for directory in (scratch, fixture, home, codex_home, base / "protected"):
+                directory.mkdir(mode=0o700)
+            write(fixture / "context.txt", b"synthetic fixture\n")
+            write(codex_home / "auth.json", b"{}\n")
+            write(codex_home / "model-catalog.json", b"{}\n")
+            environment = {"PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+                           "HOME": str(home), "CODEX_HOME": str(codex_home),
+                           "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+            receipt = pilot._qualify_access(
+                codex, sshai, scratch, fixture, [base / "protected", Path.home()],
+                environment, {"context.txt": {"sha256": sha(b"synthetic fixture\n")}})
+            self.assertTrue(all(receipt["checks"].values()))
+            self.assertTrue((codex_home / "tmp/arg0").is_dir())
+            result = CollectionTests.successful_collector(
+                base / "attempt", [], prompt=b"synthetic only", env=environment,
+                cwd=scratch, timeout_seconds=10, codex_home=codex_home,
+                answer_path=base / "answer.txt", association={"synthetic": True})
+            self.assertEqual(result["process"]["execution"], "completed")
+            self.assertEqual(result["delivery"]["rollout"]["state"], "captured")
+            self.assertEqual(result["delivery"]["answer"]["state"], "captured")
+            self.assertTrue(result["delivery"]["rollout_discovery"]["native_runtime"]["present"])
 
 
 if __name__ == "__main__":

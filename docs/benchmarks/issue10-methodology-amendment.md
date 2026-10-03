@@ -148,6 +148,8 @@ private review packet is not automatically safe to publish.
 [`scripts/benchmark_issue10_local_pilot.py`](../../scripts/benchmark_issue10_local_pilot.py)
 implements a separate local preparation and capture path. It does not enable the
 historical v3 `run-one` command or implement model assessment or measured analysis.
+The [reusable assessor instructions](issue10-assessment-instructions.md) define the
+separate assessment prompt and response contract; they are not an assessor runner.
 
 - `prepare` creates a new private manifest and freezes the inputs, rendered prompts,
   binary/configuration pins, four-slot schedule, and assessment instructions/rubric.
@@ -182,6 +184,34 @@ such as unqualified usage continuity across compaction. An accepted record signa
 is not proof of compliant shell behavior.
 Synthetic tests exercise controller behavior, not installed-binary readiness or live
 capture qualification. Use the command's `--help` for its argument inventory.
+
+### Native runtime files and no-model regression
+
+Codex 0.151.0 can leave `CODEX_HOME/tmp/arg0/codex-arg0*/` after a no-model sandbox
+probe. The controller accepts only the pinned Darwin helper layout: physical directories,
+an empty regular `.lock`, and `apply_patch`, `applypatch` and `codex-execve-wrapper`
+symlinks pointing exactly to the selected native binary. It records bounded layout metadata
+before collection and during rollout discovery. Other entries or symlink targets remain
+errors; helper aliases are neither rollout candidates nor evidence of tool execution.
+This matches the [pinned arg0 implementation](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/arg0/src/lib.rs#L327-L445),
+not a general exception for temporary files. No runtime evidence is deleted to pass the guard.
+
+The default unit suite uses synthetic processes. On macOS, an additional opt-in regression
+runs the installed pinned Codex access helper followed by synthetic collection. Supply an
+existing built sshai executable; the test uses temporary private files under `/Users/Shared`
+and briefly creates synthetic deny-test canaries in the invoking user's home directory.
+It removes its temporary files afterward, uses empty synthetic authentication data, and
+launches no model, SSH command or retained study slot:
+
+```sh
+SSHAI_TEST_CODEX_RUNTIME_SSHAI=/absolute/path/to/sshai \
+  python3 -W error -m unittest discover -s scripts -p test_issue10_local_pilot.py
+```
+
+Passing this check establishes that boundary's compatibility, not live model availability,
+usage/finality qualification or completion of a pilot. A previously consumed slot remains
+immutable and non-retryable after a controller fix; changed source pins require prospective
+preparation, not editing the old manifest or replacing the failed outcome.
 
 ## Readiness and reporting
 
