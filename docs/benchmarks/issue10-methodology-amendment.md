@@ -236,7 +236,8 @@ This is a narrow exception to the prior-result continuation barrier above:
 - The predecessor must have a successful, unchanged no-model preflight, exactly one
   reserved directory (`001`), its reservation and its original blocked
   `model-attempt-requested` failure result. Slots 2–4 must have no directories at all.
-  Other consumed prefixes and nested continuations are unsupported.
+  Other consumed prefixes and generic nested continuations are unsupported. The
+  separately specified startup-auth continuation below is the only additional lineage.
 - The predecessor controller must be the exact
   [ad1532b source](https://github.com/aprudkin/sshai/blob/ad1532b/scripts/benchmark_issue10_local_pilot.py),
   SHA-256 `f7741cd99ad17de4c852802d2ffb8e294102416fa036b9353ea26abc2219fafc`.
@@ -272,7 +273,8 @@ manifest-bound approval and `--allow-model-run`. The controller revalidates old
 sources, retained evidence and ownership on every manifest load, including before
 launch. It never provisions or runs inherited slot 1. The first executable slot is
 2; subsequent original slots require acceptable new prior results and remain one-shot.
-Captured, unsafe, unknown-attempt or other model failures receive no bypass.
+Captured, unsafe, unknown-attempt or other model failures receive no general bypass;
+the exact startup-auth exception below retains its attempted failure rather than retrying it.
 
 `summary` retains all four planned outcomes and labels inherited slot 1
 `retained-failure`, with its original `attempted-or-unknown` launch status, blocked
@@ -299,6 +301,96 @@ The original-source integration check is separate and must retain the exact froz
 source bytes and verify the ordering/hash contract without replacing the old outcome.
 No synthetic test or preparation receipt establishes live finality, usage completeness,
 semantic routing, model assessment, comparative savings or completion of any phase.
+
+### Second and final continuation after the exact startup-auth failure
+
+`prepare-auth-continuation` supports only the first continuation's consumed slot 2
+failing at startup because its refresh token was revoked. It retains slots 1 and 2
+unchanged and prepares **only original slots 3–4**, under the same advance task authority,
+without a replacement, retry, sample-size change, measurement or outcome-based stopping
+rule. The required `--auth-repair-note` describes the caller's supported browser-login
+repair and its provenance. It is neither a fabricated user approval nor a controller-
+verified credential change or live backend qualification. The controller does not read
+credential contents or compare old/new authentication identities through shared symlinks.
+
+This additional exception is source- and evidence-specific:
+
+- The direct predecessor must be the exact first-continuation controller from
+  [32ddcc7](https://github.com/aprudkin/sshai/blob/32ddcc778e245e4bc98fbec92a92ebba4fd0ce84/scripts/benchmark_issue10_local_pilot.py),
+  SHA-256 `ed50774e3771da26413dfb41056c80241b70ac6c0392672cb847b8873bb5ac4f`.
+  Its explicit six-file source/protocol snapshot and its original ad1532b lineage,
+  ownership, readiness and slot-1 evidence must still validate. Historical code is
+  never imported or executed. Slot 2 must have its original reservation and complete
+  retained failed result; only directory `002` may exist in that predecessor's slots.
+  Slots 3–4 must remain entirely unreserved. A third continuation is unsupported.
+- The raw CLI stream must be exactly `thread.started`, `turn.started`, the exact
+  revoked-refresh-token error, then `turn.failed` with the same error. The raw rollout
+  must contain exactly nine ordered, identity-consistent records: session metadata,
+  task start, developer input, user input, typed full world-state metadata, matching
+  model/effort turn context, user input, a `UserMessage` lifecycle, and task completion
+  with the same `unauthorized` error and no agent answer. The inputs must be complete
+  bounded JSONL. Extra, malformed, prefixed, ambiguous, tool-call, assistant-answer,
+  token-usage or other action records do not qualify.
+- The process receipt must show a started process, exit code 1, failed execution,
+  bounded elapsed time, matching raw stdout/stderr byte counts, and no timeout,
+  interruption, start error, overflow or stream truncation. The request/association
+  must match the pinned executable, command, environment, prompt, model, configuration,
+  access receipt, approval hash and slot. Exactly one discovered rollout must match
+  the CLI thread and the retained candidate/selected bytes and hashes. A present initial
+  runtime receipt must describe exactly one six-character randomized helper directory,
+  its empty-lock kind and three pinned-alias kinds in the six-row arg0 layout. Its
+  ephemeral directory name need not survive startup cleanup/recreation: the final
+  filesystem layout and alias targets are validated separately, without altering the
+  initial receipt. Answer delivery must show that the explicit last-message file is
+  absent, not captured or empty.
+- The original capture, audit and result must retain zero recorded tool entries,
+  no answer and unavailable usage. A bounded typed census binds all original raw
+  streams, process/request/delivery receipts, capture/audit/completion reports, result,
+  reservation, fixtures, runtime metadata and selected rollout bytes. It rejects extra
+  attempt/answer artifacts and unknown entries. Existing parser issues and blockers
+  stay immutable: eligibility uses the narrow raw-record proof, not a retroactively
+  clean parser verdict or migration of old reports.
+- An evidenced startup-metadata allowlist admits only regular `config.toml`,
+  `installation_id`, `thread_history_1.sqlite`, the base/`-shm`/`-wal` files for
+  `goals_1.sqlite`, `logs_2.sqlite`, `memories_1.sqlite`, `queue_1.sqlite` and
+  `state_5.sqlite`, and `thread-writer-locks/.coordination.lock` under its physical
+  directory. Foreign versions/files, directories substituted for these files and
+  foreign symlinks refuse. These entries are bound by relative name, type, byte size
+  and mode in the inventory hash; SQLite/configuration metadata contents are not read
+  or interpreted. Their filenames do not prove OS behavior or credential identity.
+
+World-state values, native permission metadata and input/instruction text are not
+recorded tool calls. Their strings are not interpreted as executions. This is a
+bounded tool-record audit, **not proof of no unobserved OS activity, exhaustive access
+attestation, model quality or measured zero provider usage**. Missing token records
+remain unavailable, not zero. Auth-repair provenance and preparation do not establish
+that the backend will accept the next model request.
+
+The second manifest binds both historical source/protocol populations, the original
+four-outcome inventory and unchanged model/binary/configuration/fixture/prompt/rubric
+settings and ceilings. It reuses the source/evidence and plan validators rather than
+introducing a general recovery framework. A sole atomic `continuation-owner.json` in
+the direct predecessor delegates only slots 3–4 to the new sibling root; its hash is
+manifest-bound. Duplicate ownership, copied-root branching, inherited-slot execution,
+retries and deeper lineages refuse. Fresh current-source preflight and new manifest-
+bound approval plus `--allow-model-run` remain required. Slot 3 is first, then slot 4;
+a new failure still stops later reservations.
+
+Summary resolves inherited slot 1 from the original root and slot 2 from the first
+continuation root. Both are `retained-failure`, preserving their original launch
+statuses (`attempted-or-unknown` and `attempted` respectively), failed/unavailable
+execution, blockers and quality/usage unknowns. Neither is unattempted, compliant or
+successful. No report may present two successful remaining slots as a full successful
+pilot or completed experiment.
+
+The focused synthetic suite generates the auth streams through a real bounded
+collector subprocess using a frozen synthetic executable, with no installed model,
+real credentials or study roots. It tests the two-step inventory, ordering, source and
+input/evidence/ownership tampering, missing/truncated/timeout captures, extra actions,
+unsupported errors/prefixes, duplicate ownership, missing provenance and no retries.
+Accepted historical digests are patched only in synthetic fixtures; authentic-source
+qualification and live backend acceptance remain separate checks for the coordinator.
+The existing opt-in installed smoke and first-continuation checks remain unchanged.
 
 ## Readiness and reporting
 

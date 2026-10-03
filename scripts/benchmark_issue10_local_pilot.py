@@ -12,6 +12,7 @@ import argparse
 import errno
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import random
@@ -83,6 +84,15 @@ CONTINUATION_SCHEMA = "sshai-benchmark/issue10-local-pilot-continuation-1"
 # Exact ad1532b controller: its inventory guard precedes attempt-directory creation
 # and _bounded_process; run_slot preserves model-attempt-requested uncertainty.
 PREPROCESS_CONTROLLER_SHA256 = "f7741cd99ad17de4c852802d2ffb8e294102416fa036b9353ea26abc2219fafc"
+AUTH_CONTINUATION_SCHEMA = "sshai-benchmark/issue10-local-pilot-startup-auth-continuation-1"
+AUTH_CONTROLLER_SHA256 = "ed50774e3771da26413dfb41056c80241b70ac6c0392672cb847b8873bb5ac4f"
+STARTUP_AUTH_ERROR = "Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again."
+# Evidenced Codex 0.151.0 startup files. Names/types only; never inspect SQLite contents.
+AUTH_NATIVE_METADATA = {
+    "config.toml", "installation_id", "thread_history_1.sqlite", "thread-writer-locks/.coordination.lock",
+    *(name + suffix for name in ("goals_1.sqlite", "logs_2.sqlite", "memories_1.sqlite", "queue_1.sqlite", "state_5.sqlite")
+      for suffix in ("", "-shm", "-wal")),
+}
 SOURCE_PATHS = {
     "scripts/benchmark_issue10_local_pilot.py", "scripts/benchmark_issue10_v3_capture.py",
     "scripts/benchmark_issue10_v3_collector.py", "scripts/benchmark_issue10_sandbox.py",
@@ -633,12 +643,18 @@ def load_manifest(root: Path, *, _source_root: Path | None = None) -> dict[str, 
                     or source.stat().st_size != expected["bytes"]):
                 raise PilotInputError("prepared fixture changed")
     if "continuation" in manifest:
-        if _source_root is not None:
-            raise PilotInputError("nested continuation predecessors are unsupported")
+        if not isinstance(manifest["continuation"], dict):
+            raise PilotInputError("continuation receipt must be an object")
+        if _source_root is not None and (
+                manifest["continuation"].get("schema") != CONTINUATION_SCHEMA
+                or manifest["sources"]["scripts/benchmark_issue10_local_pilot.py"] != AUTH_CONTROLLER_SHA256):
+            raise PilotInputError("only the exact first continuation source snapshot may be inherited")
         predecessor = _bound_predecessor(manifest["continuation"], root)
         _same_continuation_plan(manifest, predecessor, root, Path(manifest["continuation"]["predecessor_root"]))
-        if (root / "slots" / "001").exists() or (root / "slots" / "001").is_symlink():
-            raise PilotInputError("inherited consumed slot cannot exist in the prospective root")
+        for number in manifest["continuation"]["inherited_slots"]:
+            path = root / "slots" / f"{number:03}"
+            if path.exists() or path.is_symlink():
+                raise PilotInputError("inherited consumed slot cannot exist in the prospective root")
     return manifest
 
 
@@ -675,15 +691,24 @@ def _preprocess_prefix(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     receipt = _validated_access_receipt(_json_file(base / "evidence/access-receipt.json", "predecessor access"))
     if legacy._file_digest(base / "evidence/prompt.txt") != manifest["slot_material"]["1"]["rendered_prompt_sha256"]:
         raise PilotInputError("predecessor rendered prompt changed")
-    # An exact bounded census rejects even empty attempt/session directories,
-    # process/answer files, and unknown evidence anywhere in the consumed slot.
+    inventory = _provisioned_census(base, manifest, 1, runtime)
+    return {"slot_inventory": inventory, "access_receipt_digest": receipt["digest"]}
+
+
+def _provisioned_census(base: Path, manifest: dict[str, Any], number: int,
+                        runtime: dict[str, Any], *, extra_files: set[str] | None = None,
+                        native_metadata: set[str] | None = None) -> dict[str, Any]:
+    """Exact bounded typed census; only the auth proof supplies captured-file additions."""
     allowed = {"reservation.json", "result.json", "fixture", "scratch", "evidence", "home",
                "codex-home", "scratch/sshai-root", "scratch/tmp", "home/.config", "home/.cache",
                "home/.local-share", "codex-home/auth.json", "codex-home/model-catalog.json",
-               "codex-home/tmp", "evidence/access-receipt.json", "evidence/prompt.txt"}
+               "evidence/access-receipt.json", "evidence/prompt.txt"}
     directory_paths = {"fixture", "scratch", "evidence", "home", "codex-home", "scratch/sshai-root",
-                       "scratch/tmp", "home/.config", "home/.cache", "home/.local-share", "codex-home/tmp"}
-    material = manifest["slot_material"]["1"]["fixture_files"]
+                       "scratch/tmp", "home/.config", "home/.cache", "home/.local-share"}
+    if runtime["present"]:
+        allowed.add("codex-home/tmp")
+        directory_paths.add("codex-home/tmp")
+    material = manifest["slot_material"][str(number)]["fixture_files"]
     for name, metadata in material.items():
         relative = Path("fixture") / _safe_relative(name, "predecessor fixture")
         allowed.add(str(relative))
@@ -697,6 +722,12 @@ def _preprocess_prefix(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     allowed.update("codex-home/" + row["path"] for row in runtime["entries"])
     directory_paths.update("codex-home/" + row["path"] for row in runtime["entries"]
                            if row["kind"] == "directory")
+    for relative in (extra_files or set()) | (native_metadata or set()):
+        relative = _safe_relative(relative, "captured proof path")
+        allowed.add(relative)
+        parents = {str(parent) for parent in Path(relative).parents if str(parent) != "."}
+        allowed.update(parents)
+        directory_paths.update(parents)
     inventory = {}
     for current, directories, files in os.walk(base, followlinks=False, onerror=_incomplete_scan):
         for name in sorted([*directories, *files]):
@@ -710,33 +741,41 @@ def _preprocess_prefix(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
             elif stat.S_ISDIR(mode) and relative in directory_paths:
                 inventory[relative] = {"directory": True}
             elif stat.S_ISREG(mode) and relative not in directory_paths | aliases | {"codex-home/auth.json"}:
-                inventory[relative] = {"sha256": legacy._file_digest(path)}
+                if relative in (native_metadata or set()):
+                    inventory[relative] = {"native_metadata": {"bytes": path.lstat().st_size,
+                                                               "mode": stat.S_IMODE(mode)}}
+                else:
+                    inventory[relative] = {"sha256": legacy._file_digest(path)}
             else:
                 raise PilotInputError("predecessor contains unsupported evidence type")
     if set(inventory) != allowed:
         raise PilotInputError("predecessor pre-process inventory is incomplete")
-    return {"slot_inventory": inventory, "access_receipt_digest": receipt["digest"]}
+    return inventory
 
 
 def _continuation_owner(binding: dict[str, Any], root: Path) -> dict[str, Any]:
     identity = dict(binding)
     identity.pop("owner_sha256", None)
-    return {"schema": CONTINUATION_SCHEMA, "continuation_root": str(root),
-            "binding_sha256": _sha(_encoded(identity)), "executable_slots": [2, 3, 4],
+    return {"schema": binding["schema"], "continuation_root": str(root),
+            "binding_sha256": _sha(_encoded(identity)), "executable_slots": binding["executable_slots"],
             "one_shot": True, "launch_approval": False}
 
 
 def _bound_predecessor(binding: dict[str, Any], root: Path, *, require_owner: bool = True) -> dict[str, Any]:
+    auth = isinstance(binding, dict) and binding.get("schema") == AUTH_CONTINUATION_SCHEMA
     fields = {"schema", "predecessor_root", "source_snapshot", "predecessor_digest",
               "original_sources", "original_hashes", "prefix_evidence", "inherited_slots",
               "executable_slots", "reason", "authorization_note"}
     if require_owner:
         fields.add("owner_sha256")
+    if auth:
+        fields.add("auth_repair_note")
     _exact_object(binding, fields, "continuation receipt")
-    if (binding["schema"] != CONTINUATION_SCHEMA or binding["inherited_slots"] != [1]
-            or binding["executable_slots"] != [2, 3, 4]
-            or any(not isinstance(binding[key], str) or not binding[key].strip()
-                   for key in ("reason", "authorization_note"))):
+    text_fields = ("reason", "authorization_note", "auth_repair_note") if auth else ("reason", "authorization_note")
+    if (binding["schema"] not in {CONTINUATION_SCHEMA, AUTH_CONTINUATION_SCHEMA}
+            or binding["inherited_slots"] != ([1, 2] if auth else [1])
+            or binding["executable_slots"] != ([3, 4] if auth else [2, 3, 4])
+            or any(not isinstance(binding[key], str) or not binding[key].strip() for key in text_fields)):
         raise PilotInputError("unsupported continuation receipt")
     old_root = legacy._physical(Path(binding["predecessor_root"]))
     if old_root == root or old_root.parent != root.parent:
@@ -744,10 +783,9 @@ def _bound_predecessor(binding: dict[str, Any], root: Path, *, require_owner: bo
     old = load_manifest(old_root, _source_root=Path(binding["source_snapshot"]))
     if old["digest"] != binding["predecessor_digest"] or old["sources"] != binding["original_sources"]:
         raise PilotInputError("bound predecessor manifest changed")
-    hashes = {name: legacy._file_digest(old_root / name) for name in
-              ("manifest.json", "slots/001/reservation.json", "slots/001/result.json",
-               "readiness/result.json", "readiness/access-M01.json", "readiness/access-M02.json")}
-    if hashes != binding["original_hashes"] or _preprocess_prefix(old_root, old) != binding["prefix_evidence"]:
+    hashes = _predecessor_hashes(old_root, 2 if auth else 1)
+    proof = _auth_prefix(old_root, old) if auth else _preprocess_prefix(old_root, old)
+    if hashes != binding["original_hashes"] or proof != binding["prefix_evidence"]:
         raise PilotInputError("bound predecessor evidence changed")
     if require_owner:
         owner_path = old_root / "continuation-owner.json"
@@ -787,6 +825,279 @@ def _same_continuation_plan(manifest: dict[str, Any], old: dict[str, Any],
                 raise PilotInputError("continuation changed frozen rendered instructions")
 
 
+def _startup_auth_records(events: bytes, rollout: bytes, manifest: dict[str, Any]) -> str:
+    """A bounded raw-record recipe, not legacy-parser validity or OS attestation."""
+    cli = capture.parse_jsonl(events, "startup_auth_cli")
+    history = capture.parse_jsonl(rollout, "startup_auth_rollout")
+    if not cli["complete"] or not history["complete"] or len(cli["records"]) != 4 or len(history["records"]) != 9:
+        raise PilotInputError("startup auth requires complete exact four-event/nine-record captures")
+    first = _exact_object(cli["records"][0], {"type", "thread_id"}, "startup thread")
+    thread = first["thread_id"]
+    if (first["type"] != "thread.started" or not isinstance(thread, str) or not thread
+            or cli["records"][1:] != [{"type": "turn.started"},
+                                      {"type": "error", "message": STARTUP_AUTH_ERROR},
+                                      {"type": "turn.failed", "error": {"message": STARTUP_AUTH_ERROR}}]):
+        raise PilotInputError("CLI is not the exact revoked-refresh-token startup failure")
+    kinds = ["session_meta", "event_msg", "response_item", "response_item", "world_state",
+             "turn_context", "response_item", "event_msg", "event_msg"]
+    payloads = []
+    for index, (record, kind) in enumerate(zip(history["records"], kinds, strict=True)):
+        _exact_object(record, {"timestamp", "ordinal", "type", "payload"}, "startup rollout record")
+        if (record["type"] != kind or type(record["ordinal"]) is not int or record["ordinal"] != index
+                or not isinstance(record["timestamp"], str) or not record["timestamp"]
+                or not isinstance(record["payload"], dict)):
+            raise PilotInputError("startup rollout record kind, order or shape is unsupported")
+        payloads.append(record["payload"])
+    meta, started, developer, user, world, context, user2, item, complete = payloads
+    if (meta.get("id") != thread or meta.get("session_id") != thread
+            or meta.get("cli_version") != "0.151.0" or meta.get("history_mode") != "paginated"
+            or meta.get("source") != "exec" or meta.get("model_provider") != "openai"):
+        raise PilotInputError("startup session metadata differs from the pinned CLI contract")
+    _exact_object(started, {"type", "turn_id", "started_at", "model_context_window", "collaboration_mode_kind"}, "startup task")
+    turn = started["turn_id"]
+    if (started["type"] != "task_started" or not isinstance(turn, str) or not turn
+            or type(started["started_at"]) is not int or type(started["model_context_window"]) is not int
+            or started["collaboration_mode_kind"] != "default"):
+        raise PilotInputError("startup task identity or shape is unsupported")
+    for message, role in ((developer, "developer"), (user, "user"), (user2, "user")):
+        _exact_object(message, {"type", "id", "role", "content", "internal_chat_message_metadata_passthrough"}, "startup input message")
+        content, metadata = message["content"], message["internal_chat_message_metadata_passthrough"]
+        if (message["type"] != "message" or message["role"] != role
+                or not isinstance(message["id"], str) or not message["id"]
+                or not isinstance(metadata, dict) or metadata.get("turn_id") != turn
+                or not isinstance(content, list) or not content):
+            raise PilotInputError("startup input message is not typed non-assistant text")
+        for text in content:
+            _exact_object(text, {"type", "text"}, "startup message content")
+            if text["type"] != "input_text" or not isinstance(text["text"], str):
+                raise PilotInputError("startup input contains unsupported content")
+    _exact_object(world, {"full", "state"}, "startup world state")
+    if world["full"] is not True or not isinstance(world["state"], dict):
+        raise PilotInputError("startup world state shape is unsupported")
+    # WorldState state values and native context permissions/instructions are
+    # metadata, not tool-call audit units; do not interpret embedded strings.
+    if (context.get("turn_id") != turn or context.get("model") != manifest["config"]["model"]["id"]
+            or context.get("effort") != manifest["config"]["model"]["reasoning_effort"]):
+        raise PilotInputError("startup turn context differs from frozen model settings")
+    _exact_object(item, {"type", "thread_id", "turn_id", "item", "started_at_ms", "completed_at_ms"}, "startup input lifecycle")
+    input_item = _exact_object(item["item"], {"type", "id", "content"}, "startup user item")
+    if (item["type"] != "item_completed" or item["thread_id"] != thread or item["turn_id"] != turn
+            or input_item["type"] != "UserMessage" or not isinstance(input_item["id"], str)
+            or not input_item["id"] or not isinstance(input_item["content"], list) or not input_item["content"]
+            or any(type(item[key]) is not int for key in ("started_at_ms", "completed_at_ms"))):
+        raise PilotInputError("startup lifecycle is not the input UserMessage")
+    for text in input_item["content"]:
+        _exact_object(text, {"type", "text", "text_elements"}, "startup user content")
+        if text["type"] != "text" or not isinstance(text["text"], str) or text["text_elements"] != []:
+            raise PilotInputError("startup UserMessage content is unsupported")
+    _exact_object(complete, {"type", "turn_id", "last_agent_message", "error", "started_at", "completed_at", "duration_ms"}, "startup auth completion")
+    if (complete["type"] != "task_complete" or complete["turn_id"] != turn
+            or complete["last_agent_message"] is not None
+            or complete["error"] != {"message": STARTUP_AUTH_ERROR, "codex_error_info": "unauthorized"}
+            or any(type(complete[key]) is not int for key in ("started_at", "completed_at", "duration_ms"))):
+        raise PilotInputError("startup completion is not the same unauthorized failure without an answer")
+    return thread
+
+
+def _model_argv(manifest: dict[str, Any], base: Path, access: dict[str, Any]) -> list[str]:
+    config = manifest["config"]
+    argv = [manifest["codex"]["path"], "exec", "--model", config["model"]["id"],
+            "-c", f'model_reasoning_effort={json.dumps(config["model"]["reasoning_effort"])}',
+            "-c", f'model_catalog_json={json.dumps(str(base / "codex-home/model-catalog.json"))}']
+    for override in [*config["codex_exec"]["config_overrides"], *access["effective_config_overrides"]]:
+        argv.extend(["-c", override])
+    argv.extend(["--ignore-user-config", "--ignore-rules", "--json", "--color", "never",
+                 "--skip-git-repo-check", "--output-last-message", str(base / "evidence/last-message.txt"),
+                 "-C", str(base / "scratch"), "-"])
+    return argv
+
+
+def _recorded_initial_runtime(native: dict[str, Any]) -> None:
+    """Validate the retained six-row receipt without requiring its ephemeral name to survive."""
+    if (native["classification"] != "pinned-arg0-layout" or type(native["present"]) is not bool
+            or not isinstance(native["entries"], list)):
+        raise PilotInputError("startup initial runtime metadata is unsupported")
+    if not native["present"]:
+        if native["entries"] != []:
+            raise PilotInputError("absent startup runtime must have an empty receipt")
+        return
+    rows = native["entries"]
+    if len(rows) != 6:
+        raise PilotInputError("startup initial runtime must have exactly six pinned-layout entries")
+    for row in rows:
+        _exact_object(row, {"path", "kind"}, "startup initial runtime entry")
+        if not isinstance(row["path"], str) or not isinstance(row["kind"], str):
+            raise PilotInputError("startup initial runtime entry is malformed")
+    directories = [row["path"] for row in rows if row["kind"] == "directory" and row["path"] != "tmp/arg0"]
+    if len(directories) != 1:
+        raise PilotInputError("startup initial runtime must describe one common helper directory")
+    helper = directories[0]
+    prefix = "tmp/arg0/codex-arg0"
+    suffix = helper.removeprefix(prefix)
+    if (not helper.startswith(prefix) or len(suffix) != 6
+            or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" for character in suffix)):
+        raise PilotInputError("startup initial runtime helper name is unsupported")
+    expected = [{"path": "tmp/arg0", "kind": "directory"}, {"path": helper, "kind": "directory"},
+                {"path": helper + "/.lock", "kind": "lock"}]
+    expected.extend({"path": helper + "/" + name, "kind": "native-alias"}
+                    for name in ("apply_patch", "applypatch", "codex-execve-wrapper"))
+    if sorted(rows, key=lambda row: row["path"]) != sorted(expected, key=lambda row: row["path"]):
+        raise PilotInputError("startup initial runtime paths or kinds differ from the pinned layout")
+
+
+def _auth_prefix(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    binding = manifest.get("continuation", {})
+    if (binding.get("schema") != CONTINUATION_SCHEMA
+            or manifest["sources"]["scripts/benchmark_issue10_local_pilot.py"] != AUTH_CONTROLLER_SHA256):
+        raise PilotInputError("startup auth exception requires the exact 32ddcc7 first continuation")
+    load_readiness(root, manifest)
+    _fixture_inventory(Path(manifest["fixture_bundle"]["path"]))
+    if {path.name for path in (root / "slots").iterdir()} != {"002"}:
+        raise PilotInputError("startup auth continuation requires only consumed slot 2 and absent slots 3..4")
+    base = legacy._physical(root / "slots/002")
+    reservation = _json_file(base / "reservation.json", "startup auth reservation")
+    _exact_object(reservation, {"manifest_digest", "slot", "approval_sha256", "one_shot"}, "startup reservation")
+    if (reservation["manifest_digest"] != manifest["digest"] or reservation["slot"] != manifest["slots"][1]
+            or reservation["one_shot"] is not True):
+        raise PilotInputError("startup reservation differs from the first continuation")
+    _hex_digest(reservation["approval_sha256"], "startup approval digest")
+    evidence, attempt, home = base / "evidence", base / "evidence/attempt", base / "codex-home"
+    access = _validated_access_receipt(_json_file(evidence / "access-receipt.json", "startup access"))
+    prompt = legacy._read_bounded(evidence / "prompt.txt", collector.MAX_PROMPT_BYTES)
+    if _sha(prompt) != manifest["slot_material"]["2"]["rendered_prompt_sha256"]:
+        raise PilotInputError("startup rendered prompt changed")
+    if (not (home / "auth.json").is_symlink()
+            or (home / "auth.json").readlink() != Path(manifest["auth"]["path"])
+            or legacy._file_digest(home / "model-catalog.json") != manifest["model_catalog"]["sha256"]):
+        raise PilotInputError("startup provisioning changed")
+    request = _json_file(attempt / "attempt.json", "startup request")
+    argv = _model_argv(manifest, base, access)
+    expected_request = collector._request_receipt(argv, prompt, _environment(base, base / "scratch", manifest["config"]),
+                                                 base / "scratch", float(manifest["config"]["limits"]["timeout_seconds"]), [],
+                                                 evidence / "last-message.txt")
+    expected_request.update(schema=collector.ASSOCIATED_ATTEMPT_SCHEMA, association={
+        "manifest_digest": manifest["digest"], "slot": manifest["slots"][1],
+        "approval_sha256": reservation["approval_sha256"], "access_receipt_digest": access["digest"],
+        "model": manifest["config"]["model"], "history_mode": manifest["config"]["codex_exec"]["history_mode"],
+        "config_sha256": manifest["config_sha256"], "argv_sha256": _sha(_encoded(argv)),
+    })
+    initial = request.get("rollout_discovery")
+    _exact_object(initial, {"root", "initial_inventory", "native_runtime", "entry_bound", "candidate_bound"}, "startup initial discovery")
+    if ({k: v for k, v in request.items() if k != "rollout_discovery"} != expected_request
+            or initial["root"] != str(home) or initial["entry_bound"] != MAX_DISCOVERY_ENTRIES
+            or initial["candidate_bound"] != collector.MAX_ROLLOUT_CANDIDATES
+            or initial["initial_inventory"] not in (["auth.json", "model-catalog.json"], ["auth.json", "model-catalog.json", "tmp"])):
+        raise PilotInputError("startup request is not the pinned single-slot invocation")
+    native = _exact_object(initial["native_runtime"], {"classification", "present", "entries"}, "startup initial runtime")
+    _recorded_initial_runtime(native)
+    current_native = _native_runtime_inventory(home)
+    # Pinned startup can garbage-collect the canary's randomized helper directory
+    # and create a new one. Validate both layouts, not ephemeral name persistence.
+    if ((native["present"] and not current_native["present"])
+            or initial["initial_inventory"] != (["auth.json", "model-catalog.json", "tmp"] if native["present"] else ["auth.json", "model-catalog.json"])):
+        raise PilotInputError("startup initial runtime metadata is unsupported")
+    events = legacy._read_bounded(attempt / "events.jsonl", capture.MAX_CAPTURE_BYTES)
+    rollout = legacy._read_bounded(attempt / "rollout.jsonl", capture.MAX_CAPTURE_BYTES)
+    stderr = legacy._read_bounded(attempt / "stderr.txt", capture.MAX_CAPTURE_BYTES)
+    thread = _startup_auth_records(events, rollout, manifest)
+    process = _json_file(attempt / "process.json", "startup process")
+    _exact_object(process, {"schema", "capture_overflow", "duration_seconds", "execution", "exit_code", "interrupted",
+                            "pid", "start_error", "stderr_bytes", "stderr_limit_reached", "stdout_bytes",
+                            "stdout_limit_reached", "timed_out"}, "startup process")
+    if (process["schema"] != collector.PROCESS_SCHEMA or process["execution"] != "failed"
+            or type(process["exit_code"]) is not int or process["exit_code"] != 1
+            or type(process["pid"]) is not int or process["pid"] <= 0 or process["start_error"] is not None
+            or any(process[key] is not False for key in ("capture_overflow", "interrupted", "timed_out", "stdout_limit_reached", "stderr_limit_reached"))
+            or type(process["duration_seconds"]) not in (int, float) or not math.isfinite(process["duration_seconds"])
+            or not 0 < process["duration_seconds"] <= manifest["config"]["limits"]["timeout_seconds"]
+            or process["stdout_bytes"] != len(events) or process["stderr_bytes"] != len(stderr)
+            or max(len(events), len(stderr)) >= collector.MAX_STREAM_BYTES):
+        raise PilotInputError("startup process is missing, ambiguous, interrupted or truncated")
+    delivery = _json_file(attempt / "delivery.json", "startup delivery")
+    _exact_object(delivery, {"schema", "process_execution", "rollout_discovery", "rollout", "answer"}, "startup delivery")
+    candidates, discovery = _discover_rollouts(home)
+    if delivery["schema"] != collector.DELIVERY_SCHEMA or delivery["process_execution"] != "failed" or delivery["rollout_discovery"] != discovery or len(candidates) != 1:
+        raise PilotInputError("startup rollout discovery is missing or ambiguous")
+    retained = attempt / "rollout-candidates/001.jsonl"
+    if legacy._read_bounded(retained, capture.MAX_CAPTURE_BYTES) != rollout or legacy._read_bounded(candidates[0], capture.MAX_CAPTURE_BYTES) != rollout:
+        raise PilotInputError("startup selected rollout differs from retained or discovered source")
+    expected_rollout = {"state": "captured", "reason": "matched_cli_thread_identity", "cli_thread_id": thread,
+                        "selected_candidate": 1, "bytes": len(rollout), "sha256": _sha(rollout),
+                        "candidates": [{"index": 1, "source": str(candidates[0]), "status": "usable", "thread_id": thread,
+                                        "bytes": len(rollout), "sha256": _sha(rollout), "retained": "rollout-candidates/001.jsonl",
+                                        "parser_issue_codes": [], "identity_match": True}]}
+    answer = evidence / "last-message.txt"
+    expected_answer = {"state": "lost", "reason": "answer_input_error", "source": str(answer),
+                       "error": f"path does not exist: {answer}", "finality": "unknown",
+                       "finality_reason": "requires version-bounded completion comparison"}
+    if delivery["rollout"] != expected_rollout or delivery["answer"] != expected_answer or answer.exists() or answer.is_symlink():
+        raise PilotInputError("startup answer/rollout delivery does not prove the narrow failure")
+    result = _json_file(base / "result.json", "startup result")
+    report = _json_file(evidence / "capture-report.json", "startup capture report")
+    audit = _json_file(evidence / "tool-audit.json", "startup audit")
+    for value, sections in ((result, ("usage", "access", "continuation", "completion_evidence", "tool_audit")),
+                            (report, ("calls", "usage", "answer"))):
+        if any(not isinstance(value.get(section), dict) for section in sections):
+            raise PilotInputError("startup retained outcome has a missing or malformed section")
+    if not isinstance(result["tool_audit"].get("semantic_routing"), dict):
+        raise PilotInputError("startup retained routing uncertainty is malformed")
+    if (result.get("schema") != RESULT_SCHEMA or result.get("slot") != manifest["slots"][1]
+            or result.get("launch") != "attempted" or result.get("execution") != "failed"
+            or result.get("usage", {}).get("totals") is not None or result.get("usage", {}).get("complete") is not False
+            or result.get("access", {}).get("status") != "passed"
+            or result.get("continuation", {}).get("allowed") is not False
+            or result.get("experimental_savings_claim_eligible") is not False
+            or result.get("completion_evidence") != {"status": "unavailable", "finality": "unknown", "version_bounded": True}
+            or report.get("schema") != capture.SCHEMA or report.get("session_id") != thread
+            or report.get("calls", {}).get("inventory") != [] or report.get("calls", {}).get("inventory_entry_count") != 0
+            or report.get("usage", {}).get("totals") is not None or report.get("usage", {}).get("complete") is not False
+            or any(report.get("usage", {}).get(key) != 0 for key in ("cli_snapshot_count", "rollout_snapshot_count"))
+            or report.get("answer", {}).get("cli_agent_messages") != [] or report.get("answer", {}).get("text") is not None
+            or audit.get("entries") != [] or audit.get("entry_count") != 0 or audit.get("observation_count") != 0
+            or result.get("tool_audit", {}).get("entry_count") != 0 or result.get("tool_audit", {}).get("observation_count") != 0
+            or result.get("tool_audit", {}).get("status") != "unqualified"
+            or result.get("tool_audit", {}).get("os_execution_attestation") is not False
+            or result.get("tool_audit", {}).get("semantic_routing", {}).get("status") != "unknown"):
+        raise PilotInputError("startup retained outcome is not a failed answer/usage-free zero-call capture")
+    extra_files = {"evidence/attempt/" + name for name in
+                   ("attempt.json", "events.jsonl", "stderr.txt", "process.json", "delivery.json", "rollout.jsonl", "rollout-candidates/001.jsonl")}
+    extra_files.update({"evidence/capture-report.json", "evidence/completion-evidence.json", "evidence/tool-audit.json",
+                        str(candidates[0].relative_to(base))})
+    metadata = {"codex-home/" + name for name in AUTH_NATIVE_METADATA
+                if (home / name).exists() or (home / name).is_symlink()}
+    inventory = _provisioned_census(base, manifest, 2, discovery["native_runtime"],
+                                    extra_files=extra_files, native_metadata=metadata)
+    return {"slot_inventory": inventory, "slot_inventory_sha256": _sha(_encoded(inventory)),
+            "native_metadata_provenance": "evidenced Codex 0.151.0 startup names/types; contents not interpreted",
+            "access_receipt_digest": access["digest"],
+            "raw_recipe": "exact-revoked-refresh-startup-auth-1", "recorded_tool_entries": 0,
+            "os_execution_attestation": False, "backend_availability": "unverified"}
+
+
+def prepare_auth_continuation(root: Path, predecessor: Path, source_snapshot: Path, *,
+                              reason: str, authorization_note: str, auth_repair_note: str) -> dict[str, Any]:
+    """Only the exact first continuation's startup-auth failure; original slots 3..4."""
+    root = legacy._physical(Path(root), must_exist=False)
+    predecessor = legacy._physical(Path(predecessor))
+    snapshot = legacy._physical(Path(source_snapshot))
+    old = load_manifest(predecessor, _source_root=snapshot)
+    proof = _auth_prefix(predecessor, old)
+    if (predecessor / "continuation-owner.json").exists() or (predecessor / "continuation-owner.json").is_symlink():
+        raise PilotInputError("predecessor continuation is already claimed")
+    binding = {"schema": AUTH_CONTINUATION_SCHEMA, "predecessor_root": str(predecessor),
+               "source_snapshot": str(snapshot), "predecessor_digest": old["digest"],
+               "original_sources": old["sources"], "original_hashes": _predecessor_hashes(predecessor, 2),
+               "prefix_evidence": proof, "inherited_slots": [1, 2], "executable_slots": [3, 4],
+               "reason": reason, "authorization_note": authorization_note, "auth_repair_note": auth_repair_note}
+    return _prepare_bound_continuation(root, predecessor, old, binding)
+
+
+def _predecessor_hashes(root: Path, number: int) -> dict[str, str]:
+    return {name: legacy._file_digest(root / name) for name in
+            ("manifest.json", f"slots/{number:03}/reservation.json", f"slots/{number:03}/result.json",
+             "readiness/result.json", "readiness/access-M01.json", "readiness/access-M02.json")}
+
+
 def prepare_continuation(root: Path, predecessor: Path, source_snapshot: Path, *,
                          reason: str, authorization_note: str) -> dict[str, Any]:
     """Prepare remaining slots 2..4, retaining consumed slot 1 without retry."""
@@ -801,12 +1112,15 @@ def prepare_continuation(root: Path, predecessor: Path, source_snapshot: Path, *
         "schema": CONTINUATION_SCHEMA, "predecessor_root": str(predecessor),
         "source_snapshot": str(snapshot), "predecessor_digest": old["digest"],
         "original_sources": old["sources"], "prefix_evidence": prefix,
-        "original_hashes": {name: legacy._file_digest(predecessor / name) for name in
-                            ("manifest.json", "slots/001/reservation.json", "slots/001/result.json",
-                             "readiness/result.json", "readiness/access-M01.json", "readiness/access-M02.json")},
+        "original_hashes": _predecessor_hashes(predecessor, 1),
         "inherited_slots": [1], "executable_slots": [2, 3, 4],
         "reason": reason, "authorization_note": authorization_note,
     }
+    return _prepare_bound_continuation(root, predecessor, old, binding)
+
+
+def _prepare_bound_continuation(root: Path, predecessor: Path, old: dict[str, Any],
+                                binding: dict[str, Any]) -> dict[str, Any]:
     return prepare(root, Path(old["fixture_bundle"]["path"]), Path(old["codex"]["path"]),
                    Path(old["sshai"]["path"]), predecessor / "config.json",
                    predecessor / "model-catalog.json", predecessor / "tool-overrides.json",
@@ -1484,18 +1798,7 @@ def run_slot(root: Path, number: int, approval_path: Path, *,
             raise PilotInputError("rendered prompt changed since preparation")
         legacy._write_new(evidence / "prompt.txt", prompt)
         answer_path = evidence / "last-message.txt"
-        argv = [
-            str(codex_path), "exec", "--model", config["model"]["id"],
-            "-c", f'model_reasoning_effort={json.dumps(config["model"]["reasoning_effort"])}',
-            "-c", f'model_catalog_json={json.dumps(str(codex_home / "model-catalog.json"))}',
-        ]
-        for override in config["codex_exec"]["config_overrides"]:
-            argv.extend(["-c", override])
-        for override in access_receipt["effective_config_overrides"]:
-            argv.extend(["-c", override])
-        argv.extend(["--ignore-user-config", "--ignore-rules", "--json", "--color", "never",
-                     "--skip-git-repo-check", "--output-last-message", str(answer_path),
-                     "-C", str(scratch), "-"])
+        argv = _model_argv(manifest, base, access_receipt)
         association = {
             "manifest_digest": manifest["digest"], "slot": slot,
             "approval_sha256": approval["sha256"], "access_receipt_digest": access_receipt["digest"],
@@ -1595,8 +1898,12 @@ def summarize(root: Path) -> dict[str, Any]:
     rows = []
     for slot in manifest["slots"]:
         if slot["slot"] in manifest.get("continuation", {}).get("inherited_slots", []):
-            old_root = Path(manifest["continuation"]["predecessor_root"])
-            retained = _json_file(old_root / "slots/001/result.json", "inherited failure")
+            binding = manifest["continuation"]
+            old_root = Path(binding["predecessor_root"])
+            if binding["schema"] == AUTH_CONTINUATION_SCHEMA and slot["slot"] == 1:
+                old_manifest = _json_file(old_root / "manifest.json", "first continuation manifest")
+                old_root = Path(old_manifest["continuation"]["predecessor_root"])
+            retained = _json_file(old_root / "slots" / f"{slot['slot']:03}" / "result.json", "inherited failure")
             row = _result_summary(retained)
             row.update({"state": "retained-failure", "retryable": False})
             rows.append(row)
@@ -1658,6 +1965,13 @@ def _main(argv: list[str] | None = None) -> int:
     continuation.add_argument("--predecessor-sources", type=Path, required=True)
     continuation.add_argument("--reason", required=True)
     continuation.add_argument("--authorization-note", required=True)
+    auth_continuation = commands.add_parser("prepare-auth-continuation", help="inherit the exact startup-auth failure; prepare original slots 3..4")
+    auth_continuation.add_argument("root", type=Path)
+    auth_continuation.add_argument("--predecessor", type=Path, required=True)
+    auth_continuation.add_argument("--predecessor-sources", type=Path, required=True)
+    auth_continuation.add_argument("--reason", required=True)
+    auth_continuation.add_argument("--authorization-note", required=True)
+    auth_continuation.add_argument("--auth-repair-note", required=True)
     ready = commands.add_parser("preflight", help="run retained no-model readiness canaries")
     ready.add_argument("root", type=Path)
     run = commands.add_parser("run-slot", help="attempt one approved one-shot slot")
@@ -1683,6 +1997,14 @@ def _main(argv: list[str] | None = None) -> int:
                   "manifest_digest": manifest["digest"], "scheduled_sessions": SESSION_COUNT,
                   "inherited_consumed_slots": [1], "executable_slots": [2, 3, 4],
                   "model_launches": 0, "approval_required": True}
+    elif args.command == "prepare-auth-continuation":
+        manifest = prepare_auth_continuation(args.root, args.predecessor, args.predecessor_sources,
+                                             reason=args.reason, authorization_note=args.authorization_note,
+                                             auth_repair_note=args.auth_repair_note)
+        output = {"schema": MANIFEST_SCHEMA, "phase": manifest["phase"],
+                  "manifest_digest": manifest["digest"], "scheduled_sessions": SESSION_COUNT,
+                  "inherited_consumed_slots": [1, 2], "executable_slots": [3, 4],
+                  "model_launches": 0, "approval_required": True, "backend_availability": "unverified"}
     elif args.command == "preflight":
         output = preflight(args.root)
     elif args.command == "run-slot":
