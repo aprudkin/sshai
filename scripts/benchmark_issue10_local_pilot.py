@@ -346,13 +346,17 @@ def schedule(seed: int = DEFAULT_SEED) -> list[dict[str, Any]]:
     return slots
 
 
-def _fixture_inventory(bundle_root: Path) -> tuple[dict[str, Any], dict[str, dict[str, bytes]]]:
+def _fixture_inventory(bundle_root: Path, *, cases: Sequence[str] = CASES) -> tuple[dict[str, Any], dict[str, dict[str, bytes]]]:
+    if (not isinstance(cases, (tuple, list)) or not 1 <= len(cases) <= 6
+            or any(not isinstance(case, str) or case not in {f"M{number:02}" for number in range(1, 7)} for case in cases)
+            or len(set(cases)) != len(cases)):
+        raise PilotInputError("fixture selection requires one to six unique known local cases")
     manifest = _json_file(bundle_root / "manifest.json", "fixture manifest")
     if manifest.get("schema_version") != "issue10-synthetic-v3-draft-2":
         raise PilotInputError("unsupported fixture bundle schema")
-    cases = manifest.get("cases")
+    case_inventory = manifest.get("cases")
     entries = manifest.get("files")
-    if not isinstance(cases, list) or not isinstance(entries, list):
+    if not isinstance(case_inventory, list) or not isinstance(entries, list):
         raise PilotInputError("fixture manifest inventory is malformed")
     listed: dict[str, tuple[int, str]] = {}
     for item in entries:
@@ -362,8 +366,8 @@ def _fixture_inventory(bundle_root: Path) -> tuple[dict[str, Any], dict[str, dic
             raise PilotInputError("duplicate or invalid fixture file entry")
         listed[name] = (item["bytes"], _hex_digest(item["sha256"], "fixture file digest"))
     selected: dict[str, dict[str, bytes]] = {}
-    for case_id in CASES:
-        case_rows = [row for row in cases if isinstance(row, dict) and row.get("case_id") == case_id]
+    for case_id in cases:
+        case_rows = [row for row in case_inventory if isinstance(row, dict) and row.get("case_id") == case_id]
         if len(case_rows) != 1 or not isinstance(case_rows[0].get("files"), list):
             raise PilotInputError(f"fixture manifest has no unique {case_id} inventory")
         selected[case_id] = {}
@@ -1761,6 +1765,41 @@ def run_slot(root: Path, number: int, approval_path: Path, *,
         "manifest_digest": manifest["digest"], "slot": slot,
         "approval_sha256": approval["sha256"], "one_shot": True,
     }))
+    return collect_reserved_slot(root, manifest, slot, approval)
+
+
+def collect_reserved_slot(root: Path, manifest: dict[str, Any], slot: dict[str, Any],
+                          approval: dict[str, Any], *, qualifier: Callable[..., dict[str, Any]] | None = None,
+                          attempt_collector: Callable[..., dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Collect a controller-gated reservation once; never load/approve/reserve a population."""
+    root = legacy._physical(Path(root))
+    if (_json_file(root / "manifest.json", "reserved manifest") != manifest
+            or manifest.get("digest") != _digest_object(manifest)):
+        raise PilotInputError("reserved collection manifest is not the retained immutable plan")
+    number = slot.get("slot")
+    if _slot(manifest, number) != slot:
+        raise PilotInputError("reserved collection slot differs from the retained schedule")
+    base = legacy._physical(root / "slots" / f"{number:03}")
+    if not base.is_dir() or {path.name for path in base.iterdir()} != {"reservation.json"}:
+        raise PilotInputError("reserved collection is one-shot; existing collection evidence cannot resume")
+    _exact_object(approval, {"path", "value", "sha256"}, "reserved approval binding")
+    approval_path = _private_regular(Path(approval["path"]), "reserved approval")
+    value = _json_file(approval_path, "reserved approval")
+    expected = {"schema": manifest.get("approval_schema", APPROVAL_SCHEMA),
+                "manifest_digest": manifest["digest"], "phase": manifest["phase"],
+                "session_count": manifest["session_count"],
+                "original_diagnostic_session_ceiling": manifest["original_diagnostic_session_ceiling"],
+                "config_sha256": manifest["config_sha256"]}
+    if (stat.S_IMODE(approval_path.stat().st_mode) != 0o600 or value != approval["value"]
+            or legacy._file_digest(approval_path) != approval["sha256"]
+            or any(value.get(key) != item for key, item in expected.items())
+            or value.get("approved") is not True
+            or any(not isinstance(value.get(key), str) or not value[key].strip()
+                   for key in ("approved_at_utc", "authorization_note"))
+            or _json_file(base / "reservation.json", "reserved slot") != {
+                "manifest_digest": manifest["digest"], "slot": slot,
+                "approval_sha256": approval["sha256"], "one_shot": True}):
+        raise PilotInputError("reserved collection requires matching manifest/slot/approval/reservation")
     result: dict[str, Any] | None = None
     stage = "reserved-before-preflight"
     try:
@@ -1784,7 +1823,7 @@ def run_slot(root: Path, number: int, approval_path: Path, *,
         sshai_path = Path(manifest["sshai"]["path"])
         bundle = Path(manifest["fixture_bundle"]["path"])
         protected = [auth_path.parent.parent, Path.home(), bundle, approval["path"], auth_path]
-        qualifier = _ACCESS_QUALIFIER or _qualify_access
+        qualifier = qualifier or _ACCESS_QUALIFIER or _qualify_access
         stage = "fresh-access-qualification"
         access_receipt = _validated_access_receipt(qualifier(
             codex_path, sshai_path, scratch, fixture, protected, environment,
@@ -1805,7 +1844,7 @@ def run_slot(root: Path, number: int, approval_path: Path, *,
             "model": config["model"], "history_mode": config["codex_exec"]["history_mode"],
             "config_sha256": manifest["config_sha256"], "argv_sha256": _sha(_encoded(argv)),
         }
-        collect = _ATTEMPT_COLLECTOR or _collect_local_attempt
+        collect = attempt_collector or _ATTEMPT_COLLECTOR or _collect_local_attempt
         stage = "model-attempt-requested"
         attempt = collect(evidence / "attempt", argv, prompt=prompt, env=environment, cwd=scratch,
                           timeout_seconds=config["limits"]["timeout_seconds"],
@@ -1841,6 +1880,17 @@ def run_slot(root: Path, number: int, approval_path: Path, *,
             manifest["slot_material"][str(number)]["fixture_files"])
         access_status = "passed" if all(fixture_integrity.values()) and fixture_inventory_exact else "failed"
         blockers = []
+        # CodexModelRerouted and generic warnings/errors use non-tool error items;
+        # requested turn_context alone cannot exclude an observable substitution.
+        cli_records = capture.parse_jsonl(events, "local_fixed_model_cli")["records"]
+        if any(isinstance(row, dict) and isinstance(row.get("item"), dict)
+               and row["item"].get("type") == "error" for row in cli_records):
+            blockers.append("cli_error_item")
+        contexts = [row.get("payload") for row in capture.parse_jsonl(rollout, "local_fixed_model_rollout")["records"]
+                    if isinstance(row, dict) and row.get("type") == "turn_context"]
+        if not contexts or any(not isinstance(context, dict) or context.get("model") != config["model"]["id"]
+                               or context.get("effort") != config["model"]["reasoning_effort"] for context in contexts):
+            blockers.append("observed_model_context_missing_or_mismatched")
         # Delivery failures and invalid capture evidence consume the slot and
         # stop later reservations. Intentional qualification uncertainty is not
         # capture loss; do not gate on usage.complete, finality, or an unknown

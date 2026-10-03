@@ -15,8 +15,18 @@ from unittest.mock import patch
 import benchmark_issue10_local_pilot as pilot
 import benchmark_issue10_v3_capture as capture
 from test_issue10_v3_call_evidence import CallEvidenceTests
-from test_issue10_v3_completion import ANSWER, completion_streams
+from test_issue10_v3_completion import ANSWER, completion_streams as source_completion_streams
 from test_issue10_v3_capture import jsonl
+
+
+def completion_streams():
+    """Controller fixture uses the pinned diagnostic model, unlike generic parser fixtures."""
+    cli, rollout = source_completion_streams()
+    for record in rollout:
+        if record.get("type") == "turn_context":
+            record["payload"].pop("reasoning_effort", None)
+            record["payload"].update(model="gpt-5.6-sol", effort="high")
+    return cli, rollout
 
 
 def sha(data: bytes) -> str:
