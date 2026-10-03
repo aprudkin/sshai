@@ -26,12 +26,15 @@ PHASE = "local-measurement-amendment-1"
 CASES = tuple(f"M{number:02}" for number in range(1, 7))
 SESSION_COUNT = 36
 SEED = 1010
+CAPTURE_CAPACITY = {"stream_limit": 8 * 1024 * 1024, "capture_limit": 8 * 1024 * 1024,
+                    "line_limit": 4 * 1024 * 1024}
 BUDGET = {"local_pilot_consumed": 4, "local_measurement_allocated": 36,
           "remote_pilot_allocated": 8, "remote_measurement_allocated": 72}
 SOURCE_PATHS = pilot.SOURCE_PATHS | {
     "scripts/benchmark_issue10_local_series.py", "scripts/benchmark_issue10_v3.py",
     "scripts/benchmark_issue10_v3_cases.py", "docs/benchmarks/issue10-protocol.md",
     "docs/benchmarks/issue10-local-series.md", "docs/benchmarks/issue10-local-pilot-results.md",
+    "scripts/benchmark_issue10_local_series_recovery.py",
 }
 _BINARY_PROBE: Callable[..., dict[str, Any]] | None = None
 _ACCESS_QUALIFIER: Callable[..., dict[str, Any]] | None = None
@@ -71,7 +74,7 @@ def _material(root: Path, slots: list[dict[str, Any]], selected: dict[str, dict[
 def prepare(root: Path, fixture_bundle: Path, codex_path: Path, sshai_path: Path,
             config_path: Path, model_catalog_path: Path, tool_overrides_path: Path,
             auth_path: Path, assessment_instructions_path: Path,
-            assessment_rubric_path: Path) -> dict[str, Any]:
+            assessment_rubric_path: Path, *, _recovery_binding=None, _supplementary=None) -> dict[str, Any]:
     root = legacy._physical(Path(root), must_exist=False)
     bundle = legacy._physical(Path(fixture_bundle))
     codex = pilot._private_regular(codex_path, "Codex", executable=True)
@@ -107,7 +110,8 @@ def prepare(root: Path, fixture_bundle: Path, codex_path: Path, sshai_path: Path
         "schema": MANIFEST_SCHEMA, "phase": PHASE, "approval_schema": APPROVAL_SCHEMA,
         "schedule_seed": SEED, "slots": slots, "cases": list(CASES), "repetitions": 3,
         "random_generator": "Python random.Random / MT19937; existing v3 M-series projection",
-        "session_count": SESSION_COUNT, "original_diagnostic_session_ceiling": 120,
+        "session_count": SESSION_COUNT, "capture_capacity": dict(CAPTURE_CAPACITY),
+        "original_diagnostic_session_ceiling": 120,
         "assessor_context_ceiling": 24, "local_assessment_contexts": 6, "budget": dict(BUDGET),
         "no_retry_no_resume": True, "local_only": True,
         "fixture_bundle": {"path": str(bundle), "manifest_sha256": legacy._file_digest(bundle / "manifest.json"),
@@ -127,9 +131,18 @@ def prepare(root: Path, fixture_bundle: Path, codex_path: Path, sshai_path: Path
                           "answer_finality": "version-bounded-evidence-only", "independent_model_assessment": "unknown"},
         "experimental_savings_claim_eligible": False,
     }
+    if _recovery_binding is not None:
+        manifest["capture_recovery"] = _recovery_binding
     manifest["digest"] = pilot._digest_object(manifest)
     if len(pilot._pretty(manifest)) > pilot.capture.MAX_CAPTURE_BYTES:
         raise pilot.PilotInputError("series manifest exceeds its bounded input contract")
+    if _recovery_binding is not None:
+        import benchmark_issue10_local_series_recovery as recovery
+        try:
+            legacy._write_new(Path(_recovery_binding["predecessor_root"]) / "capture-recovery-owner.json",
+                              pilot._pretty(recovery.owner(_recovery_binding, root)))
+        except FileExistsError as exc:
+            raise pilot.PilotInputError("original series capture recovery is already claimed") from exc
     legacy._new_dir(root)
     legacy._mkdir_private(root / "slots")
     legacy._mkdir_private(root / "prepared")
@@ -146,7 +159,27 @@ def prepare(root: Path, fixture_bundle: Path, codex_path: Path, sshai_path: Path
                        ("tool-overrides.json", controls_bytes), ("manifest.json", pilot._pretty(manifest)),
                        ("approval-template.json", pilot._pretty(approval_template(manifest)))):
         legacy._write_new(root / name, data, mode=0o400 if name in {"model-catalog.json", "tool-overrides.json"} else 0o600)
+    if _recovery_binding is not None:
+        for label, filename in (("native", "native-rollout.jsonl"), ("report", "capture-report.json"),
+                                ("completion", "completion-evidence.json"), ("audit", "tool-audit.json")):
+            data = _supplementary[label] if label == "native" else pilot._pretty(_supplementary[label])
+            legacy._write_new(root / "recovery/slot-003" / filename, data, mode=0o400)
     return manifest
+
+
+def prepare_capture_recovery(root: Path, predecessor: Path, source_snapshot: Path, *,
+                             reason: str, authorization_note: str) -> dict[str, Any]:
+    import benchmark_issue10_local_series_recovery as recovery
+    root = legacy._physical(Path(root), must_exist=False)
+    predecessor = legacy._physical(Path(predecessor))
+    snapshot = legacy._physical(Path(source_snapshot))
+    if (predecessor / "capture-recovery-owner.json").exists() or (predecessor / "capture-recovery-owner.json").is_symlink():
+        raise pilot.PilotInputError("original series capture recovery is already claimed")
+    old, binding, supplementary = recovery.binding(root, predecessor, snapshot, reason, authorization_note)
+    return prepare(root, Path(old["fixture_bundle"]["path"]), Path(old["codex"]["path"]), Path(old["sshai"]["path"]),
+                   predecessor / "config.json", predecessor / "model-catalog.json", predecessor / "tool-overrides.json",
+                   Path(old["auth"]["path"]), predecessor / "prepared/assessment/instructions.md",
+                   predecessor / "prepared/assessment/rubric.md", _recovery_binding=binding, _supplementary=supplementary)
 
 
 def _slots_inventory(root: Path) -> None:
@@ -155,22 +188,33 @@ def _slots_inventory(root: Path) -> None:
             raise pilot.PilotInputError("foreign or unsafe slot outside the fixed series allocation")
 
 
-def load_manifest(root: Path) -> dict[str, Any]:
+def load_manifest(root: Path, *, _source_root: Path | None = None) -> dict[str, Any]:
     root = legacy._physical(Path(root))
     manifest = pilot._json_file(root / "manifest.json", "series manifest")
     expected = {"schema": MANIFEST_SCHEMA, "phase": PHASE, "approval_schema": APPROVAL_SCHEMA,
                 "slots": schedule(), "schedule_seed": SEED, "cases": list(CASES), "repetitions": 3,
-                "session_count": 36, "budget": BUDGET, "original_diagnostic_session_ceiling": 120,
+                "session_count": 36, "budget": BUDGET, "capture_capacity": CAPTURE_CAPACITY,
+                "original_diagnostic_session_ceiling": 120,
                 "assessor_context_ceiling": 24, "local_assessment_contexts": 6,
                 "no_retry_no_resume": True, "local_only": True, "experimental_savings_claim_eligible": False}
+    source_root = pilot.REPO
+    source_inventory = SOURCE_PATHS
+    if _source_root is not None:
+        import benchmark_issue10_local_series_recovery as recovery
+        source_root = legacy._physical(Path(_source_root))
+        source_inventory = set(recovery.ORIGINAL_SOURCES)
+        expected.pop("capture_capacity")
+        if (manifest.get("sources") != recovery.ORIGINAL_SOURCES
+                or "capture_capacity" in manifest or "capture_recovery" in manifest):
+            raise pilot.PilotInputError("historical source exception is only the original 4d283d7 series")
     if any(manifest.get(key) != value for key, value in expected.items()) or manifest.get("digest") != pilot._digest_object(manifest):
         raise pilot.PilotInputError("series manifest policy, schedule or digest changed")
     sources = manifest.get("sources")
-    if not isinstance(sources, dict) or set(sources) != SOURCE_PATHS:
+    if not isinstance(sources, dict) or set(sources) != source_inventory:
         raise pilot.PilotInputError("series source pin inventory changed")
     for name, digest in sources.items():
         pilot._hex_digest(digest, "series source pin")
-        if legacy._file_digest(legacy._physical(pilot.REPO / name)) != digest:
+        if legacy._file_digest(legacy._physical(source_root / name)) != digest:
             raise pilot.PilotInputError("series source/protocol changed since preparation")
     config = pilot._validate_config(manifest.get("config"))
     if pilot._sha(pilot._encoded(config)) != manifest.get("config_sha256") or pilot._json_file(root / "config.json", "retained configuration") != config:
@@ -210,6 +254,9 @@ def load_manifest(root: Path) -> dict[str, Any]:
             if legacy._read_bounded(legacy._physical(root / "prepared" / relative), pilot.capture.MAX_CAPTURE_BYTES) != expected_data:
                 raise pilot.PilotInputError("retained series material changed")
     _slots_inventory(root)
+    if "capture_recovery" in manifest:
+        import benchmark_issue10_local_series_recovery as recovery
+        recovery.validate(root, manifest)
     return manifest
 
 
@@ -304,7 +351,12 @@ def run_slot(root: Path, number: int, approval_path: Path, *, allow_model_run: b
     if type(number) is not int or not 1 <= number <= SESSION_COUNT:
         raise pilot.PilotInputError("series slot must be an integer from 1 through 36")
     slot = manifest["slots"][number - 1]
+    inherited = manifest.get("capture_recovery", {}).get("inherited_slots", [])
+    if number in inherited or (root / "capture-recovery-owner.json").exists() or (root / "capture-recovery-owner.json").is_symlink():
+        raise pilot.PilotInputError("original slot launch authority was exclusively delegated; no inherited retry")
     for prior in range(1, number):
+        if prior in inherited:
+            continue
         value = pilot._json_file(root / "slots" / f"{prior:03}" / "result.json", "prior series result")
         if value.get("schema") != pilot.RESULT_SCHEMA or value.get("slot") != manifest["slots"][prior - 1] or value.get("continuation", {}).get("allowed") is not True:
             raise pilot.PilotInputError("series is stopped by a missing or blocked original prior slot")
@@ -325,6 +377,9 @@ def summarize(root: Path) -> dict[str, Any]:
     rows = []
     for slot in manifest["slots"]:
         base = root / "slots" / f"{slot['slot']:03}"
+        inherited = slot["slot"] in manifest.get("capture_recovery", {}).get("inherited_slots", [])
+        if inherited:
+            base = Path(manifest["capture_recovery"]["predecessor_root"]) / "slots" / f"{slot['slot']:03}"
         path = base / "result.json"
         if not path.exists() and not path.is_symlink():
             row = {"slot": slot["slot"], "case_id": slot["case_id"], "replicate": slot["replicate"], "arm": slot["arm"],
@@ -337,6 +392,12 @@ def summarize(root: Path) -> dict[str, Any]:
             if value.get("schema") != pilot.RESULT_SCHEMA or value.get("slot") != slot:
                 raise pilot.PilotInputError("series result differs from its original slot")
             row = {**pilot._result_summary(value), "replicate": slot["replicate"], "retryable": False}
+        if inherited:
+            row["inherited_original_outcome"] = True
+            if slot["slot"] == 3:
+                import benchmark_issue10_local_series_recovery as recovery
+                row["supplementary_capture"] = {"status": "size-only supplementary evidence; original flags unchanged",
+                    "acquisition_limit": recovery.ACQUISITION_LIMIT, "finality": "unknown", "quality": "unknown"}
         rows.append(row)
     readiness = root / "readiness/result.json"
     status = "not-run"
@@ -358,6 +419,12 @@ def _main(argv: list[str] | None = None) -> int:
     prepare_cmd.add_argument("root", type=Path)
     for name in ("fixtures", "codex", "sshai", "config", "model-catalog", "tool-overrides", "auth-file", "assessment-instructions", "assessment-rubric"):
         prepare_cmd.add_argument("--" + name, type=Path, required=True)
+    recover = commands.add_parser("prepare-capture-recovery", help="only original 4d283d7 slots 1..3 size-only capture recovery")
+    recover.add_argument("root", type=Path)
+    recover.add_argument("--predecessor", type=Path, required=True)
+    recover.add_argument("--source-snapshot", type=Path, required=True)
+    recover.add_argument("--reason", required=True)
+    recover.add_argument("--authorization-note", required=True)
     commands.add_parser("preflight", help="one-shot no-model access qualification").add_argument("root", type=Path)
     run = commands.add_parser("run-slot", help="attempt the next approved original slot once")
     run.add_argument("root", type=Path)
@@ -372,6 +439,12 @@ def _main(argv: list[str] | None = None) -> int:
         output = {"schema": MANIFEST_SCHEMA, "phase": PHASE, "manifest_digest": manifest["digest"],
                   "scheduled_sessions": 36, "model_launches": 0, "approval_required": True,
                   "pilot_review_required": True, "experimental_savings_claim_eligible": False}
+    elif args.command == "prepare-capture-recovery":
+        manifest = prepare_capture_recovery(args.root, args.predecessor, args.source_snapshot,
+                    reason=args.reason, authorization_note=args.authorization_note)
+        output = {"schema": MANIFEST_SCHEMA, "phase": PHASE, "manifest_digest": manifest["digest"], "scheduled_sessions": 36,
+                  "inherited_slots": [1, 2, 3], "executable_slots": list(range(4, 37)), "model_launches": 0,
+                  "approval_required": True, "experimental_savings_claim_eligible": False}
     elif args.command == "preflight":
         output = preflight(args.root)
     elif args.command == "run-slot":

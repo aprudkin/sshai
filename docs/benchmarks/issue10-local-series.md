@@ -1,8 +1,9 @@
 # Issue 10 local measured-series controller
 
-**Status:** Offline implementation/preparation path, not an approved or completed
-measurement phase. No pilot outcome, assessment, live model availability or savings
-claim is established by this controller's code or synthetic tests.
+**Scope:** Prospective observer-capacity and pinned recovery revision following the
+original frozen phase's first three diagnostic executions. This reference describes
+launch gates, not phase completion. Code or synthetic tests alone establish no phase
+approval, pilot outcome, assessment, live model availability or savings claim.
 
 The [protocol](issue10-protocol.md) and [current amendment](issue10-methodology-amendment.md)
 remain authoritative. The coordinator must review the local pilot's access, capture,
@@ -71,8 +72,8 @@ local case identifiers; its pilot default remains M01/M02. `collect_reserved_slo
 verifies the retained manifest, supplied approval and existing one-shot reservation
 before provisioning, then reuses the same bounded capture/audit/failure finalization.
 The series controller owns its distinct schemas, phase gates, readiness and ordering.
-Historical source code is never imported for predecessor validation; this controller
-has no predecessor recovery operation.
+Historical source code is never imported for predecessor validation. The sole
+predecessor operation below is narrowly pinned; it is not generic resume or retry.
 
 Actual commands keep gpt-5.6-sol/high, the pinned Codex controls and 600-second timeout,
 ignore global user configuration/rules and deny tool network. Of study evidence, only
@@ -80,6 +81,65 @@ the current case and permitted per-slot scratch/sshai artifact root are exposed;
 profile also permits minimal/runtime and Homebrew reads and writable scratch.
 Model/provider residual cache and unobserved OS activity remain evidence limits. A passed access canary is not proof
 of exhaustive confinement or semantic routing.
+
+## Prospective observer capacity
+
+New manifests explicitly freeze 8 MiB **per** stdout stream, stderr stream and native
+rollout candidate, and 4 MiB per JSONL record. The actual incremental subprocess
+reader, rollout identity/copy collector, adapter, completion comparison and model
+notice guard receive the same explicit capacity. No runtime constant patching is
+used. Legacy defaults remain 1,000,000 bytes per process stream, 1 MiB per capture
+and 256 KiB per JSONL record; historical validation uses those unchanged defaults.
+Prompt, delivered-answer, model/assessor configuration and assessment-packet bounds
+are unchanged, as are record/candidate/discovery counts and the 600-second deadline.
+
+Native `CommandExecution` records can duplicate raw stdout in `stdout` and
+`aggregated_output` while also carrying shorter `formatted_output`. CLI aggregated
+output can likewise exceed the old line cap without OS stream overflow. A native
+model-facing output-truncation notice is retained session behavior, not an observer
+stdout-overflow flag. New bounds are finite: oversize streams, records or candidates
+still retain failed outcomes and block subsequent original reservations.
+
+## One pinned size-only capture recovery
+
+`prepare-capture-recovery ROOT --predecessor ORIGINAL --source-snapshot SNAPSHOT
+--reason TEXT --authorization-note TEXT` prepares a new private sibling; it launches
+no model. This exception accepts only the original `4d283d77f4289d91dff1462a45629a32b8aeb1e1`
+source pins and exactly its consumed original slots 1–3. It delegates only still
+unreserved original slots 4–36, with the same schedule, case/prompt semantics, model,
+assessment rubric, resource allocation and four consumed diagnostic-pilot outcomes.
+It never retries any of slots 1–3 or resets the 36-outcome denominator.
+
+Validation hashes the source snapshot without importing it and checks all-six-case
+original readiness, reservation/request/prompt/config associations, exact typed
+producer inventories, unchanged original results, healthy complete nonoverflow
+process streams, one genuine CODEX_HOME candidate per slot, matching identities,
+fixed model/effort contexts, cumulative CLI/native usage and final answer bytes.
+Slots 1–2 must remain clean original collections. Slot 3 must be precisely the old
+CLI line-cap/native capture-cap defect with an intact unique original native
+candidate and an empty original collector rollout copy. Reparse at prospective
+bounds must have no issues, compaction, error/rerouting notice, unsupported/unallowed
+record or other delivery/access/process failure. Eligibility uses capture consistency,
+not particular token-counter values, quality or favorable outcomes.
+
+The original trees and unknown/incomplete/capture-blocked flags stay unchanged. The
+only predecessor write is an atomic exclusive `capture-recovery-owner.json` claim,
+bound to the new root and inherited evidence. The new root retains a supplementary
+native copy, capture report, completion comparison and tool audit with bound hashes.
+Slot 3 acquisition is explicitly **late**: the oversized original file had no
+collector-time retained byte hash. A new hash must never be presented as an earlier
+collection hash or proof that the original collection was clean. External finality,
+routing qualification and subsequent model correctness grades remain separate;
+recovery does not automatically upgrade them.
+
+Before any slot 4–36 launch, the new root needs fresh all-six-case no-model preflight,
+its own manifest-bound actual task approval and `--allow-model-run`, then fresh
+per-slot canaries. Any other failure is refused rather than skipped; later failures
+cannot invoke this exception again. Combined summaries retain all 36 outcomes,
+including all three immutable original outcomes and slot 3's explicit supplementary
+acquisition limitation. A failed/interrupted preparation can leave its exclusive
+claim or partial new root retained; there is no automatic ownership rollback or
+replacement continuation.
 
 ## Retained inventory and reporting
 
@@ -100,6 +160,8 @@ raw evidence under the amendment's private retention and reviewed-publication po
 
 ```sh
 python3 -W error -m unittest discover -s scripts -p 'test_issue10_local_series.py'
+python3 -W error -m unittest discover -s scripts -p 'test_issue10_observer_capacity.py'
+python3 -W error -m unittest discover -s scripts -p 'test_issue10_local_series_recovery.py'
 python3 -W error -m unittest discover -s scripts -p 'test_issue10_local_pilot*.py'
 python3 scripts/benchmark_issue10_local_series.py --help
 ```

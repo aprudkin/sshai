@@ -876,8 +876,11 @@ def _terminate_group(process: subprocess.Popen[bytes]) -> None:
             pass
 
 
-def _bounded_process(argv: list[str], prompt: bytes, env: dict[str, str], cwd: Path, timeout: int) -> dict[str, Any]:
+def _bounded_process(argv: list[str], prompt: bytes, env: dict[str, str], cwd: Path, timeout: int,
+                     *, stream_limit: int = MAX_CAPTURE) -> dict[str, Any]:
     """Incrementally cap output and enforce a wall deadline even after pipe EOF."""
+    if type(stream_limit) is not int or not 1 <= stream_limit <= 8 * 1024 * 1024:
+        raise ValueError("stream limit must be bounded between 1 byte and 8 MiB")
     started = time.monotonic()
     process: subprocess.Popen[bytes] | None = None
     selector: selectors.BaseSelector | None = None
@@ -926,7 +929,7 @@ def _bounded_process(argv: list[str], prompt: bytes, env: dict[str, str], cwd: P
                     key.fileobj.close()
                     continue
                 target = captured[key.data]
-                room = MAX_CAPTURE - len(target)
+                room = stream_limit - len(target)
                 target.extend(chunk[:max(room, 0)])
                 if len(chunk) > room and not overflow:
                     overflow = True

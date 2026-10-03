@@ -1545,8 +1545,13 @@ def _discover_rollouts(codex_home: Path) -> tuple[list[Path], dict[str, Any]]:
 def _collect_local_attempt(attempt_dir: Path, argv: Sequence[str], *, prompt: bytes,
                            env: Mapping[str, str], cwd: Path, timeout_seconds: float,
                            codex_home: Path, answer_path: Path,
-                           association: dict[str, Any]) -> dict[str, Any]:
+                           association: dict[str, Any], stream_limit: int = collector.MAX_STREAM_BYTES,
+                           capture_limit: int = capture.MAX_CAPTURE_BYTES,
+                           line_limit: int = capture.MAX_LINE_BYTES) -> dict[str, Any]:
     """Collector specialization whose only post-spawn discovery root is fresh CODEX_HOME."""
+    if any(type(value) is not int or not 1 <= value <= ceiling for value, ceiling in
+           ((stream_limit, 8 * 1024 * 1024), (capture_limit, 8 * 1024 * 1024), (line_limit, 4 * 1024 * 1024))):
+        raise collector.CollectorInputError("observer capacity exceeds bounded native-record limits")
     (output, command, environment, work, timeout, _, answer) = collector._validate_request(
         attempt_dir, argv, prompt, env, cwd, timeout_seconds, (), answer_path)
     native_runtime = _native_runtime_inventory(codex_home)
@@ -1555,7 +1560,10 @@ def _collect_local_attempt(attempt_dir: Path, argv: Sequence[str], *, prompt: by
         expected_inventory.add(codex_home / "tmp")
     if set(codex_home.iterdir()) != expected_inventory:
         raise PilotInputError("dedicated CODEX_HOME inventory changed after controlled provisioning")
-    request = collector._request_receipt(command, prompt, environment, work, timeout, [], answer)
+    request = collector._request_receipt(command, prompt, environment, work, timeout, [], answer,
+                                         stream_limit=stream_limit, capture_limit=capture_limit, line_limit=line_limit)
+    if line_limit != capture.MAX_LINE_BYTES:
+        request["limits"]["jsonl_record_bytes"] = line_limit
     try:
         association_bytes = json.dumps(association, allow_nan=False).encode()
         if len(association_bytes) > 16384:
@@ -1572,15 +1580,16 @@ def _collect_local_attempt(attempt_dir: Path, argv: Sequence[str], *, prompt: by
                                           "candidate_bound": collector.MAX_ROLLOUT_CANDIDATES}})
     attempt = collector._private_new_directory(output)
     legacy._write_new(attempt / "attempt.json", legacy._canon(request))
-    captured = legacy._bounded_process(command, prompt, environment, work, timeout)
+    stream_options = {"stream_limit": stream_limit} if stream_limit != collector.MAX_STREAM_BYTES else {}
+    captured = legacy._bounded_process(command, prompt, environment, work, timeout, **stream_options)
     events = captured.pop("stdout")
     stderr = captured.pop("stderr")
     process_receipt = {
         "schema": collector.PROCESS_SCHEMA, **captured,
         "execution": collector._execution(captured), "stdout_bytes": len(events),
         "stderr_bytes": len(stderr),
-        "stdout_limit_reached": len(events) == collector.MAX_STREAM_BYTES,
-        "stderr_limit_reached": len(stderr) == collector.MAX_STREAM_BYTES,
+        "stdout_limit_reached": len(events) == stream_limit,
+        "stderr_limit_reached": len(stderr) == stream_limit,
     }
     legacy._write_new(attempt / "events.jsonl", events)
     legacy._write_new(attempt / "stderr.txt", stderr)
@@ -1591,7 +1600,8 @@ def _collect_local_attempt(attempt_dir: Path, argv: Sequence[str], *, prompt: by
         candidates, discovery = _discover_rollouts(codex_home) if process_started else ([], {
             "root": str(codex_home), "entry_count": 2, "candidate_count": 0,
             "method": "not scanned because process did not start"})
-        rollout = collector._collect_rollout(attempt, events, candidates, process_started)
+        rollout = collector._collect_rollout(attempt, events, candidates, process_started,
+                                             capture_limit=capture_limit, line_limit=line_limit)
     except Exception as exc:
         discovery = {"root": str(codex_home), "state": "invalid", "reason": str(exc)}
         legacy._write_new(attempt / "rollout.jsonl", b"")
@@ -1776,6 +1786,12 @@ def collect_reserved_slot(root: Path, manifest: dict[str, Any], slot: dict[str, 
     if (_json_file(root / "manifest.json", "reserved manifest") != manifest
             or manifest.get("digest") != _digest_object(manifest)):
         raise PilotInputError("reserved collection manifest is not the retained immutable plan")
+    capacity = manifest.get("capture_capacity", {})
+    if capacity and capacity != {"stream_limit": 8 * 1024 * 1024, "capture_limit": 8 * 1024 * 1024,
+                                 "line_limit": 4 * 1024 * 1024}:
+        raise PilotInputError("reserved observer capacity differs from the prospective bounded contract")
+    parse_limits = {key: value for key, value in capacity.items() if key != "stream_limit"}
+    file_limit = capacity.get("capture_limit", capture.MAX_CAPTURE_BYTES)
     number = slot.get("slot")
     if _slot(manifest, number) != slot:
         raise PilotInputError("reserved collection slot differs from the retained schedule")
@@ -1849,19 +1865,19 @@ def collect_reserved_slot(root: Path, manifest: dict[str, Any], slot: dict[str, 
         attempt = collect(evidence / "attempt", argv, prompt=prompt, env=environment, cwd=scratch,
                           timeout_seconds=config["limits"]["timeout_seconds"],
                           codex_home=codex_home, answer_path=answer_path,
-                          association=association)
+                          association=association, **capacity)
         attempt_dir = attempt["attempt_dir"]
         delivery = _json_file(attempt_dir / "delivery.json", "attempt delivery")
-        events = legacy._read_bounded(attempt_dir / "events.jsonl", capture.MAX_CAPTURE_BYTES)
-        rollout = legacy._read_bounded(attempt_dir / "rollout.jsonl", capture.MAX_CAPTURE_BYTES)
+        events = legacy._read_bounded(attempt_dir / "events.jsonl", file_limit)
+        rollout = legacy._read_bounded(attempt_dir / "rollout.jsonl", file_limit)
         process_data = legacy._read_bounded(attempt_dir / "process.json", capture.MAX_CAPTURE_BYTES)
         answer = (legacy._read_bounded(attempt_dir / "answer.txt", capture.MAX_ANSWER_BYTES)
                   if (attempt_dir / "answer.txt").exists() else None)
         report = capture.capture_bytes(
             events, rollout, process_data, answer,
-            answer_state="captured" if answer is not None else "lost",
+            answer_state="captured" if answer is not None else "lost", **parse_limits,
         )
-        completion = capture.completion_evidence_bytes(events, rollout, answer)
+        completion = capture.completion_evidence_bytes(events, rollout, answer, **parse_limits)
         audit = _audit(report, config)
         legacy._write_new(evidence / "capture-report.json", _pretty(report))
         legacy._write_new(evidence / "completion-evidence.json", _pretty(completion))
@@ -1882,11 +1898,11 @@ def collect_reserved_slot(root: Path, manifest: dict[str, Any], slot: dict[str, 
         blockers = []
         # CodexModelRerouted and generic warnings/errors use non-tool error items;
         # requested turn_context alone cannot exclude an observable substitution.
-        cli_records = capture.parse_jsonl(events, "local_fixed_model_cli")["records"]
+        cli_records = capture.parse_jsonl(events, "local_fixed_model_cli", **parse_limits)["records"]
         if any(isinstance(row, dict) and isinstance(row.get("item"), dict)
                and row["item"].get("type") == "error" for row in cli_records):
             blockers.append("cli_error_item")
-        contexts = [row.get("payload") for row in capture.parse_jsonl(rollout, "local_fixed_model_rollout")["records"]
+        contexts = [row.get("payload") for row in capture.parse_jsonl(rollout, "local_fixed_model_rollout", **parse_limits)["records"]
                     if isinstance(row, dict) and row.get("type") == "turn_context"]
         if not contexts or any(not isinstance(context, dict) or context.get("model") != config["model"]["id"]
                                or context.get("effort") != config["model"]["reasoning_effort"] for context in contexts):

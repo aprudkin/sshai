@@ -76,17 +76,21 @@ def _issue(source: str, code: str, detail: str, *, record: int | None = None,
     return result
 
 
-def parse_jsonl(data: bytes, source: str) -> dict[str, Any]:
-    """Parse a bounded JSONL capture, retaining all independently valid rows."""
+def parse_jsonl(data: bytes, source: str, *, capture_limit: int = MAX_CAPTURE_BYTES,
+                line_limit: int = MAX_LINE_BYTES) -> dict[str, Any]:
+    """Parse bounded JSONL; explicit prospective capacity never changes defaults."""
+    if (type(capture_limit) is not int or not 1 <= capture_limit <= 8 * 1024 * 1024
+            or type(line_limit) is not int or not 1 <= line_limit <= 4 * 1024 * 1024):
+        raise CaptureInputError("JSONL capacity exceeds the bounded observer contract")
     if not isinstance(data, bytes):
         raise TypeError("JSONL input must be bytes")
     if not isinstance(source, str) or not source:
         raise TypeError("JSONL source must be a nonempty string")
     issues: list[dict[str, Any]] = []
-    if len(data) > MAX_CAPTURE_BYTES:
+    if len(data) > capture_limit:
         return {
             "records": [], "issues": [_issue(source, "capture_too_large",
-                f"capture exceeds {MAX_CAPTURE_BYTES} bytes")],
+                f"capture exceeds {capture_limit} bytes")],
             "byte_count": len(data), "record_count": 0, "complete": False,
         }
     try:
@@ -103,9 +107,9 @@ def parse_jsonl(data: bytes, source: str) -> dict[str, Any]:
         if not line.strip():
             issues.append(_issue(source, "blank_jsonl_record", "blank JSONL record", record=line_number))
             continue
-        if len(line.encode("utf-8")) > MAX_LINE_BYTES:
+        if len(line.encode("utf-8")) > line_limit:
             issues.append(_issue(source, "jsonl_record_too_large",
-                f"record exceeds {MAX_LINE_BYTES} bytes", record=line_number))
+                f"record exceeds {line_limit} bytes", record=line_number))
             continue
         if len(records) >= MAX_RECORDS:
             issues.append(_issue(source, "too_many_records",
@@ -870,10 +874,11 @@ def _decode_process(data: bytes) -> tuple[Any, list[dict[str, Any]]]:
 
 
 def capture_bytes(cli_data: bytes, rollout_data: bytes, process_data: bytes,
-                  answer_data: bytes | None = None, *, answer_state: str | None = None) -> dict[str, Any]:
+                  answer_data: bytes | None = None, *, answer_state: str | None = None,
+                  capture_limit: int = MAX_CAPTURE_BYTES, line_limit: int = MAX_LINE_BYTES) -> dict[str, Any]:
     """Boundedly parse in-memory captures and analyze their retained records."""
-    cli = parse_jsonl(cli_data, "cli")
-    rollout = parse_jsonl(rollout_data, "rollout")
+    cli = parse_jsonl(cli_data, "cli", capture_limit=capture_limit, line_limit=line_limit)
+    rollout = parse_jsonl(rollout_data, "rollout", capture_limit=capture_limit, line_limit=line_limit)
     process, process_issues = _decode_process(process_data)
     issues = [*cli["issues"], *rollout["issues"], *process_issues]
     explicit: dict[str, Any] | None = None
@@ -900,7 +905,8 @@ def capture_bytes(cli_data: bytes, rollout_data: bytes, process_data: bytes,
 
 
 def completion_evidence_bytes(cli_data: bytes, rollout_data: bytes,
-                              answer_data: bytes | None) -> dict[str, Any]:
+                              answer_data: bytes | None, *, capture_limit: int = MAX_CAPTURE_BYTES,
+                              line_limit: int = MAX_LINE_BYTES) -> dict[str, Any]:
     """Compare a narrow Codex 0.151.0 completion recipe, not qualify finality.
 
     This deliberately accepts less than all valid Codex output: one recorded
@@ -944,8 +950,8 @@ def completion_evidence_bytes(cli_data: bytes, rollout_data: bytes,
         return reject("answer_invalid_utf8")
     if not text.strip():
         return reject("answer_empty_text")
-    cli = parse_jsonl(cli_data, "cli")
-    rollout = parse_jsonl(rollout_data, "rollout")
+    cli = parse_jsonl(cli_data, "cli", capture_limit=capture_limit, line_limit=line_limit)
+    rollout = parse_jsonl(rollout_data, "rollout", capture_limit=capture_limit, line_limit=line_limit)
     if not cli["complete"] or not rollout["complete"]:
         return reject("incomplete_or_malformed_stream")
     cr, rr = cli["records"], rollout["records"]

@@ -129,8 +129,8 @@ def _read_explicit_source(path: Path, limit: int) -> bytes:
         raise CollectorInputError(str(exc)) from exc
 
 
-def _cli_identity(events: bytes) -> tuple[str | None, str | None]:
-    parsed = capture_adapter.parse_jsonl(events, "collector_cli_identity")
+def _cli_identity(events: bytes, **parse_limits) -> tuple[str | None, str | None]:
+    parsed = capture_adapter.parse_jsonl(events, "collector_cli_identity", **parse_limits)
     if not parsed["complete"]:
         return None, "malformed_cli_jsonl"
     starts = [
@@ -148,8 +148,8 @@ def _cli_identity(events: bytes) -> tuple[str | None, str | None]:
     return identities[0], None
 
 
-def _rollout_identity(data: bytes) -> tuple[str | None, str, list[str]]:
-    parsed = capture_adapter.parse_jsonl(data, "collector_rollout_candidate")
+def _rollout_identity(data: bytes, **parse_limits) -> tuple[str | None, str, list[str]]:
+    parsed = capture_adapter.parse_jsonl(data, "collector_rollout_candidate", **parse_limits)
     issue_codes = [item["code"] for item in parsed["issues"]]
     metadata = [
         record for record in parsed["records"]
@@ -172,22 +172,24 @@ def _rollout_identity(data: bytes) -> tuple[str | None, str, list[str]]:
 
 
 def _collect_rollout(
-    attempt: Path, events: bytes, candidates: list[Path], process_started: bool,
+    attempt: Path, events: bytes, candidates: list[Path], process_started: bool, *,
+    capture_limit: int = capture_adapter.MAX_CAPTURE_BYTES, line_limit: int = capture_adapter.MAX_LINE_BYTES,
 ) -> dict[str, Any]:
-    cli_id, cli_problem = _cli_identity(events)
+    parse_limits = {"capture_limit": capture_limit, "line_limit": line_limit}
+    cli_id, cli_problem = _cli_identity(events, **parse_limits)
     observations: list[dict[str, Any]] = []
     matching: list[tuple[int, bytes]] = []
     if process_started:
         for index, source in enumerate(candidates, 1):
             observation: dict[str, Any] = {"index": index, "source": str(source)}
             try:
-                data = _read_explicit_source(source, capture_adapter.MAX_CAPTURE_BYTES)
+                data = _read_explicit_source(source, capture_limit)
             except CollectorInputError as exc:
                 observation.update({"status": "input_error", "error": str(exc)})
             else:
                 retained = attempt / "rollout-candidates" / f"{index:03}.jsonl"
                 legacy._write_new(retained, data)
-                identity, status, issue_codes = _rollout_identity(data)
+                identity, status, issue_codes = _rollout_identity(data, **parse_limits)
                 observation.update({
                     "status": status,
                     "thread_id": identity,
@@ -271,7 +273,9 @@ def _execution(process: dict[str, Any]) -> str:
     return "failed"
 
 
-def _request_receipt(command, prompt, environment, work, timeout, candidates, answer):
+def _request_receipt(command, prompt, environment, work, timeout, candidates, answer, *,
+                     stream_limit=MAX_STREAM_BYTES, capture_limit=capture_adapter.MAX_CAPTURE_BYTES,
+                     line_limit=capture_adapter.MAX_LINE_BYTES):
     """Describe a validated request without process or publication side effects."""
     return {
         "schema": ATTEMPT_SCHEMA,
@@ -282,10 +286,10 @@ def _request_receipt(command, prompt, environment, work, timeout, candidates, an
         "cwd": str(work),
         "timeout_seconds": timeout,
         "limits": {
-            "stdout_bytes": MAX_STREAM_BYTES,
-            "stderr_bytes": MAX_STREAM_BYTES,
+            "stdout_bytes": stream_limit,
+            "stderr_bytes": stream_limit,
             "prompt_bytes": MAX_PROMPT_BYTES,
-            "rollout_candidate_bytes_each": capture_adapter.MAX_CAPTURE_BYTES,
+            "rollout_candidate_bytes_each": capture_limit,
             "answer_bytes": capture_adapter.MAX_ANSWER_BYTES,
             "rollout_candidate_count": MAX_ROLLOUT_CANDIDATES,
         },

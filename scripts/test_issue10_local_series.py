@@ -359,7 +359,7 @@ class SeriesTests(SeriesFixture):
         manifest = self.prepare()
         self.ready()
         def overflow(attempt_dir, argv, **kwargs):
-            command = [sys.executable, "-c", "import sys;sys.stdout.buffer.write(b'x'*1_010_000)"]
+            command = [sys.executable, "-c", "import sys;sys.stdout.buffer.write(b'x'*(8*1024*1024+1))"]
             return pilot._collect_local_attempt(attempt_dir, command, **kwargs)
         approval = self.approve(manifest)
         result = self.run_slot(1, approval, overflow)
