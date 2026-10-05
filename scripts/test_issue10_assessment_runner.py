@@ -83,7 +83,8 @@ class RunnerTests(unittest.TestCase):
                     'decision': 'advance-this-context-once', 'authorization_note': 'Synthetic explicit advance; not a real permission'}
         write(self.approval, bridge.encode(approval))
 
-    def model_process(self, *, tools=False, answer=None, overflow=False, timed_out=False, mismatch=False):
+    def model_process(self, *, tools=False, answer=None, overflow=False, timed_out=False, mismatch=False,
+                      user_records=False, native_overflow=None):
         if answer is None:
             answer = b'{"synthetic":"not an actual grade"}\r\nUnicode \xce\xb1 \xf0\x9f\x98\x80\r\n'
         def fake(argv, prompt, environment, cwd, timeout):
@@ -98,8 +99,28 @@ class RunnerTests(unittest.TestCase):
                 cli = [r for r in cli if not isinstance(r.get('item'), dict) or r['item'].get('type') != 'command_execution']
                 rollout = [r for r in rollout if not isinstance(r.get('payload'), dict) or r['payload'].get('type') != 'function_call']
             rollout[1]['payload'].update(model='wrong' if mismatch else 'gpt-5.6-sol', effort='high')
+            if user_records:
+                body = prompt.decode('utf-8')
+                rollout[3:3] = [
+                    {'type': 'response_item', 'payload': {'type': 'message', 'id': 'synthetic-user',
+                     'role': 'user', 'content': [{'type': 'input_text', 'text': body}],
+                     'internal_chat_message_metadata_passthrough': None}},
+                    {'type': 'event_msg', 'payload': {'type': 'item_completed',
+                     'thread_id': 'synthetic-thread', 'turn_id': 'synthetic-turn',
+                     'started_at_ms': None, 'completed_at_ms': 1,
+                     'item': {'type': 'UserMessage', 'id': 'synthetic-user',
+                              'content': [{'type': 'text', 'text': body, 'text_elements': []}]}}}]
+            if native_overflow is not None:
+                count, size = (3, 3 * 1024 * 1024) if native_overflow == 'file' else (1, 4 * 1024 * 1024 + 1)
+                rollout.extend({'type': 'response_item', 'payload': {'type': 'message', 'role': 'user',
+                                'content': [{'type': 'input_text', 'text': 'x' * size}]}} for _ in range(count))
             old, new = json.dumps(ANSWER)[1:-1].encode(), json.dumps(answer.decode())[1:-1].encode()
-            cli_bytes, rollout_bytes = jsonl(cli).replace(old, new), jsonl(rollout).replace(old, new)
+            cli_bytes = jsonl(cli).replace(old, new)
+            # Match the pinned producer's compact UTF-8 JSONL, retaining full strings.
+            replaced = jsonl(rollout).replace(old, new)
+            rollout_bytes = b''.join((json.dumps(json.loads(line), ensure_ascii=False,
+                                                separators=(',', ':')) + '\n').encode('utf-8')
+                                     for line in replaced.splitlines())
             write(Path(environment['CODEX_HOME']) / 'sessions/rollout.jsonl', rollout_bytes)
             write(Path(argv[argv.index('--output-last-message') + 1]), answer)
             self.expected_events, self.expected_rollout, self.expected_answer = cli_bytes, rollout_bytes, answer
@@ -155,6 +176,121 @@ class RunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'fixture inventory/line mismatch'):
             runner._packet_pins(invalid_root, self.config)
         self.assertFalse(self.root.exists())
+
+    def use_case_packet(self, case_id):
+        supplied, owner = bridge.build_packet(selected_case_bundle(case_id, repetitions=3), INSTRUCTIONS.read_bytes())
+        self.packet = self.private / f'{case_id}-packet'
+        bridge.publish(self.packet, {'assessor/input.json': bridge.encode(supplied),
+                                     'owner/inventory.json': bridge.encode(owner)})
+        self.assertLessEqual((self.packet / 'assessor/input.json').stat().st_size, 1048576)
+
+    def assert_large_packet_captured(self, case_id):
+        self.use_case_packet(case_id)
+        self.ready()
+        result = self.run_model(user_records=True)
+        self.assertEqual(result['status'], 'captured-unqualified', result['blockers'])
+        self.assertEqual(result['blockers'], [])
+        self.assertEqual(result['finality'], 'unknown')
+        self.assertEqual(result['quality'], 'unknown')
+        self.assertFalse(result['retry_allowed'])
+        self.assertTrue(result['usage']['complete'])
+        self.assertEqual(result['recorded_call_entries'], 0)
+        native = self.expected_rollout
+        self.assertGreater(max(map(len, native.splitlines())), 262144)
+        if case_id == 'M02':
+            self.assertGreater(len(native), 1048576)
+        self.assertFalse(runner.capture.parse_jsonl(native, 'unchanged-defaults')['complete'])
+        retained = self.root / 'context/attempt/rollout.jsonl'
+        self.assertEqual(retained.read_bytes(), native)
+        self.assertEqual((self.root / 'context/attempt/answer.txt').read_bytes(), self.expected_answer)
+        completion = runner.obj(self.root / 'context/completion.json')
+        self.assertEqual(completion['status'], 'matched')
+        self.assertEqual(completion['finality'], 'unknown')
+        self.assertFalse(completion['live_qualified'])
+        request = runner.obj(self.root / 'context/attempt/attempt.json')
+        self.assertEqual(request['limits']['rollout_candidate_bytes_each'], 8388608)
+        self.assertEqual(request['limits']['jsonl_record_bytes'], 4194304)
+        self.assertEqual(request['limits']['stdout_bytes'], 1000000)
+        self.assertEqual(request['limits']['stderr_bytes'], 1000000)
+        self.assertEqual(request['limits']['prompt_bytes'], 1048576)
+        rows = runner.capture.parse_jsonl(native, 'test-only', capture_limit=8388608, line_limit=4194304)['records']
+        copies = []
+        for row in rows:
+            p = row['payload']
+            if row['type'] == 'response_item' and p.get('role') == 'user':
+                copies.extend(c['text'].encode('utf-8') for c in p['content'] if c['type'] == 'input_text')
+            elif row['type'] == 'event_msg' and p.get('type') == 'item_completed' and p['item']['type'] == 'UserMessage':
+                copies.extend(c['text'].encode('utf-8') for c in p['item']['content'] if c['type'] == 'text')
+        self.assertEqual(copies, [(self.packet / 'assessor/input.json').read_bytes()] * 2)
+
+    def test_m02_full_packet_native_copies_retained_with_frozen_capacity(self):
+        self.assert_large_packet_captured('M02')
+
+    def test_m04_full_packet_native_copies_retained_with_frozen_capacity(self):
+        self.assert_large_packet_captured('M04')
+
+    def test_native_capacity_contract_is_prospective_and_digest_bound(self):
+        proper = self.prepare()
+        self.assertEqual(proper['schema'], 'sshai-benchmark/issue10-assessor-manifest-2')
+        self.assertEqual(proper['native_capture_capacity'], {'capture_limit': 8388608, 'line_limit': 4194304})
+        for value in (None, {'capture_limit': 1048576, 'line_limit': 262144},
+                      {'capture_limit': 8388609, 'line_limit': 4194304},
+                      {'capture_limit': 8388608, 'line_limit': 4194305},
+                      {'capture_limit': 8388608.0, 'line_limit': 4194304},
+                      {'capture_limit': 8388608, 'line_limit': True},
+                      {'capture_limit': 8388608, 'line_limit': 4194304, 'waiver': True}):
+            with self.subTest(capacity=value):
+                changed = copy.deepcopy(proper)
+                if value is None:
+                    changed.pop('native_capture_capacity')
+                else:
+                    changed['native_capture_capacity'] = value
+                changed['digest'] = runner.sha_object(changed)
+                write(self.root / 'manifest.json', bridge.encode(changed))
+                with self.assertRaises(ValueError):
+                    runner.load(self.root)
+        old = copy.deepcopy(proper)
+        old['schema'] = 'sshai-benchmark/issue10-assessor-manifest-1'
+        old.pop('native_capture_capacity')
+        old['digest'] = runner.sha_object(old)
+        write(self.root / 'manifest.json', bridge.encode(old))
+        with self.assertRaisesRegex(ValueError, 'manifest identity/digest'):
+            runner.load(self.root)
+        tampered = copy.deepcopy(proper)
+        tampered['native_capture_capacity']['capture_limit'] += 1
+        write(self.root / 'manifest.json', bridge.encode(tampered))
+        with self.assertRaisesRegex(ValueError, 'manifest identity/digest'):
+            runner.load(self.root)
+        write(self.root / 'manifest.json', bridge.encode(proper))
+        self.assertEqual(runner.load(self.root)['native_capture_capacity'], proper['native_capture_capacity'])
+        self.assertFalse((self.root / 'context').exists())
+
+    def assert_native_overflow_blocked(self, kind):
+        self.ready()
+        result = self.run_model(native_overflow=kind)
+        self.assertEqual(result['status'], 'blocked')
+        self.assertIn('rollout_capture_lost', result['blockers'])
+        self.assertEqual(result['finality'], 'unknown')
+        self.assertEqual(result['quality'], 'unknown')
+        self.assertFalse(result['retry_allowed'])
+        delivery = runner.obj(self.root / 'context/attempt/delivery.json')
+        candidate = delivery['rollout']['candidates'][0]
+        if kind == 'file':
+            self.assertGreater(len(self.expected_rollout), 8388608)
+            self.assertLess(max(map(len, self.expected_rollout.splitlines())), 4194304)
+            self.assertEqual(candidate['status'], 'input_error')
+        else:
+            self.assertLess(len(self.expected_rollout), 8388608)
+            self.assertGreater(max(map(len, self.expected_rollout.splitlines())), 4194304)
+            self.assertEqual(candidate['status'], 'malformed')
+            self.assertIn('jsonl_record_too_large', candidate['parser_issue_codes'])
+            self.assertEqual((self.root / 'context/attempt' / candidate['retained']).read_bytes(), self.expected_rollout)
+
+    def test_native_file_over_8MiB_still_blocks(self):
+        self.assert_native_overflow_blocked('file')
+
+    def test_native_record_over_4MiB_still_blocks(self):
+        self.assert_native_overflow_blocked('line')
 
     def test_preflight_no_model_one_shot(self):
         self.prepare()
@@ -256,7 +392,7 @@ class RunnerTests(unittest.TestCase):
     def test_unknown_rollout_activity_blocks_without_malicious_label(self):
         self.assert_unknown_activity_blocked('rollout')
 
-    def assert_cli_notice_blocked(self, message):
+    def assert_cli_notice_blocked(self, message, *, user_records=False):
         self.ready()
         original_streams = completion_streams
         def notice_streams():
@@ -266,7 +402,7 @@ class RunnerTests(unittest.TestCase):
                 'id': 'synthetic-notice', 'type': 'error', 'message': message}})
             return cli, rollout
         with patch(__name__ + '.completion_streams', side_effect=notice_streams):
-            result = self.run_model()
+            result = self.run_model(user_records=user_records)
         self.assertEqual(result['status'], 'blocked')
         self.assertIn('cli_error_or_warning_item', result['blockers'])
         self.assertNotIn('recorded_tool_activity_forbidden', result['blockers'])
@@ -289,6 +425,24 @@ class RunnerTests(unittest.TestCase):
     def test_generic_warning_error_item_blocks_as_qualification_gap(self):
         self.assert_cli_notice_blocked('warning: synthetic native qualification gap')
 
+    def test_large_native_capture_does_not_waive_tool_activity(self):
+        self.use_case_packet('M02')
+        self.ready()
+        result = self.run_model(user_records=True, tools=True)
+        self.assertGreater(len(self.expected_rollout), 1048576)
+        self.assertEqual(result['status'], 'blocked')
+        self.assertIn('recorded_tool_activity_forbidden', result['blockers'])
+        self.assertGreater(result['recorded_call_entries'], 0)
+        self.assertEqual(result['quality'], 'unknown')
+        self.assertEqual(result['finality'], 'unknown')
+        self.assertEqual((self.root / 'context/attempt/rollout.jsonl').read_bytes(), self.expected_rollout)
+
+    def test_large_native_capture_does_not_waive_model_reroute_notice(self):
+        self.use_case_packet('M02')
+        self.assert_cli_notice_blocked('model rerouted: gpt-5.6-sol -> synthetic-other (SyntheticReason)',
+                                      user_records=True)
+        self.assertGreater(len(self.expected_rollout), 1048576)
+
     def test_model_context_mismatch_is_not_substitution(self):
         self.ready()
         self.assertIn('observed_model_context_missing_or_mismatched', self.run_model(mismatch=True)['blockers'])
@@ -301,6 +455,29 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(process['capture_overflow']); self.assertTrue(process['timed_out'])
         self.assertTrue((self.root / 'context/reservation.json').is_file())
         self.assertEqual((self.root / 'context/attempt/answer.txt').read_bytes(), self.expected_answer)
+
+    def test_response_64KiB_boundary_remains_ungraded(self):
+        self.ready()
+        result = self.run_model(answer=b'x' * 65536)
+        self.assertEqual(result['status'], 'captured-unqualified')
+        self.assertEqual(result['quality'], 'unknown')
+        self.assertEqual(result['finality'], 'unknown')
+        self.assertEqual((self.root / 'context/attempt/answer.txt').stat().st_size, 65536)
+        self.assertEqual(self.manifest['response_bytes'], 65536)
+
+    def test_native_capacity_does_not_raise_packet_config_or_publication_caps(self):
+        raw = b'x' * 1048577
+        with self.assertRaisesRegex(ValueError, 'private runner output'):
+            runner.write(self.private / 'oversized-output.json', raw)
+        self.assertFalse((self.private / 'oversized-output.json').exists())
+        for path in (self.config_path, self.packet / 'assessor/input.json'):
+            with self.subTest(path=path.name):
+                saved = path.read_bytes()
+                write(path, raw)
+                with self.assertRaisesRegex(ValueError, 'input file'):
+                    self.prepare()
+                self.assertFalse(self.root.exists())
+                write(path, saved)
 
     def test_oversized_response_retained_but_never_eligible(self):
         self.ready()

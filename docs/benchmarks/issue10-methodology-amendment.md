@@ -433,10 +433,25 @@ their planned missing outcomes remain in the bridge owner inventory.
   auth repair or paid fallback is provided. Any recorded tool activity blocks use.
 
 Input remains within the collector's 1 MiB prompt cap; assessment-response eligibility
-is limited to 64 KiB. Raw streams, rollout and final bytes retain the existing bounded
-collector evidence, including oversized responses as invalid rather than truncated
-answers. Outputs remain private. Finality and quality stay unknown: the caller must
-separately qualify delivered final JSON and invoke bridge validation. Usage is retained
+is limited to 64 KiB. New `sshai-benchmark/issue10-assessor-manifest-2` roots freeze
+`native_capture_capacity` with `capture_limit: 8388608` (8 MiB per native file) and
+`line_limit: 4194304` (4 MiB per JSONL record). The pinned producer persists the complete
+input in both a user response item and a user-message lifecycle record. A valid large
+packet can therefore exceed the former 1 MiB native-file or 256 KiB record defaults;
+neither copy is dropped, sampled or truncated to fit those defaults.
+
+The declared capacities apply consistently to collection, native-file reading,
+capture/completion comparison and model-context parsing. Global capture defaults,
+CLI process-stream bounds, packet/publication limits and response eligibility stay
+unchanged. Oversize evidence still blocks use. Manifest-1 roots refuse in this runner;
+there is no implicit upgrade or retry of an earlier context. Configuration and approval
+schemas remain version 1, with approval bound to the new manifest digest.
+
+Raw final bytes retain their existing bounded capture, including oversized responses
+as invalid rather than truncated answers. Outputs remain private. Finality and quality
+stay unknown: the caller must separately qualify delivered final JSON and invoke bridge
+validation. Synthetic large-prompt checks establish byte retention and parser behavior,
+not successful large-case live assessment or finality. Usage is retained
 separately from diagnostic usage, with unavailable measurements never treated as zero.
 Named canaries and zero recorded calls do not establish complete OS observation or
 absence of managed/cloud configuration. The frozen budget is caller-declared provenance,

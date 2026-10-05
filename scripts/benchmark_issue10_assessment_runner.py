@@ -36,9 +36,13 @@ managed/cloud configuration. Any recorded tool activity/unsupported capture bloc
 assessment use. The runner never qualifies finality, validates grades or imports
 results: main separately qualifies the retained final JSON and uses the bridge.
 
-Input cap: collector 1 MiB; assessment-response eligibility: bridge 64 KiB. Raw
-collector streams/answers retain the collector's existing bounded caps, including
-oversized answers as invalid evidence, never silently truncated into valid JSON.
+Input cap: collector 1 MiB; assessment-response eligibility: bridge 64 KiB.
+New manifest-2 roots explicitly freeze native_capture_capacity as 8 MiB per native
+rollout and 4 MiB per JSONL record, including both complete persisted user-prompt
+copies. Manifest-1 roots refuse, never receive an implicit capacity upgrade.
+Global collector/capture defaults and CLI process-stream bounds stay unchanged.
+Raw answers retain their existing bounded cap, including oversized answers as
+invalid evidence, never silently truncated into valid JSON.
 All evidence is private, append-only (0700 directories, 0600 regular files), retained
 without automatic deletion. stdout is only a bounded summary; use --help for flags.
 """
@@ -65,8 +69,10 @@ import benchmark_issue10_v3_collector as collector
 import benchmark_issue10_v3_review as review
 
 CONFIG_SCHEMA = 'sshai-benchmark/issue10-assessor-config-1'
-MANIFEST_SCHEMA = 'sshai-benchmark/issue10-assessor-manifest-1'
+MANIFEST_SCHEMA = 'sshai-benchmark/issue10-assessor-manifest-2'
 APPROVAL_SCHEMA = 'sshai-benchmark/issue10-assessor-approval-1'
+NATIVE_CAPTURE_BYTES = 8 * 1024 * 1024
+NATIVE_RECORD_BYTES = 4 * 1024 * 1024
 CONTROLS = [item.replace('features.shell_tool=true', 'features.shell_tool=false')
             .replace('features.unified_exec=true', 'features.unified_exec=false')
             for item in pilot.REQUIRED_CODEX_OVERRIDES]
@@ -90,6 +96,15 @@ def obj(path: Path) -> dict:
 
 def sha_object(value: dict) -> str:
     return bridge.digest(bridge.encode({key: val for key, val in value.items() if key != 'digest'}))
+
+
+def _native_capacity(manifest: dict) -> dict:
+    capacity = bridge.exact(manifest.get('native_capture_capacity'),
+                            {'capture_limit', 'line_limit'}, 'native capture capacity')
+    if (type(capacity['capture_limit']) is not int or capacity['capture_limit'] != NATIVE_CAPTURE_BYTES
+            or type(capacity['line_limit']) is not int or capacity['line_limit'] != NATIVE_RECORD_BYTES):
+        raise ValueError('native capture capacity must freeze 8 MiB files / 4 MiB records')
+    return capacity
 
 
 def auth_identity(path: Path) -> dict:
@@ -229,6 +244,7 @@ def prepare(root: Path, packet_root: Path, config_path: Path, catalog_path: Path
                 'native_path': str(native), 'auth_source': auth, 'argv': argv, 'environment': env,
                 'cwd': str(root / 'runtime/scratch'), 'permission_overrides': overrides, 'protected_paths': protected,
                 'timeout_seconds': 600, 'response_bytes': bridge.MAX_RESPONSE_BYTES,
+                'native_capture_capacity': {'capture_limit': NATIVE_CAPTURE_BYTES, 'line_limit': NATIVE_RECORD_BYTES},
                 'tool_surface': {'expected_tools': [], 'schema_sha256': None,
                                  'basis': 'pinned no-tools configuration; advertised schemas not independently observed'},
                 'budget_basis': 'caller-declared serial ledger; global allocation not verified by runner',
@@ -246,6 +262,7 @@ def load(root: Path) -> dict:
     manifest = obj(root / 'manifest.json')
     if manifest.get('schema') != MANIFEST_SCHEMA or manifest.get('root') != str(root) or manifest.get('digest') != sha_object(manifest):
         raise ValueError('manifest identity/digest mismatch')
+    _native_capacity(manifest)
     validate_config(manifest['config'])
     for name, expected in manifest['sources'].items():
         if legacy._file_digest(sandbox._physical(Path(name))) != expected:
@@ -379,6 +396,7 @@ def preflight(root: Path) -> dict:
 
 def run(root: Path, approval_path: Path, *, allow_model_run: bool = False) -> dict:
     manifest = load(root)
+    parse_limits = _native_capacity(manifest)
     ready = obj(Path(root) / 'preflight/result.json')
     if (ready.get('manifest_digest') != manifest['digest'] or ready.get('passed') is not True
             or ready.get('digest') != sha_object(ready)
@@ -413,17 +431,20 @@ def run(root: Path, approval_path: Path, *, allow_model_run: bool = False) -> di
             prompt=bridge.read_file(Path(root) / 'packet/input.json'), env=manifest['environment'], cwd=Path(manifest['cwd']),
             timeout_seconds=600, codex_home=Path(root) / 'runtime/codex-home', answer_path=context / 'last-message.txt',
             association={'manifest_digest': manifest['digest'], 'context_id': budget['context_id'],
-                         'budget_ledger_sha256': budget['ledger_sha256'], 'approval_sha256': bridge.digest(approval_raw)})
+                         'budget_ledger_sha256': budget['ledger_sha256'], 'approval_sha256': bridge.digest(approval_raw)},
+            **parse_limits)
         evidence = attempt['attempt_dir']
-        events, rollout, process = [bridge.read_file(evidence / name) for name in ('events.jsonl', 'rollout.jsonl', 'process.json')]
+        events, process = [bridge.read_file(evidence / name) for name in ('events.jsonl', 'process.json')]
+        rollout = collector._read_explicit_source(evidence / 'rollout.jsonl', parse_limits['capture_limit'])
         answer = bridge.read_file(evidence / 'answer.txt') if (evidence / 'answer.txt').exists() else None
-        report = capture.capture_bytes(events, rollout, process, answer, answer_state='captured' if answer is not None else 'lost')
+        report = capture.capture_bytes(events, rollout, process, answer,
+                                       answer_state='captured' if answer is not None else 'lost', **parse_limits)
         write(context / 'capture.json', bridge.encode(report))
-        write(context / 'completion.json', bridge.encode(capture.completion_evidence_bytes(events, rollout, answer)))
+        write(context / 'completion.json', bridge.encode(capture.completion_evidence_bytes(events, rollout, answer, **parse_limits)))
         blockers = result['blockers']
         # Native ModelRerouted is an ItemCompleted/ErrorItem, not a tool or
         # necessarily a failed terminal. Every such notice is a qualification gap.
-        notices = capture.parse_jsonl(events, 'assessor_cli_notice')['records']
+        notices = capture.parse_jsonl(events, 'assessor_cli_notice', **parse_limits)['records']
         if any(isinstance(r, dict) and r.get('type') in ('item.started', 'item.completed')
                and isinstance(r.get('item'), dict) and r['item'].get('type') in ('error', 'warning') for r in notices):
             blockers.append('cli_error_or_warning_item')
@@ -440,7 +461,7 @@ def run(root: Path, approval_path: Path, *, allow_model_run: bool = False) -> di
             blockers.append('unexpected_rollout_population')
         if answer is None or len(answer) > bridge.MAX_RESPONSE_BYTES:
             blockers.append('response_missing_or_over_64KiB')
-        contexts = [r.get('payload') for r in capture.parse_jsonl(rollout, 'assessor_model')['records']
+        contexts = [r.get('payload') for r in capture.parse_jsonl(rollout, 'assessor_model', **parse_limits)['records']
                     if isinstance(r, dict) and r.get('type') == 'turn_context']
         if not contexts or any(not isinstance(c, dict) or c.get('model') != 'gpt-5.6-sol' or c.get('effort') != 'high' for c in contexts):
             blockers.append('observed_model_context_missing_or_mismatched')
