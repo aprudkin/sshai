@@ -35,6 +35,7 @@ SOURCE_PATHS = pilot.SOURCE_PATHS | {
     "scripts/benchmark_issue10_v3_cases.py", "docs/benchmarks/issue10-protocol.md",
     "docs/benchmarks/issue10-local-series.md", "docs/benchmarks/issue10-local-pilot-results.md",
     "scripts/benchmark_issue10_local_series_recovery.py",
+    "scripts/benchmark_issue10_intercepted_patch.py", "scripts/benchmark_issue10_patch_continuation.py",
 }
 _BINARY_PROBE: Callable[..., dict[str, Any]] | None = None
 _ACCESS_QUALIFIER: Callable[..., dict[str, Any]] | None = None
@@ -74,7 +75,7 @@ def _material(root: Path, slots: list[dict[str, Any]], selected: dict[str, dict[
 def prepare(root: Path, fixture_bundle: Path, codex_path: Path, sshai_path: Path,
             config_path: Path, model_catalog_path: Path, tool_overrides_path: Path,
             auth_path: Path, assessment_instructions_path: Path,
-            assessment_rubric_path: Path, *, _recovery_binding=None, _supplementary=None) -> dict[str, Any]:
+            assessment_rubric_path: Path, *, _recovery_binding=None, _patch_binding=None, _supplementary=None) -> dict[str, Any]:
     root = legacy._physical(Path(root), must_exist=False)
     bundle = legacy._physical(Path(fixture_bundle))
     codex = pilot._private_regular(codex_path, "Codex", executable=True)
@@ -133,6 +134,10 @@ def prepare(root: Path, fixture_bundle: Path, codex_path: Path, sshai_path: Path
     }
     if _recovery_binding is not None:
         manifest["capture_recovery"] = _recovery_binding
+    if _patch_binding is not None:
+        import benchmark_issue10_intercepted_patch as patch
+        manifest["patch_continuation"] = _patch_binding
+        manifest["intercepted_patch_profile"] = dict(patch.PROFILE)
     manifest["digest"] = pilot._digest_object(manifest)
     if len(pilot._pretty(manifest)) > pilot.capture.MAX_CAPTURE_BYTES:
         raise pilot.PilotInputError("series manifest exceeds its bounded input contract")
@@ -143,6 +148,13 @@ def prepare(root: Path, fixture_bundle: Path, codex_path: Path, sshai_path: Path
                               pilot._pretty(recovery.owner(_recovery_binding, root)))
         except FileExistsError as exc:
             raise pilot.PilotInputError("original series capture recovery is already claimed") from exc
+    if _patch_binding is not None:
+        import benchmark_issue10_patch_continuation as continuation
+        try:
+            legacy._write_new(Path(_patch_binding["predecessor_root"]) / "patch-continuation-owner.json",
+                              pilot._pretty(continuation.owner(_patch_binding, root)))
+        except FileExistsError as exc:
+            raise pilot.PilotInputError("measured patch continuation is already claimed") from exc
     legacy._new_dir(root)
     legacy._mkdir_private(root / "slots")
     legacy._mkdir_private(root / "prepared")
@@ -164,6 +176,9 @@ def prepare(root: Path, fixture_bundle: Path, codex_path: Path, sshai_path: Path
                                 ("completion", "completion-evidence.json"), ("audit", "tool-audit.json")):
             data = _supplementary[label] if label == "native" else pilot._pretty(_supplementary[label])
             legacy._write_new(root / "recovery/slot-003" / filename, data, mode=0o400)
+    if _patch_binding is not None:
+        for label, filename in (("report", "capture-report.json"), ("completion", "completion-evidence.json"), ("audit", "tool-audit.json")):
+            legacy._write_new(root / "continuation/slot-004" / filename, pilot._pretty(_supplementary[label]), mode=0o400)
     return manifest
 
 
@@ -182,13 +197,29 @@ def prepare_capture_recovery(root: Path, predecessor: Path, source_snapshot: Pat
                    predecessor / "prepared/assessment/rubric.md", _recovery_binding=binding, _supplementary=supplementary)
 
 
+def prepare_patch_continuation(root: Path, predecessor: Path, source_snapshot: Path, *,
+                               qualification: Path, reason: str, authorization_note: str) -> dict[str, Any]:
+    import benchmark_issue10_patch_continuation as continuation
+    root = legacy._physical(Path(root), must_exist=False)
+    predecessor = legacy._physical(Path(predecessor))
+    snapshot = legacy._physical(Path(source_snapshot))
+    owner = predecessor / "patch-continuation-owner.json"
+    if owner.exists() or owner.is_symlink():
+        raise pilot.PilotInputError("measured patch continuation is already claimed")
+    old, binding, supplementary = continuation.binding(root, predecessor, snapshot, qualification, reason, authorization_note)
+    return prepare(root, Path(old["fixture_bundle"]["path"]), Path(old["codex"]["path"]), Path(old["sshai"]["path"]),
+                   predecessor / "config.json", predecessor / "model-catalog.json", predecessor / "tool-overrides.json",
+                   Path(old["auth"]["path"]), predecessor / "prepared/assessment/instructions.md",
+                   predecessor / "prepared/assessment/rubric.md", _patch_binding=binding, _supplementary=supplementary)
+
+
 def _slots_inventory(root: Path) -> None:
     for path in legacy._physical(root / "slots").iterdir():
         if path.name not in {f"{number:03}" for number in range(1, 37)} or not legacy._physical(path).is_dir():
             raise pilot.PilotInputError("foreign or unsafe slot outside the fixed series allocation")
 
 
-def load_manifest(root: Path, *, _source_root: Path | None = None) -> dict[str, Any]:
+def load_manifest(root: Path, *, _source_root: Path | None = None, _patch_predecessor: bool = False) -> dict[str, Any]:
     root = legacy._physical(Path(root))
     manifest = pilot._json_file(root / "manifest.json", "series manifest")
     expected = {"schema": MANIFEST_SCHEMA, "phase": PHASE, "approval_schema": APPROVAL_SCHEMA,
@@ -199,14 +230,26 @@ def load_manifest(root: Path, *, _source_root: Path | None = None) -> dict[str, 
                 "no_retry_no_resume": True, "local_only": True, "experimental_savings_claim_eligible": False}
     source_root = pilot.REPO
     source_inventory = SOURCE_PATHS
+    if _patch_predecessor and _source_root is None:
+        raise pilot.PilotInputError("7b predecessor requires its explicit source snapshot")
     if _source_root is not None:
         import benchmark_issue10_local_series_recovery as recovery
         source_root = legacy._physical(Path(_source_root))
-        source_inventory = set(recovery.ORIGINAL_SOURCES)
-        expected.pop("capture_capacity")
-        if (manifest.get("sources") != recovery.ORIGINAL_SOURCES
-                or "capture_capacity" in manifest or "capture_recovery" in manifest):
-            raise pilot.PilotInputError("historical source exception is only the original 4d283d7 series")
+        if _patch_predecessor:
+            import benchmark_issue10_patch_continuation as continuation
+            source_inventory = set(continuation.PREDECESSOR_SOURCES)
+            if (manifest.get("sources") != continuation.PREDECESSOR_SOURCES
+                    or manifest.get("digest") != continuation.PREDECESSOR_DIGEST
+                    or "capture_recovery" not in manifest or "patch_continuation" in manifest):
+                raise pilot.PilotInputError("historical patch predecessor must be the exact 7b size-recovery root")
+        else:
+            source_inventory = set(recovery.ORIGINAL_SOURCES)
+            expected.pop("capture_capacity")
+            if (manifest.get("sources") != recovery.ORIGINAL_SOURCES
+                    or "capture_capacity" in manifest or "capture_recovery" in manifest):
+                raise pilot.PilotInputError("historical source exception is only the original 4d283d7 series")
+    if "intercepted_patch_profile" in manifest and "patch_continuation" not in manifest:
+        raise pilot.PilotInputError("intercepted patch profile requires the pinned prospective continuation")
     if any(manifest.get(key) != value for key, value in expected.items()) or manifest.get("digest") != pilot._digest_object(manifest):
         raise pilot.PilotInputError("series manifest policy, schedule or digest changed")
     sources = manifest.get("sources")
@@ -257,6 +300,9 @@ def load_manifest(root: Path, *, _source_root: Path | None = None) -> dict[str, 
     if "capture_recovery" in manifest:
         import benchmark_issue10_local_series_recovery as recovery
         recovery.validate(root, manifest)
+    if "patch_continuation" in manifest:
+        import benchmark_issue10_patch_continuation as continuation
+        continuation.validate(root, manifest)
     return manifest
 
 
@@ -351,8 +397,9 @@ def run_slot(root: Path, number: int, approval_path: Path, *, allow_model_run: b
     if type(number) is not int or not 1 <= number <= SESSION_COUNT:
         raise pilot.PilotInputError("series slot must be an integer from 1 through 36")
     slot = manifest["slots"][number - 1]
-    inherited = manifest.get("capture_recovery", {}).get("inherited_slots", [])
-    if number in inherited or (root / "capture-recovery-owner.json").exists() or (root / "capture-recovery-owner.json").is_symlink():
+    inherited = manifest.get("patch_continuation", manifest.get("capture_recovery", {})).get("inherited_slots", [])
+    if (number in inherited or any((root / name).exists() or (root / name).is_symlink()
+                                  for name in ("capture-recovery-owner.json", "patch-continuation-owner.json"))):
         raise pilot.PilotInputError("original slot launch authority was exclusively delegated; no inherited retry")
     for prior in range(1, number):
         if prior in inherited:
@@ -377,9 +424,14 @@ def summarize(root: Path) -> dict[str, Any]:
     rows = []
     for slot in manifest["slots"]:
         base = root / "slots" / f"{slot['slot']:03}"
-        inherited = slot["slot"] in manifest.get("capture_recovery", {}).get("inherited_slots", [])
+        lineage = manifest.get("patch_continuation", manifest.get("capture_recovery", {}))
+        inherited = slot["slot"] in lineage.get("inherited_slots", [])
         if inherited:
-            base = Path(manifest["capture_recovery"]["predecessor_root"]) / "slots" / f"{slot['slot']:03}"
+            predecessor = Path(lineage["predecessor_root"])
+            if "patch_continuation" in manifest and slot["slot"] < 4:
+                previous = pilot._json_file(predecessor / "manifest.json", "retained size-recovery manifest")
+                predecessor = Path(previous["capture_recovery"]["predecessor_root"])
+            base = predecessor / "slots" / f"{slot['slot']:03}"
         path = base / "result.json"
         if not path.exists() and not path.is_symlink():
             row = {"slot": slot["slot"], "case_id": slot["case_id"], "replicate": slot["replicate"], "arm": slot["arm"],
@@ -398,6 +450,9 @@ def summarize(root: Path) -> dict[str, Any]:
                 import benchmark_issue10_local_series_recovery as recovery
                 row["supplementary_capture"] = {"status": "size-only supplementary evidence; original flags unchanged",
                     "acquisition_limit": recovery.ACQUISITION_LIMIT, "finality": "unknown", "quality": "unknown"}
+            if slot["slot"] == 4 and "patch_continuation" in manifest:
+                row["supplementary_patch_audit"] = {"status": "prospective lifecycle qualification; original flags unchanged",
+                    "finality": "unknown", "semantic_routing": "unknown", "quality": "unknown"}
         rows.append(row)
     readiness = root / "readiness/result.json"
     status = "not-run"
@@ -425,6 +480,12 @@ def _main(argv: list[str] | None = None) -> int:
     recover.add_argument("--source-snapshot", type=Path, required=True)
     recover.add_argument("--reason", required=True)
     recover.add_argument("--authorization-note", required=True)
+    patch_cmd = commands.add_parser("prepare-patch-continuation", help="only pinned 7b prefix 1..4; original slots 5..36, no retry")
+    patch_cmd.add_argument("root", type=Path)
+    for name in ("predecessor", "source-snapshot", "qualification"):
+        patch_cmd.add_argument("--" + name, type=Path, required=True)
+    patch_cmd.add_argument("--reason", required=True)
+    patch_cmd.add_argument("--authorization-note", required=True)
     commands.add_parser("preflight", help="one-shot no-model access qualification").add_argument("root", type=Path)
     run = commands.add_parser("run-slot", help="attempt the next approved original slot once")
     run.add_argument("root", type=Path)
@@ -444,6 +505,12 @@ def _main(argv: list[str] | None = None) -> int:
                     reason=args.reason, authorization_note=args.authorization_note)
         output = {"schema": MANIFEST_SCHEMA, "phase": PHASE, "manifest_digest": manifest["digest"], "scheduled_sessions": 36,
                   "inherited_slots": [1, 2, 3], "executable_slots": list(range(4, 37)), "model_launches": 0,
+                  "approval_required": True, "experimental_savings_claim_eligible": False}
+    elif args.command == "prepare-patch-continuation":
+        manifest = prepare_patch_continuation(args.root, args.predecessor, args.source_snapshot,
+                    qualification=args.qualification, reason=args.reason, authorization_note=args.authorization_note)
+        output = {"schema": MANIFEST_SCHEMA, "phase": PHASE, "manifest_digest": manifest["digest"], "scheduled_sessions": 36,
+                  "inherited_slots": [1, 2, 3, 4], "executable_slots": list(range(5, 37)), "model_launches": 0,
                   "approval_required": True, "experimental_savings_claim_eligible": False}
     elif args.command == "preflight":
         output = preflight(args.root)

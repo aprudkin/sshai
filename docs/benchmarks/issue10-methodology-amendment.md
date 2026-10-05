@@ -155,6 +155,10 @@ provides `packet` and `validate` commands for a single-task, branch-hidden packe
 an explicitly supplied assessment response. Its private owner inventory retains all
 planned slots and exclusion reasons. Finality qualification is caller-declared provenance,
 not established by this bridge; unknown-finality bytes are not exported as answers.
+A packet may contain up to 512 original fixture files, independently of the 32-entry
+response-reference and response-row limits. The 1 MiB input/output-file bound and
+64 KiB assessment-response bound still apply; preserving original paths and line
+coordinates does not authorize sampling a large task or splitting its planned batch.
 Validation retains malformed responses and independently valid rows, checks supplied
 citation coordinates separately, and does not verify semantic correctness, assign grades,
 launch an assessor, import pilot results or promote experimental eligibility. Use its
@@ -193,6 +197,12 @@ such as unqualified usage continuity across compaction. An accepted record signa
 is not proof of compliant shell behavior.
 Synthetic tests exercise controller behavior, not installed-binary readiness or live
 capture qualification. Use the command's `--help` for its argument inventory.
+
+The measured-series [intercepted scratch-patch profile](issue10-local-series.md#intercepted-scratch-patches-and-the-remaining-slot-continuation)
+is a separate prospective opt-in for the evidenced `exec_command` interception path.
+It does not change historical adapter/audit defaults or turn all file changes into
+allowed diagnostics. Its bounded record qualification and remaining-slot lineage
+are separate from final-answer qualification, model assessment and launch approval.
 
 ### Native runtime files and no-model regression
 

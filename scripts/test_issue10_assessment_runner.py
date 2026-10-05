@@ -11,7 +11,7 @@ from unittest.mock import patch
 import benchmark_issue10_assessment_runner as runner
 import benchmark_issue10_local_assessment as bridge
 import benchmark_issue10_local_pilot as pilot
-from test_issue10_local_assessment import bundle, INSTRUCTIONS
+from test_issue10_local_assessment import bundle, selected_case_bundle, INSTRUCTIONS
 from test_issue10_v3_completion import ANSWER, completion_streams
 from test_issue10_v3_capture import jsonl
 
@@ -132,6 +132,29 @@ class RunnerTests(unittest.TestCase):
         self.assertNotIn('owner', str(list((self.root / 'packet').iterdir())))
         self.assertIn('caller-declared', manifest['budget_basis'])
         self.assertEqual(manifest['auth_source']['contents'], 'unread and unpinned; native auth may refresh this source')
+
+    def test_m04_full_fixture_packet_pins_offline(self):
+        supplied, owner = bridge.build_packet(selected_case_bundle('M04', repetitions=3),
+                                               INSTRUCTIONS.read_bytes())
+        packet_root = self.private / 'm04-packet'
+        bridge.publish(packet_root, {'assessor/input.json': bridge.encode(supplied),
+                                     'owner/inventory.json': bridge.encode(owner)})
+        raw, pins = runner._packet_pins(packet_root, self.config)
+        self.assertEqual(raw, bridge.encode(supplied))
+        self.assertEqual(len(supplied['packet']['fixtures']), 369)
+        self.assertEqual(pins['eligible_answer_count'], 6)
+        self.assertEqual(pins['source_sha256'], supplied['packet']['source_sha256'])
+        self.assertEqual(pins['input_sha256'], bridge.digest(raw))
+        changed = copy.deepcopy(supplied)
+        changed['packet']['fixtures'][-1]['line_count'] += 1
+        changed_owner = copy.deepcopy(owner)
+        changed_owner['assessment_input_sha256'] = bridge.digest(bridge.encode(changed))
+        invalid_root = self.private / 'm04-invalid-packet'
+        bridge.publish(invalid_root, {'assessor/input.json': bridge.encode(changed),
+                                      'owner/inventory.json': bridge.encode(changed_owner)})
+        with self.assertRaisesRegex(ValueError, 'fixture inventory/line mismatch'):
+            runner._packet_pins(invalid_root, self.config)
+        self.assertFalse(self.root.exists())
 
     def test_preflight_no_model_one_shot(self):
         self.prepare()

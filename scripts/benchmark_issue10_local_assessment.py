@@ -35,7 +35,8 @@ Expose ONLY assessor/ to an assessor, not the common parent or owner/. Permissio
 alone do not create assessor isolation. Lexical blinding is explicitly incomplete.
 
 Inputs and generated files are <=collector MAX_PROMPT_BYTES (1 MiB), with
-assessor responses <=64 KiB, arrays <=32 items and response rows <=32.
+assessor responses <=64 KiB, original fixtures <=512, response reference/issue
+arrays <=32 items and response rows <=32.
 The self-contained packet, including instruction/JSON expansion, must fit that cap.
 Inputs must be physical regular files, never symlinks, including ancestors. Outputs
 are new private 0700 directories / 0600 files; no overwrite. complete.json is written
@@ -66,6 +67,7 @@ from benchmark_issue10_v3_collector import MAX_PROMPT_BYTES
 
 MAX_BYTES = MAX_PROMPT_BYTES
 MAX_RESPONSE_BYTES = 64 * 1024
+MAX_FIXTURES = 512
 MAX_REFS = 32
 MAX_RESPONSE_ROWS = 32
 MAX_TEXT = 2048
@@ -247,8 +249,8 @@ def build_packet(bundle: dict, instructions: bytes, *, rng: Any = None,
     if not isinstance(parse(key['text'].encode()), dict) or not parse(key['text'].encode()):
         raise ValueError('semantic key must be a nonempty JSON object')
     fixtures = bundle['fixtures']
-    if not isinstance(fixtures, list) or not 1 <= len(fixtures) <= MAX_REFS:
-        raise ValueError('1..32 original fixtures required')
+    if not isinstance(fixtures, list) or not 1 <= len(fixtures) <= MAX_FIXTURES:
+        raise ValueError(f'1..{MAX_FIXTURES} original fixtures required')
     public_fixtures, file_hashes = [], {}
     for fixture in fixtures:
         exact(fixture, {'file', 'text', 'sha256'}, 'fixture')

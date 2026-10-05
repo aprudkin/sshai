@@ -52,7 +52,7 @@ def _census(base, manifest, number, discovery, candidate):
     files.update("fixture/" + name for name in material)
     files.update("evidence/attempt/" + name for name in
                  ("attempt.json", "events.jsonl", "stderr.txt", "process.json", "delivery.json", "rollout.jsonl", "answer.txt"))
-    if number < 3:
+    if number != 3:
         files.add("evidence/attempt/rollout-candidates/001.jsonl")
     runtime = discovery["native_runtime"]
     aliases = {"codex-home/auth.json": manifest["auth"]["path"]}
@@ -105,13 +105,18 @@ def _census(base, manifest, number, discovery, candidate):
     return inventory
 
 
-def prefix(root, manifest):
+def prefix(root, manifest, *, _patch_slot=False):
+    # The sole caller of the slot-4 variant separately pins the exact 7b source,
+    # digest and size-recovery ancestry. Defaults retain the original 1..3 proof.
     s.load_readiness(root, manifest)
-    if {path.name for path in (root / "slots").iterdir()} != {"001", "002", "003"}:
-        fail("capture recovery requires exactly original consumed slots 1..3 and no 4..36 reservation")
+    expected_slots = {"004"} if _patch_slot else {"001", "002", "003"}
+    if {path.name for path in (root / "slots").iterdir()} != expected_slots:
+        fail("recovery requires its exact consumed prefix and no later reservation")
     proofs, supplementary, threads = [], None, set()
     parse = {key: value for key, value in s.CAPTURE_CAPACITY.items() if key != "stream_limit"}
-    for number in (1, 2, 3):
+    file_limit = s.CAPTURE_CAPACITY["capture_limit"] if _patch_slot else p.capture.MAX_CAPTURE_BYTES
+    stream_limit = s.CAPTURE_CAPACITY["stream_limit"] if _patch_slot else p.collector.MAX_STREAM_BYTES
+    for number in ((4,) if _patch_slot else (1, 2, 3)):
         slot = manifest["slots"][number - 1]
         base = p.legacy._physical(root / "slots" / f"{number:03}")
         evidence, attempt, home = base / "evidence", base / "evidence/attempt", base / "codex-home"
@@ -130,7 +135,10 @@ def prefix(root, manifest):
             fail("original catalog provisioning changed")
         argv = p._model_argv(manifest, base, access)
         expected = p.collector._request_receipt(argv, prompt, p._environment(base, base / "scratch", manifest["config"]),
-            base / "scratch", float(manifest["config"]["limits"]["timeout_seconds"]), [], evidence / "last-message.txt")
+            base / "scratch", float(manifest["config"]["limits"]["timeout_seconds"]), [], evidence / "last-message.txt",
+            **(s.CAPTURE_CAPACITY if _patch_slot else {}))
+        if _patch_slot:
+            expected["limits"]["jsonl_record_bytes"] = s.CAPTURE_CAPACITY["line_limit"]
         expected.update(schema=p.collector.ASSOCIATED_ATTEMPT_SCHEMA, association={
             "manifest_digest": manifest["digest"], "slot": slot, "approval_sha256": reservation["approval_sha256"],
             "access_receipt_digest": access["digest"], "model": manifest["config"]["model"],
@@ -144,8 +152,8 @@ def prefix(root, manifest):
                 or initial["root"] != str(home) or initial["initial_inventory"] != initial_names
                 or initial["entry_bound"] != p.MAX_DISCOVERY_ENTRIES or initial["candidate_bound"] != p.collector.MAX_ROLLOUT_CANDIDATES):
             fail("original request is not the single pinned native invocation")
-        events = p.legacy._read_bounded(attempt / "events.jsonl", p.collector.MAX_STREAM_BYTES)
-        stderr = p.legacy._read_bounded(attempt / "stderr.txt", p.collector.MAX_STREAM_BYTES)
+        events = p.legacy._read_bounded(attempt / "events.jsonl", stream_limit)
+        stderr = p.legacy._read_bounded(attempt / "stderr.txt", stream_limit)
         process = p._json_file(attempt / "process.json", "original process")
         p._exact_object(process, {"schema", "capture_overflow", "duration_seconds", "execution", "exit_code", "interrupted", "pid", "start_error",
                                  "stderr_bytes", "stderr_limit_reached", "stdout_bytes", "stdout_limit_reached", "timed_out"}, "original process")
@@ -155,7 +163,7 @@ def prefix(root, manifest):
                     ("capture_overflow", "interrupted", "timed_out", "stdout_limit_reached", "stderr_limit_reached"))
                 or type(process["duration_seconds"]) not in (int, float) or not math.isfinite(process["duration_seconds"])
                 or not 0 < process["duration_seconds"] <= 600 or process["stdout_bytes"] != len(events) or process["stderr_bytes"] != len(stderr)
-                or max(len(events), len(stderr)) >= p.collector.MAX_STREAM_BYTES):
+                or max(len(events), len(stderr)) >= stream_limit):
             fail("original native process is incomplete, interrupted, nonzero or overflowed")
         candidates, discovery = p._discover_rollouts(home)
         delivery = p._json_file(attempt / "delivery.json", "original delivery")
@@ -164,7 +172,7 @@ def prefix(root, manifest):
                 or delivery["process_execution"] != "completed" or delivery["rollout_discovery"] != discovery):
             fail("original native candidate discovery is missing, changed or ambiguous")
         native = p.legacy._read_bounded(candidates[0], s.CAPTURE_CAPACITY["capture_limit"])
-        copied = p.legacy._read_bounded(attempt / "rollout.jsonl", p.capture.MAX_CAPTURE_BYTES)
+        copied = p.legacy._read_bounded(attempt / "rollout.jsonl", file_limit)
         answer = p.legacy._read_bounded(attempt / "answer.txt", p.capture.MAX_ANSWER_BYTES)
         if answer != p.legacy._read_bounded(evidence / "last-message.txt", p.capture.MAX_ANSWER_BYTES):
             fail("original answer copy differs from native delivery")
@@ -181,18 +189,26 @@ def prefix(root, manifest):
         report = p.capture.capture_bytes(events, native, p._encoded(process), answer, **parse)
         completion = p.capture.completion_evidence_bytes(events, native, answer, **parse)
         audit = p._audit(report, manifest["config"])
+        if _patch_slot:
+            import benchmark_issue10_intercepted_patch as patch
+            audit = patch.audit(report, manifest["config"], base / "scratch")
         contexts = [row.get("payload") for row in p.capture.parse_jsonl(native, "recovery_model", **parse)["records"] if isinstance(row, dict) and row.get("type") == "turn_context"]
         errors = [row for row in p.capture.parse_jsonl(events, "recovery_cli", **parse)["records"] if isinstance(row, dict) and isinstance(row.get("item"), dict) and row["item"].get("type") == "error"]
-        if (report["issues"] or not report["usage"]["totals_match"] or not report["usage"]["complete"] or report["compaction"]["observed"]
+        if ((report["issues"] and not _patch_slot) or not report["usage"]["totals_match"] or not report["usage"]["complete"] or report["compaction"]["observed"]
                 or completion["status"] != "matched" or audit["status"] != "bounded-recorded" or errors or not contexts
                 or any(not isinstance(ctx, dict) or ctx.get("model") != "gpt-5.6-sol" or ctx.get("effort") != "high" for ctx in contexts)):
             fail("recovery cannot excuse model, capture, usage, completion, compaction or unsupported-record failures")
-        old_report = p.capture.capture_bytes(events, copied, p._encoded(process), answer)
-        old_completion = p.capture.completion_evidence_bytes(events, copied, answer)
+        old_limits = parse if _patch_slot else {}
+        old_report = p.capture.capture_bytes(events, copied, p._encoded(process), answer, **old_limits)
+        old_completion = p.capture.completion_evidence_bytes(events, copied, answer, **old_limits)
         old_audit = p._audit(old_report, manifest["config"])
-        if (p._json_file(evidence / "capture-report.json", "original report") != old_report
+        retained_report = p.json.loads(p.legacy._read_bounded(evidence / "capture-report.json", file_limit),
+                                      object_pairs_hook=p._no_duplicate_keys, parse_constant=p._reject_constant)
+        retained_audit = p.json.loads(p.legacy._read_bounded(evidence / "tool-audit.json", file_limit),
+                                     object_pairs_hook=p._no_duplicate_keys, parse_constant=p._reject_constant)
+        if (retained_report != old_report
                 or p._json_file(evidence / "completion-evidence.json", "original completion") != old_completion
-                or p._json_file(evidence / "tool-audit.json", "original audit") != old_audit):
+                or retained_audit != old_audit):
             fail("original retained observer receipts changed")
         result = p._json_file(base / "result.json", "original result")
         core = {"schema": p.RESULT_SCHEMA, "slot": slot, "launch": "attempted", "execution": "completed",
@@ -205,13 +221,19 @@ def prefix(root, manifest):
                 or result["access"].get("receipt_digest") != access["digest"] or result["access"].get("fixture_inventory_exact") is not True
                 or result["access"].get("fixture_integrity") != {name: True for name in manifest["slot_material"][str(number)]["fixture_files"]}):
             fail("original retained result is not the unchanged accessed native outcome")
-        if number < 3:
+        if number != 3:
             expected_rollout = {"state": "captured", "reason": "matched_cli_thread_identity", "cli_thread_id": thread, "selected_candidate": 1,
                 "bytes": len(native), "sha256": p._sha(native), "candidates": [{"index": 1, "source": str(candidates[0]), "status": "usable", "thread_id": thread,
                     "bytes": len(native), "sha256": p._sha(native), "retained": "rollout-candidates/001.jsonl", "parser_issue_codes": [], "identity_match": True}]}
-            if (copied != native or p.legacy._read_bounded(attempt / "rollout-candidates/001.jsonl", p.capture.MAX_CAPTURE_BYTES) != native
-                    or old_report["issues"] or result.get("continuation") != {"allowed": True, "blockers": []}):
-                fail("only the third original slot may have observer-size defects")
+            if (copied != native or p.legacy._read_bounded(attempt / "rollout-candidates/001.jsonl", file_limit) != native
+                    or (old_report["issues"] and not _patch_slot)
+                    or result.get("continuation") != ({"allowed": False, "blockers": ["unsupported_or_unallowed_tool_record"]}
+                                                     if _patch_slot else {"allowed": True, "blockers": []})):
+                fail("retained collection differs from its narrow size or patch qualification boundary")
+            if _patch_slot:
+                if old_audit["status"] != "unqualified" or not audit["intercepted_patch"]["qualified_requests"]:
+                    fail("slot 4 must retain only the evidenced intercepted-patch audit defect")
+                supplementary = {"native": native, "report": report, "completion": completion, "audit": audit}
         else:
             old_cli_id, old_cli_problem = p.collector._cli_identity(events)
             expected_rollout = {"state": "lost", "reason": old_cli_problem or "unresolved_candidate_identity", "cli_thread_id": old_cli_id,

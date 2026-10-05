@@ -45,10 +45,10 @@ def bundle(repetitions=1):
             'slots': slots}
 
 
-def selected_case_bundle(case_id):
+def selected_case_bundle(case_id, repetitions=1):
     """Actual public synthetic case, with TEST-ONLY invented delivery receipts."""
     case = build_cases()[case_id]
-    data = bundle()
+    data = bundle(repetitions)
     data.update(case_id=case_id, prompt=blob(case['prompt']),
                 semantic_key=blob(bridge.encode(case['key']).decode('utf-8')),
                 fixtures=[{'file': name, **blob(body)} for name, body in sorted(case['files'].items())])
@@ -270,9 +270,9 @@ class AssessmentTests(unittest.TestCase):
             self.assertTrue(all(not r['valid'] for r in report['rows']))
 
     def test_selected_cases_fit_collector_cap_with_exact_material(self):
-        for case_id in ('M01', 'M02'):
+        for case_id in ('M01', 'M02', 'M03', 'M04', 'M05', 'M06'):
             with self.subTest(case_id=case_id):
-                data = selected_case_bundle(case_id)
+                data = selected_case_bundle(case_id, repetitions=3)
                 case = build_cases()[case_id]
                 if case_id == 'M02':
                     self.assertGreater(len(bridge.encode(data)), 512 * 1024)
@@ -286,7 +286,73 @@ class AssessmentTests(unittest.TestCase):
                 self.assertEqual(sorted(a['text'].encode() for a in supplied['packet']['answers']),
                                  sorted(s['answer']['text'].encode() for s in data['slots']))
                 self.assertEqual(owner['slots'][0]['answer'], data['slots'][0]['answer'])
-                self.assertEqual(len(owner['slots']), 2)
+                self.assertEqual(len(owner['slots']), 6)
+                self.assertEqual(len(supplied['packet']['answers']), 6)
+
+    def test_m04_full_original_fixtures_and_six_outcomes_fit(self):
+        data = selected_case_bundle('M04', repetitions=3)
+        originals = {f['file']: f['text'].encode('utf-8') for f in data['fixtures']}
+        self.assertEqual(len(originals), 369)
+        supplied, owner = bridge.build_packet(data, self.instructions, rng=random.Random(4))
+        self.assertEqual(len(supplied['packet']['answers']), 6)
+        self.assertEqual(len(owner['slots']), 6)
+        self.assertLessEqual(len(bridge.encode(data)), 1048576)
+        self.assertLessEqual(len(bridge.encode(supplied)), 1048576)
+        self.assertLessEqual(len(bridge.encode(owner)), 1048576)
+        self.assertEqual({f['file']: f['text'].encode('utf-8') for f in supplied['packet']['fixtures']}, originals)
+        for fixture in supplied['packet']['fixtures']:
+            raw = originals[fixture['file']]
+            self.assertEqual(fixture['sha256'], hashlib.sha256(raw).hexdigest())
+            self.assertEqual(fixture['line_count'], len(raw.split(b'\n')) - int(raw.endswith(b'\n')))
+        self.assertEqual(sorted(a['text'].encode('utf-8') for a in supplied['packet']['answers']),
+                         sorted(s['answer']['text'].encode('utf-8') for s in data['slots']))
+        for index, state in enumerate(('absent', 'lost', 'unqualified')):
+            slot = data['slots'][index]
+            slot.update(state=state, reason='Synthetic retained unknown outcome', qualification=None)
+            if state == 'absent':
+                slot['answer'] = None
+        supplied, owner = bridge.build_packet(data, self.instructions)
+        self.assertEqual(len(supplied['packet']['answers']), 3)
+        self.assertEqual([s['state'] for s in owner['slots']],
+                         ['absent', 'lost', 'unqualified', 'qualified', 'qualified', 'qualified'])
+        self.assertEqual([s['answer'] for s in owner['slots']], [s['answer'] for s in data['slots']])
+
+    def test_all_six_qualified_answers_still_require_full_packet_bound(self):
+        data = selected_case_bundle('M02', repetitions=3)
+        for slot in data['slots']:
+            slot['answer'] = blob('')
+        headroom = 1048576 - len(bridge.encode(data))
+        for slot in data['slots']:
+            slot['answer'] = blob('x' * (headroom // 6))
+        self.assertEqual(len(data['slots']), 6)
+        self.assertLessEqual(len(bridge.encode(data)), 1048576)
+        with self.assertRaisesRegex(ValueError, 'self-contained assessment input'):
+            bridge.build_packet(data, self.instructions)
+
+    def test_fixture_cap_separate_from_response_array_caps(self):
+        data = bundle()
+        data['fixtures'] = [{'file': f'files/{n:03}.txt', **blob('one\r\nα\n')} for n in range(512)]
+        supplied, _ = bridge.build_packet(data, self.instructions)
+        self.assertEqual(len(supplied['packet']['fixtures']), 512)
+        data['fixtures'].append({'file': 'files/512.txt', **blob('one\n')})
+        with self.assertRaisesRegex(ValueError, 'original fixtures'):
+            bridge.build_packet(data, self.instructions)
+        for field in ('source_refs', 'unsupported_statements', 'unsafe_recommendations', 'issues'):
+            value = response(self.packet)
+            row = value['assessments'][0]
+            entry = (row['source_refs'][0] if field == 'source_refs' else
+                     {'statement': 'Synthetic', 'reason': 'Synthetic'} if field != 'issues' else 'Synthetic')
+            row[field] = [copy.deepcopy(entry) for _ in range(32)]
+            self.assertTrue(self.validate(value)[0]['valid'], field)
+            row[field].append(copy.deepcopy(entry))
+            report, _ = self.validate(value)
+            self.assertFalse(report['rows'][0]['valid'], field)
+            self.assertTrue(report['rows'][1]['valid'], field)
+        value = response(self.packet)
+        value['assessments'] = (value['assessments'] * 6)[:32]
+        self.assertNotIn('assessments must be a bounded array', self.validate(value)[0]['batch_errors'])
+        value['assessments'].append(copy.deepcopy(value['assessments'][0]))
+        self.assertIn('assessments must be a bounded array', self.validate(value)[0]['batch_errors'])
 
     def test_bounds(self):
         data = bundle()
