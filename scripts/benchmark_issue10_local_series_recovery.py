@@ -105,18 +105,20 @@ def _census(base, manifest, number, discovery, candidate):
     return inventory
 
 
-def prefix(root, manifest, *, _patch_slot=False):
-    # The sole caller of the slot-4 variant separately pins the exact 7b source,
-    # digest and size-recovery ancestry. Defaults retain the original 1..3 proof.
+def prefix(root, manifest, *, _patch_slot=False, _patch_number=4):
+    # The sole caller pins the exact 7b/8c source, digest and ancestry for
+    # slot 4/5 respectively. Defaults retain the original 1..3 size-only proof.
     s.load_readiness(root, manifest)
-    expected_slots = {"004"} if _patch_slot else {"001", "002", "003"}
+    if _patch_slot and (type(_patch_number) is not int or _patch_number not in (4, 5)):
+        fail("only the two pinned patch-prefix proofs are supported")
+    expected_slots = {f"{_patch_number:03}"} if _patch_slot else {"001", "002", "003"}
     if {path.name for path in (root / "slots").iterdir()} != expected_slots:
         fail("recovery requires its exact consumed prefix and no later reservation")
     proofs, supplementary, threads = [], None, set()
     parse = {key: value for key, value in s.CAPTURE_CAPACITY.items() if key != "stream_limit"}
     file_limit = s.CAPTURE_CAPACITY["capture_limit"] if _patch_slot else p.capture.MAX_CAPTURE_BYTES
     stream_limit = s.CAPTURE_CAPACITY["stream_limit"] if _patch_slot else p.collector.MAX_STREAM_BYTES
-    for number in ((4,) if _patch_slot else (1, 2, 3)):
+    for number in ((_patch_number,) if _patch_slot else (1, 2, 3)):
         slot = manifest["slots"][number - 1]
         base = p.legacy._physical(root / "slots" / f"{number:03}")
         evidence, attempt, home = base / "evidence", base / "evidence/attempt", base / "codex-home"
@@ -191,7 +193,8 @@ def prefix(root, manifest, *, _patch_slot=False):
         audit = p._audit(report, manifest["config"])
         if _patch_slot:
             import benchmark_issue10_intercepted_patch as patch
-            audit = patch.audit(report, manifest["config"], base / "scratch")
+            audit = patch.audit(report, manifest["config"], base / "scratch",
+                                profile=patch.ADD_PROFILE if number == 5 else patch.PROFILE)
         contexts = [row.get("payload") for row in p.capture.parse_jsonl(native, "recovery_model", **parse)["records"] if isinstance(row, dict) and row.get("type") == "turn_context"]
         errors = [row for row in p.capture.parse_jsonl(events, "recovery_cli", **parse)["records"] if isinstance(row, dict) and isinstance(row.get("item"), dict) and row["item"].get("type") == "error"]
         if ((report["issues"] and not _patch_slot) or not report["usage"]["totals_match"] or not report["usage"]["complete"] or report["compaction"]["observed"]
@@ -202,6 +205,8 @@ def prefix(root, manifest, *, _patch_slot=False):
         old_report = p.capture.capture_bytes(events, copied, p._encoded(process), answer, **old_limits)
         old_completion = p.capture.completion_evidence_bytes(events, copied, answer, **old_limits)
         old_audit = p._audit(old_report, manifest["config"])
+        if _patch_slot and number == 5:
+            old_audit = patch.audit(old_report, manifest["config"], base / "scratch", profile=patch.PROFILE)
         retained_report = p.json.loads(p.legacy._read_bounded(evidence / "capture-report.json", file_limit),
                                       object_pairs_hook=p._no_duplicate_keys, parse_constant=p._reject_constant)
         retained_audit = p.json.loads(p.legacy._read_bounded(evidence / "tool-audit.json", file_limit),
@@ -231,8 +236,10 @@ def prefix(root, manifest, *, _patch_slot=False):
                                                      if _patch_slot else {"allowed": True, "blockers": []})):
                 fail("retained collection differs from its narrow size or patch qualification boundary")
             if _patch_slot:
-                if old_audit["status"] != "unqualified" or not audit["intercepted_patch"]["qualified_requests"]:
-                    fail("slot 4 must retain only the evidenced intercepted-patch audit defect")
+                qualified = audit["intercepted_patch"]["qualified_requests"]
+                if (old_audit["status"] != "unqualified" or not qualified
+                        or (number == 5 and not any(row.get("kind") == "add" for row in qualified))):
+                    fail("retained patch slot must have only its evidenced intercepted-patch audit defect")
                 supplementary = {"native": native, "report": report, "completion": completion, "audit": audit}
         else:
             old_cli_id, old_cli_problem = p.collector._cli_identity(events)

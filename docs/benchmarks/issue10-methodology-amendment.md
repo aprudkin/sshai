@@ -200,9 +200,13 @@ capture qualification. Use the command's `--help` for its argument inventory.
 
 The measured-series [intercepted scratch-patch profile](issue10-local-series.md#intercepted-scratch-patches-and-the-remaining-slot-continuation)
 is a separate prospective opt-in for the evidenced `exec_command` interception path.
-It does not change historical adapter/audit defaults or turn all file changes into
-allowed diagnostics. Its bounded record qualification and remaining-slot lineage
-are separate from final-answer qualification, model assessment and launch approval.
+Version 1 covers the evidenced empty-helper update; version 2 additionally covers
+the literal helper-add form. Each uses its explicit pinned predecessor and consumed
+prefix; version 2 does not reinterpret version-1 manifests or original blocked
+outcomes. Neither changes historical adapter/audit defaults nor turns all file
+changes into allowed diagnostics. Bounded record qualification and remaining-slot
+lineage are separate from final-answer qualification, model assessment and launch
+approval.
 
 ### Native runtime files and no-model regression
 

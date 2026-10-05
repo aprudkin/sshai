@@ -47,7 +47,7 @@ class ContinuationTests(SeriesFixture):
         slot = manifest["slots"][3]; base = self.root / "slots/004"; base.mkdir()
         f.write(base / "reservation.json", p._pretty({"manifest_digest":manifest["digest"], "slot":slot, "approval_sha256":approved["sha256"], "one_shot":True}))
         def collect(attempt, argv, **kwargs):
-            cli, native = streams(kwargs["cwd"])
+            cli, native = streams(kwargs["cwd"], kind=getattr(self, "patch_kind", "update"))
             if getattr(self,"inject_unknown",False):
                 cli.insert(-1,{"type":"future.event"})
             for name, data in (("cli-source", f.jsonl(cli)), ("native-source", f.jsonl(native))):

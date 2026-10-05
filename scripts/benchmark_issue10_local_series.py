@@ -135,9 +135,9 @@ def prepare(root: Path, fixture_bundle: Path, codex_path: Path, sshai_path: Path
     if _recovery_binding is not None:
         manifest["capture_recovery"] = _recovery_binding
     if _patch_binding is not None:
-        import benchmark_issue10_intercepted_patch as patch
+        import benchmark_issue10_patch_continuation as continuation
         manifest["patch_continuation"] = _patch_binding
-        manifest["intercepted_patch_profile"] = dict(patch.PROFILE)
+        manifest["intercepted_patch_profile"] = dict(continuation.profile_for(_patch_binding))
     manifest["digest"] = pilot._digest_object(manifest)
     if len(pilot._pretty(manifest)) > pilot.capture.MAX_CAPTURE_BYTES:
         raise pilot.PilotInputError("series manifest exceeds its bounded input contract")
@@ -178,7 +178,8 @@ def prepare(root: Path, fixture_bundle: Path, codex_path: Path, sshai_path: Path
             legacy._write_new(root / "recovery/slot-003" / filename, data, mode=0o400)
     if _patch_binding is not None:
         for label, filename in (("report", "capture-report.json"), ("completion", "completion-evidence.json"), ("audit", "tool-audit.json")):
-            legacy._write_new(root / "continuation/slot-004" / filename, pilot._pretty(_supplementary[label]), mode=0o400)
+            number = _patch_binding["inherited_slots"][-1]
+            legacy._write_new(root / f"continuation/slot-{number:03}" / filename, pilot._pretty(_supplementary[label]), mode=0o400)
     return manifest
 
 
@@ -231,17 +232,18 @@ def load_manifest(root: Path, *, _source_root: Path | None = None, _patch_predec
     source_root = pilot.REPO
     source_inventory = SOURCE_PATHS
     if _patch_predecessor and _source_root is None:
-        raise pilot.PilotInputError("7b predecessor requires its explicit source snapshot")
+        raise pilot.PilotInputError("pinned patch predecessor requires its explicit source snapshot")
     if _source_root is not None:
         import benchmark_issue10_local_series_recovery as recovery
         source_root = legacy._physical(Path(_source_root))
         if _patch_predecessor:
             import benchmark_issue10_patch_continuation as continuation
-            source_inventory = set(continuation.PREDECESSOR_SOURCES)
-            if (manifest.get("sources") != continuation.PREDECESSOR_SOURCES
-                    or manifest.get("digest") != continuation.PREDECESSOR_DIGEST
-                    or "capture_recovery" not in manifest or "patch_continuation" in manifest):
-                raise pilot.PilotInputError("historical patch predecessor must be the exact 7b size-recovery root")
+            number = continuation.predecessor_kind(manifest)
+            source_inventory = set(manifest["sources"])
+            if ((number == 4 and ("capture_recovery" not in manifest or "patch_continuation" in manifest))
+                    or (number == 5 and ("capture_recovery" in manifest
+                        or manifest.get("patch_continuation", {}).get("schema") != continuation.SCHEMA))):
+                raise pilot.PilotInputError("historical patch predecessor lineage differs from its exact pinned revision")
         else:
             source_inventory = set(recovery.ORIGINAL_SOURCES)
             expected.pop("capture_capacity")
@@ -428,9 +430,14 @@ def summarize(root: Path) -> dict[str, Any]:
         inherited = slot["slot"] in lineage.get("inherited_slots", [])
         if inherited:
             predecessor = Path(lineage["predecessor_root"])
-            if "patch_continuation" in manifest and slot["slot"] < 4:
-                previous = pilot._json_file(predecessor / "manifest.json", "retained size-recovery manifest")
-                predecessor = Path(previous["capture_recovery"]["predecessor_root"])
+            if "patch_continuation" in manifest:
+                import benchmark_issue10_patch_continuation as continuation
+                if lineage["schema"] == continuation.ADD_SCHEMA and slot["slot"] < 5:
+                    previous = pilot._json_file(predecessor / "manifest.json", "retained update-continuation manifest")
+                    predecessor = Path(previous["patch_continuation"]["predecessor_root"])
+                if slot["slot"] < 4:
+                    previous = pilot._json_file(predecessor / "manifest.json", "retained size-recovery manifest")
+                    predecessor = Path(previous["capture_recovery"]["predecessor_root"])
             base = predecessor / "slots" / f"{slot['slot']:03}"
         path = base / "result.json"
         if not path.exists() and not path.is_symlink():
@@ -450,7 +457,7 @@ def summarize(root: Path) -> dict[str, Any]:
                 import benchmark_issue10_local_series_recovery as recovery
                 row["supplementary_capture"] = {"status": "size-only supplementary evidence; original flags unchanged",
                     "acquisition_limit": recovery.ACQUISITION_LIMIT, "finality": "unknown", "quality": "unknown"}
-            if slot["slot"] == 4 and "patch_continuation" in manifest:
+            if slot["slot"] in (4, 5) and "patch_continuation" in manifest:
                 row["supplementary_patch_audit"] = {"status": "prospective lifecycle qualification; original flags unchanged",
                     "finality": "unknown", "semantic_routing": "unknown", "quality": "unknown"}
         rows.append(row)
@@ -480,7 +487,7 @@ def _main(argv: list[str] | None = None) -> int:
     recover.add_argument("--source-snapshot", type=Path, required=True)
     recover.add_argument("--reason", required=True)
     recover.add_argument("--authorization-note", required=True)
-    patch_cmd = commands.add_parser("prepare-patch-continuation", help="only pinned 7b prefix 1..4; original slots 5..36, no retry")
+    patch_cmd = commands.add_parser("prepare-patch-continuation", help="only pinned 7b prefix 1..4 or 8c prefix 1..5; no retry")
     patch_cmd.add_argument("root", type=Path)
     for name in ("predecessor", "source-snapshot", "qualification"):
         patch_cmd.add_argument("--" + name, type=Path, required=True)
@@ -510,7 +517,8 @@ def _main(argv: list[str] | None = None) -> int:
         manifest = prepare_patch_continuation(args.root, args.predecessor, args.source_snapshot,
                     qualification=args.qualification, reason=args.reason, authorization_note=args.authorization_note)
         output = {"schema": MANIFEST_SCHEMA, "phase": PHASE, "manifest_digest": manifest["digest"], "scheduled_sessions": 36,
-                  "inherited_slots": [1, 2, 3, 4], "executable_slots": list(range(5, 37)), "model_launches": 0,
+                  "inherited_slots": manifest["patch_continuation"]["inherited_slots"],
+                  "executable_slots": manifest["patch_continuation"]["executable_slots"], "model_launches": 0,
                   "approval_required": True, "experimental_savings_claim_eligible": False}
     elif args.command == "preflight":
         output = preflight(args.root)

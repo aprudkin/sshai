@@ -1796,7 +1796,7 @@ def collect_reserved_slot(root: Path, manifest: dict[str, Any], slot: dict[str, 
     if patch_profile is not None:
         import benchmark_issue10_intercepted_patch as patch
         import benchmark_issue10_local_series as series
-        if (patch_profile != patch.PROFILE or manifest.get("schema") != series.MANIFEST_SCHEMA
+        if (patch_profile not in (patch.PROFILE, patch.ADD_PROFILE) or manifest.get("schema") != series.MANIFEST_SCHEMA
                 or "patch_continuation" not in manifest or series.load_manifest(root) != manifest):
             raise PilotInputError("intercepted patch profile requires the exact prospective source-bound series")
     number = slot.get("slot")
@@ -1885,7 +1885,7 @@ def collect_reserved_slot(root: Path, manifest: dict[str, Any], slot: dict[str, 
             answer_state="captured" if answer is not None else "lost", **parse_limits,
         )
         completion = capture.completion_evidence_bytes(events, rollout, answer, **parse_limits)
-        audit = _audit(report, config) if patch_profile is None else patch.audit(report, config, scratch)
+        audit = _audit(report, config) if patch_profile is None else patch.audit(report, config, scratch, profile=patch_profile)
         legacy._write_new(evidence / "capture-report.json", _pretty(report))
         legacy._write_new(evidence / "completion-evidence.json", _pretty(completion))
         legacy._write_new(evidence / "tool-audit.json", _pretty(audit))

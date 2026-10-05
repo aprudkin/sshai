@@ -1,7 +1,7 @@
 # Issue 10 local measured-series controller
 
 **Scope:** Prospective observer-capacity recovery and intercepted-patch continuation
-following the first four original diagnostic executions. This reference describes
+following the first five original diagnostic executions. This reference describes
 launch gates, not phase completion. Code or synthetic tests alone establish no phase
 approval, pilot outcome, assessment, live model availability or savings claim.
 
@@ -150,33 +150,45 @@ appears in a native `FileChange` lifecycle and a separately identified CLI
 see the [pinned handler](https://github.com/openai/codex/blob/78c290807ce710180111df227df3b7a4fe845452/codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs#L355-L388).
 These representations must not be counted as distinct patches or OS executions.
 
-The prospective `intercepted_patch_profile` handles a single literal update that
-fills an empty scratch helper, at the local collector/audit boundary. It requires
-a quoted heredoc with only added lines, a relative non-hidden target outside scratch
-`sshai-root` and `tmp`, no symlink components, and a retained file matching the body.
-The recorded `exec_command` request, native call identity, completed update diff,
-and CLI start/completion target/status must agree. Repeated ambiguous targets,
-nonempty-file edits, add/delete/move operations and other syntax remain unsupported.
-This is not blanket permission for file changes, dedicated patch tools or fixture
-changes.
+The prospective `intercepted_patch_profile` qualifies bounded recorded lifecycles
+at the local collector/audit boundary. Version 1 handles a single literal update
+that fills an empty scratch helper. Version 2 additionally handles the evidenced
+literal `Add File` form; it does not reinterpret a version-1 manifest or report.
+Both require a quoted heredoc with only added lines, a relative non-hidden target
+outside scratch `sshai-root` and `tmp`, no symlink components, and a retained file
+matching the body. The recorded `exec_command` request, native call identity and
+completed update diff or add content, and CLI start/completion kind/target/status
+must agree. Repeated ambiguous targets, nonempty-file updates, delete/move operations
+and other syntax remain unsupported. This is not blanket permission for file changes,
+dedicated patch tools or fixture changes.
 Semantic routing still requires a separate inspection of actual commands and body
 execution. Preparing a scratch script is different from reading fixtures; a saved
 artifact read remains permitted. Historical adapter and audit defaults are unchanged.
 
-`prepare-patch-continuation ROOT --predecessor RECOVERY --source-snapshot SNAPSHOT
---qualification RECEIPT --reason TEXT --authorization-note TEXT` prepares only the
-unreserved original slots **5–36**. Its predecessor must be the pinned `7b201d1`
-size-recovery root containing only original slot 4, with the unchanged size-recovery
-ancestry for slots 1–3. Slot 4 must retain the qualified intercepted-patch observation
-and its original audit-blocked result; this is not a general unsupported-tool waiver.
-The separately accepted qualification is source-bound provenance, not an approval
-boolean or a substitute for validating the actual retained records.
+`prepare-patch-continuation ROOT --predecessor PREDECESSOR --source-snapshot SNAPSHOT
+--qualification RECEIPT --reason TEXT --authorization-note TEXT` accepts only two
+explicit predecessor paths:
+
+- The pinned `7b201d1` size-recovery root containing only original slot 4, with
+  unchanged size-recovery ancestry for slots 1–3. Binding schema 1 and profile 1
+  inherit slots 1–4 and delegate only unreserved original slots **5–36**. Slot 4
+  retains the evidenced empty-helper update and its original audit-blocked result.
+- The pinned `8c7cdc8` patch-continuation root containing only original slot 5, with
+  that same earlier ancestry. Binding schema 2 and profile 2 inherit slots 1–5 and
+  delegate only unreserved original slots **6–36**. Slot 5 retains the evidenced
+  helper add and its original version-1 audit-blocked result. All four producing
+  roots remain distinct; no original result or profile is upgraded in place.
+
+These are not general unsupported-tool waivers. Each separately accepted qualification
+is source-bound provenance, not an approval boolean or a substitute for validating
+the actual retained records.
 
 The new manifest binds the historical sources, complete consumed prefix, original
 schedule and unchanged model/configuration, inputs, prompts, rubric and ceilings.
-The `patch_continuation` binding hashes the direct predecessor's `capture_recovery`
-ancestry rather than copying its top-level owner binding to the new root. Each load
-revalidates that predecessor and its original size-recovery lineage. A sole exclusive
+The `patch_continuation.ancestor_binding_sha256` hashes the direct predecessor's
+`capture_recovery` in schema 1 or `patch_continuation` in schema 2, rather than
+copying a top-level owner binding to the new root. Each load revalidates the fixed
+predecessor chain and its original owners. A sole exclusive
 `patch-continuation-owner.json` binds ownership of remaining slots. Interrupted
 preparation may leave a consumed claim or partial root; no automatic replacement
 or ownership rollback is provided.
@@ -185,10 +197,11 @@ Original audit, finality and eligibility flags remain unchanged; combined report
 retains all 36 outcomes and the distinct supplementary-evidence limitations.
 
 Preparation launches no model. Fresh all-six-case readiness, a new manifest-bound
-actual approval and `--allow-model-run` precede slot 5; fresh per-slot canaries and
-ordinary prior-result gates apply afterward. A new unsupported event or other
-capture/access failure still stops later reservations. This exception does not
-permit arbitrary continuation chains or reuse of either predecessor allocation.
+actual approval and `--allow-model-run` precede the first delegated slot (5 or 6);
+fresh per-slot canaries and ordinary prior-result gates apply afterward. A new
+unsupported event or other capture/access failure still stops later reservations.
+These paths do not permit arbitrary continuation chains, other consumed prefixes
+or reuse of any predecessor allocation.
 
 ## Retained inventory and reporting
 
