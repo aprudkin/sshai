@@ -1,9 +1,16 @@
 ---
 name: sshai
-description: Execute non-interactive sshai commands on Windows PowerShell hosts and Linux-family Bash or explicitly selected POSIX-shell hosts, or explicitly selected local Bash or pwsh, with bounded output and local artifacts. Use for covered command execution through an AI coding agent.
+description: Execute non-interactive remote Bash/POSIX or PowerShell commands through sshai, and query or compare saved sshai artifacts. Not for ordinary local shell commands. Use sshai local only on an explicit request or when an explicitly selected workflow requires its local artifacts, history or delta features.
 license: MIT
 compatibility: Requires the sshai CLI; remote execution needs system OpenSSH and configured ssh_config aliases, while local execution needs bash or pwsh on PATH.
 ---
+
+## Select the execution path
+
+- Use the agent harness's normal shell tool by default for local builds, tests, Git commands and diagnostics. Ordinary local commands do not by themselves activate this skill. Do not substitute `sshai local` merely for presumed token savings, bounded output or generic log retention.
+- Use `sshai run` for supported remote commands under this skill. The existing remote safety and fallback rules still apply.
+- Use `sshai q`, `diff` and `log` to work with existing sshai artifacts, even though that processing occurs locally. This does not select `sshai local` for new commands.
+- Opt in to `sshai local` only when the user explicitly requests local execution through sshai, or the user or applicable task instructions explicitly select a workflow requiring sshai's local artifacts, history or delta features. Authorizing a local command alone does not select `sshai local`.
 
 Use the installed `sshai` binary through the agent harness's non-interactive shell execution tool. It supports Windows PowerShell 7 or 5.1 and Linux-family hosts reachable through an `ssh_config` alias, plus explicit local Bash or PowerShell 7 (`pwsh`) execution. Linux-family remote execution defaults to Bash; select an explicit POSIX shell when the host, such as OpenWrt, does not provide Bash. Confirm availability with `command -v sshai`. Read `sshai help` for command discovery and `sshai help <command>` for the relevant command whenever a flag or output contract is uncertain; the CLI does not provide a `--version` command.
 
@@ -43,7 +50,7 @@ sshai run --powershell-host windows-powershell --body-file check.ps1 windows01
 
 The only supported values are `pwsh` and `windows-powershell`; an invalid selector is a usage error. The selector affects Windows body execution; Linux hosts in the same fan-out are unaffected. Do not describe Windows PowerShell 5.1 as unsupported.
 
-For explicitly authorized local execution, select exactly one local interpreter. Both `bash` and `pwsh` are resolved only through `PATH`; local PowerShell runs only `pwsh` and has no Windows PowerShell 5.1 fallback:
+When `sshai local` is selected under the rule above, select exactly one local interpreter. Both `bash` and `pwsh` are resolved only through `PATH`; local PowerShell runs only `pwsh` and has no Windows PowerShell 5.1 fallback:
 
 ```bash
 sshai local --shell bash -- <command>
@@ -55,7 +62,7 @@ Use `--body-file <file|->` for multiline bodies so the body stays out of interpr
 
 Local `--timeout` covers the interpreter and output draining to EOF within the same budget, even after the interpreter exits. Delayed descendant output is retained, including output after the state epilogue. An inherited pipe still open at the deadline is a timeout even if the interpreter exited zero. Pipe cleanup allows up to 100 ms extra plus scheduling; a child exit alone does not prove complete capture.
 
-For local project work, do not rely on the calling tool's cwd. Before the body runs, sshai restores saved cwd and selected environment values for `(local-bash|local-pwsh, ctx)` under the active `SSHAI_ROOT` (default `~/.sshai`). Context defaults to `$SSHAI_CTX` or `default`, not the project directory. Reusing a context across projects can override the caller's cwd and environment. Environment restoration re-applies new/changed exported values relative to the shell target's saved baseline, excluding volatile names; it is not a full reset and does not replay unsets.
+For project work through `sshai local`, do not rely on the calling tool's cwd. Before the body runs, sshai restores saved cwd and selected environment values for `(local-bash|local-pwsh, ctx)` under the active `SSHAI_ROOT` (default `~/.sshai`). Context defaults to `$SSHAI_CTX` or `default`, not the project directory. Reusing a context across projects can override the caller's cwd and environment. Environment restoration re-applies new/changed exported values relative to the shell target's saved baseline, excluding volatile names; it is not a full reset and does not replay unsets.
 
 Use a project-specific `--ctx` and begin each project-local body with an explicit absolute cwd, stopping on failure. Set required non-secret environment values in the body too; changing cwd does not reset them. These examples use a Bash-compatible caller and quoted stdin bodies. Replace the path with the project's existing absolute local path (for example, `C:\work\project-a` in a PowerShell body on Windows):
 

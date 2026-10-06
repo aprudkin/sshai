@@ -196,6 +196,27 @@ degradation**. It does not establish a conforming comparative effect, equal-qual
 guarantee, financial saving, remote-platform result or general result for other tasks,
 models, agents or sshai versions. No README savings claim follows from this study.
 
+## Post-study skill-selection decision
+
+Following this result, the user selected ordinary harness-shell execution as the
+default for local builds, tests, Git commands and diagnostics. The follow-up
+[bundled skill](../../skills/sshai/SKILL.md), prepared for patch release **v1.1.1**,
+no longer activates merely for ordinary local commands or presumed token savings.
+`sshai local` remains available for an explicit request or a workflow explicitly
+selected by the user or task instructions that requires its local artifacts,
+history or delta features. Authorizing a local command alone does not select it.
+
+Supported remote commands still use sshai, and `q`, `diff` and `log` remain available
+for existing sshai artifacts even though those operations run locally. This changes
+the agent's tool-selection guidance, not CLI availability, execution permissions,
+secret-handling rules or artifact/capture semantics. Separately copied agent skills
+must be synchronized and reloaded; a binary upgrade alone does not refresh them.
+
+This is a workflow decision after the study, **not a measured improvement**. The
+frozen study skill, original outcomes and all numbers above remain unchanged. No
+replacement runs, new comparison or remote phase validate the revised policy;
+its effect on future model behavior and token usage has not been established.
+
 ## Sanitized original-pair input inventory
 
 Numbers are actual cumulative input tokens, including cached input. Slot identifiers
