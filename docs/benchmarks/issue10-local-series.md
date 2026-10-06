@@ -4,6 +4,10 @@
 following the first five original diagnostic executions. This reference describes
 launch gates, not phase completion. Code or synthetic tests alone establish no phase
 approval, pilot outcome, assessment, live model availability or savings claim.
+The separate [completed local-series report](issue10-local-measured-results.md)
+records all 36 diagnostic outcomes and six model-assessment batches, including
+retained nonconformance and unavailable conforming-series uncertainty. It does not
+rewrite this preparation reference or authorize a remote phase.
 
 The [protocol](issue10-protocol.md) and [current amendment](issue10-methodology-amendment.md)
 remain authoritative. The coordinator must review the local pilot's access, capture,

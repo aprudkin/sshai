@@ -243,8 +243,23 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the
 
 ## Measured results
 
-The figures below come from two completed measurements: a controlled comparison and a separate
-production collection. Estimated token counts use `ceil(UTF-8 bytes / 4)`.
+These studies use different tasks and metrics; their results should not be combined.
+Historical byte-based token estimates use `ceil(UTF-8 bytes / 4)`, not actual model usage.
+
+### Local autonomous-session study
+
+A local macOS synthetic-task study reported on 2026-10-06 used `gpt-5.6-sol` / high through
+Codex 0.151.0: six tasks, three paired repetitions, **36 fresh diagnostic sessions**.
+Across all outcomes, cumulative input was **2,514,333 tokens with sshai versus 1,330,784
+with ordinary execution: 88.9% higher**, not a saving. Cached input is included in both totals.
+A separate model assessor marked **18/18 answers successful in each arm**, with evidence and
+recommendation scores of 2/2; these are model judgments, not proof of equal quality.
+
+One denied fixture-write attempt remains a nonconforming outcome. These are descriptive
+full-population totals; the conforming comparison and confidence interval are unavailable,
+with no clean-subset substitution. No Linux/Windows SSH phase ran, and no remote or monetary
+effect follows. See the [local study report](docs/benchmarks/issue10-local-measured-results.md)
+for all 18 pairs, secondary metrics and evidence limitations.
 
 ### Controlled v1.1 benchmark
 
