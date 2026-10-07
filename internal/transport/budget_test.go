@@ -35,7 +35,7 @@ func TestRemaining(t *testing.T) {
 }
 
 func TestExecPreparationConsumesBudget(t *testing.T) {
-	tr := NewOpenSSH(t.TempDir(), "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
+	tr := newTestOpenSSH(t, "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
 	calls := 0
 	tr.hostKeyLookup = func(string, []string, time.Duration) (map[string]HostKey, error) {
 		calls++
@@ -57,7 +57,7 @@ func TestExecPreparationConsumesBudget(t *testing.T) {
 }
 
 func TestPutPreparationConsumesBudget(t *testing.T) {
-	tr := NewOpenSSH(t.TempDir(), "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
+	tr := newTestOpenSSH(t, "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
 	calls := 0
 	tr.hostKeyLookup = func(_ string, _ []string, timeout time.Duration) (map[string]HostKey, error) {
 		calls++
@@ -84,7 +84,7 @@ func TestTransportRefusesExpiredPreparation(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	for _, operation := range []string{"put", "stream"} {
 		t.Run(operation, func(t *testing.T) {
-			tr := NewOpenSSH(t.TempDir(), "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
+			tr := newTestOpenSSH(t, "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
 			tr.hostKeyLookup = func(string, []string, time.Duration) (map[string]HostKey, error) {
 				time.Sleep(30 * time.Millisecond)
 				return map[string]HostKey{}, nil
@@ -105,7 +105,7 @@ func TestTransportRefusesExpiredPreparation(t *testing.T) {
 }
 
 func TestExecRefusesExpiredPreparation(t *testing.T) {
-	tr := NewOpenSSH(t.TempDir(), "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
+	tr := newTestOpenSSH(t, "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
 	tr.hostKeyLookup = func(string, []string, time.Duration) (map[string]HostKey, error) {
 		time.Sleep(30 * time.Millisecond)
 		return map[string]HostKey{}, nil
@@ -123,7 +123,7 @@ func TestTransportRefusesNonPositiveBudget(t *testing.T) {
 	for _, operation := range []string{"exec", "put", "stream"} {
 		t.Run(operation, func(t *testing.T) {
 			for _, timeout := range []time.Duration{0, -time.Second} {
-				tr := NewOpenSSH(t.TempDir(), "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
+				tr := newTestOpenSSH(t, "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
 				tr.hostKeyLookup = func(string, []string, time.Duration) (map[string]HostKey, error) {
 					t.Error("lookup started without budget")
 					return nil, nil
@@ -160,7 +160,7 @@ func writeBudgetSSH(t *testing.T, body string) {
 }
 
 func TestObservationDoesNotRestartExpiredBudget(t *testing.T) {
-	tr := NewOpenSSH(t.TempDir(), "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
+	tr := newTestOpenSSH(t, "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
 	calls := 0
 	tr.hostKeyLookup = func(string, []string, time.Duration) (map[string]HostKey, error) {
 		calls++
@@ -182,7 +182,7 @@ func TestObservationDoesNotRestartExpiredBudget(t *testing.T) {
 
 func TestHostKeyLookupConsumesSuppliedBudget(t *testing.T) {
 	writeBudgetSSH(t, "exec sleep 1\n")
-	tr := NewOpenSSH(t.TempDir(), "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
+	tr := newTestOpenSSH(t, "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
 	started := time.Now()
 	_, err := tr.Exec("h", "true", nil, 30*time.Millisecond)
 	requireTransportTimeout(t, err)
@@ -207,7 +207,7 @@ fi
 printf done
 exit 3
 `)
-			tr := NewOpenSSH(t.TempDir(), "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
+			tr := newTestOpenSSH(t, "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
 			started := time.Now()
 			var res Result
 			var err error
@@ -244,7 +244,7 @@ func TestExecStreamInheritedPipeDeadline(t *testing.T) {
 		t.Setenv("SSHAI_TEST_PIPE_BINARY", os.Args[0])
 		t.Setenv("SSHAI_TEST_PIPE_ROLE", "ssh")
 		writeBudgetSSH(t, "exec \"$SSHAI_TEST_PIPE_BINARY\" -test.run=^TestStreamPipeProcess$\n")
-		tr := NewOpenSSH(t.TempDir(), "15m", 64, OpenSSHOptions{})
+		tr := newTestOpenSSH(t, "15m", 64, OpenSSHOptions{})
 		started := time.Now()
 		var observed []byte
 		_, err := tr.ExecStream("h", "true", nil, 300*time.Millisecond, func(p []byte) { observed = append(observed, p...) })
@@ -289,7 +289,7 @@ func TestStreamPipeProcess(t *testing.T) {
 
 func TestExecStreamObservationFailurePreservesCompletedResult(t *testing.T) {
 	writeBudgetSSH(t, "printf done\nexit 3\n")
-	tr := NewOpenSSH(t.TempDir(), "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
+	tr := newTestOpenSSH(t, "15m", 64, OpenSSHOptions{AcceptNewHostKey: "h"})
 	calls := 0
 	tr.hostKeyLookup = func(string, []string, time.Duration) (map[string]HostKey, error) {
 		calls++

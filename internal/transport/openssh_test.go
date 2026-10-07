@@ -49,7 +49,7 @@ func setTransportTestUserHome(t *testing.T, home string) {
 }
 
 func TestExecMirrorsRemoteExit(t *testing.T) {
-	tr := NewOpenSSH(t.TempDir(), "15m", 1<<20, OpenSSHOptions{})
+	tr := newTestOpenSSH(t, "15m", 1<<20, OpenSSHOptions{})
 	tr.Runner = fake(3, "boom\n", false)
 	res, err := tr.Exec("h1", "false", nil, time.Minute)
 	if err != nil || res.ExitCode != 3 || string(res.Output) != "boom\n" {
@@ -58,7 +58,7 @@ func TestExecMirrorsRemoteExit(t *testing.T) {
 }
 
 func TestExec255IsTransportError(t *testing.T) {
-	tr := NewOpenSSH(t.TempDir(), "15m", 1<<20, OpenSSHOptions{})
+	tr := newTestOpenSSH(t, "15m", 1<<20, OpenSSHOptions{})
 	tr.Runner = fake(255, "ssh: connect to host private.example port 22: Connection refused", false)
 	_, err := tr.Exec("h1", "true", nil, time.Minute)
 	var te *TransportError
@@ -95,7 +95,7 @@ func TestTransportDiagnosticsAreCanonicalAndSafe(t *testing.T) {
 }
 
 func TestExecTimeout(t *testing.T) {
-	tr := NewOpenSSH(t.TempDir(), "15m", 1<<20, OpenSSHOptions{})
+	tr := newTestOpenSSH(t, "15m", 1<<20, OpenSSHOptions{})
 	tr.Runner = fake(0, "", true)
 	_, err := tr.Exec("h1", "sleep 999", nil, time.Millisecond)
 	var te *TransportError
@@ -296,7 +296,7 @@ func TestParseKnownHostsConfigUsesAliasAndNonDefaultPort(t *testing.T) {
 // (unlike Exec's) does not special-case 255: any non-zero rc from scp is
 // reported as TransportError{"scp"}.
 func TestPutNonZeroIsTransportError(t *testing.T) {
-	tr := NewOpenSSH(t.TempDir(), "15m", 1<<20, OpenSSHOptions{})
+	tr := newTestOpenSSH(t, "15m", 1<<20, OpenSSHOptions{})
 	tr.Runner = fake(1, "scp: No such file or directory", false)
 	err := tr.Put("h1", "/local/script.sh", "/remote/script.sh", time.Minute)
 	var te *TransportError
@@ -344,7 +344,7 @@ func TestExecStreamUsesUnifiedRemotePipeAndPrivateDiagnosticLog(t *testing.T) {
 
 	t.Run("remote streams", func(t *testing.T) {
 		writeSSH("printf out\nprintf err >&2\nexit 0\n")
-		tr := NewOpenSSH(t.TempDir(), "15m", 64, OpenSSHOptions{})
+		tr := newTestOpenSSH(t, "15m", 64, OpenSSHOptions{})
 		var observed []byte
 		res, err := tr.ExecStream("h", "true", nil, time.Second, func(p []byte) { observed = append(observed, p...) })
 		if err != nil || string(res.Output) != "outerr" || string(observed) != "outerr" {
@@ -356,7 +356,7 @@ func TestExecStreamUsesUnifiedRemotePipeAndPrivateDiagnosticLog(t *testing.T) {
 		trace := filepath.Join(t.TempDir(), "trace")
 		t.Setenv("SSHAI_TEST_TRACE", trace)
 		writeSSH("while [ $# -gt 0 ]; do\n  if [ \"$1\" = -E ]; then\n    printf %s \"$2\" >\"$SSHAI_TEST_TRACE\"\n    printf 'Permission denied for secret-host.example\\n' >\"$2\"\n    exit 255\n  fi\n  shift\ndone\nexit 255\n")
-		tr := NewOpenSSH(t.TempDir(), "15m", 64, OpenSSHOptions{})
+		tr := newTestOpenSSH(t, "15m", 64, OpenSSHOptions{})
 		var observed []byte
 		_, err := tr.ExecStream("h", "true", nil, time.Second, func(p []byte) { observed = append(observed, p...) })
 		var te *TransportError
@@ -374,8 +374,8 @@ func TestExecStreamUsesUnifiedRemotePipeAndPrivateDiagnosticLog(t *testing.T) {
 }
 
 func TestExecExactCapOutputNotTruncated(t *testing.T) {
-	tr := NewOpenSSH(t.TempDir(), "15m", 5, OpenSSHOptions{}) // streamCap=5
-	tr.Runner = fake(0, "hello", false)                       // exactly 5 bytes
+	tr := newTestOpenSSH(t, "15m", 5, OpenSSHOptions{}) // streamCap=5
+	tr.Runner = fake(0, "hello", false)                 // exactly 5 bytes
 	res, err := tr.Exec("h1", "echo -n hello", nil, time.Minute)
 	if err != nil || res.Truncated || string(res.Output) != "hello" {
 		t.Fatalf("res=%+v err=%v", res, err)
@@ -383,7 +383,7 @@ func TestExecExactCapOutputNotTruncated(t *testing.T) {
 }
 
 func TestExecZeroCapOutputTruncated(t *testing.T) {
-	tr := NewOpenSSH(t.TempDir(), "15m", 0, OpenSSHOptions{})
+	tr := newTestOpenSSH(t, "15m", 0, OpenSSHOptions{})
 	tr.Runner = fake(0, "x", false)
 	res, err := tr.Exec("h1", "printf x", nil, time.Minute)
 	if err != nil || !res.Truncated || len(res.Output) != 0 {
@@ -392,7 +392,7 @@ func TestExecZeroCapOutputTruncated(t *testing.T) {
 }
 
 func TestExecOverCapOutputTruncated(t *testing.T) {
-	tr := NewOpenSSH(t.TempDir(), "15m", 5, OpenSSHOptions{}) // streamCap=5
+	tr := newTestOpenSSH(t, "15m", 5, OpenSSHOptions{}) // streamCap=5
 	tr.Runner = fake(0, "hello world", false)
 	res, err := tr.Exec("h1", "echo -n hello world", nil, time.Minute)
 	if err != nil || !res.Truncated || string(res.Output) != "hello" {
@@ -409,7 +409,7 @@ func TestExecOverCapOutputTruncated(t *testing.T) {
 // exec(2) failure — and checks it reports execStartFailedRC rather than
 // some ordinary-looking exit code.
 func TestRunSurfacesStartFailure(t *testing.T) {
-	tr := NewOpenSSH(t.TempDir(), "15m", 1<<20, OpenSSHOptions{})
+	tr := newTestOpenSSH(t, "15m", 1<<20, OpenSSHOptions{})
 	rc, out, timedOut := tr.run([]string{"/nonexistent/path/sshai-missing-binary", "x"}, nil, 5*time.Second)
 	if rc != execStartFailedRC {
 		t.Fatalf("rc=%d, want execStartFailedRC (%d)", rc, execStartFailedRC)
@@ -426,7 +426,7 @@ func TestRunSurfacesStartFailure(t *testing.T) {
 // isolation: given execStartFailedRC from the Runner (fake or real), it
 // must produce TransportError{"ssh"}, the same as a real ssh exit 255.
 func TestExecStartFailureIsTransportError(t *testing.T) {
-	tr := NewOpenSSH(t.TempDir(), "15m", 1<<20, OpenSSHOptions{})
+	tr := newTestOpenSSH(t, "15m", 1<<20, OpenSSHOptions{})
 	tr.Runner = fake(execStartFailedRC, "", false)
 	_, err := tr.Exec("h1", "true", nil, time.Minute)
 	var te *TransportError
@@ -436,7 +436,7 @@ func TestExecStartFailureIsTransportError(t *testing.T) {
 }
 
 func TestExecNegativeLocalExitIsTransportError(t *testing.T) {
-	tr := NewOpenSSH(t.TempDir(), "15m", 1<<20, OpenSSHOptions{})
+	tr := newTestOpenSSH(t, "15m", 1<<20, OpenSSHOptions{})
 	tr.Runner = fake(-1, "Read from remote host h1: Unknown error", false)
 	_, err := tr.Exec("h1", "true", nil, time.Minute)
 	var te *TransportError
@@ -446,7 +446,7 @@ func TestExecNegativeLocalExitIsTransportError(t *testing.T) {
 }
 
 func TestPutNegativeLocalExitIsTransportError(t *testing.T) {
-	tr := NewOpenSSH(t.TempDir(), "15m", 1<<20, OpenSSHOptions{})
+	tr := newTestOpenSSH(t, "15m", 1<<20, OpenSSHOptions{})
 	tr.Runner = fake(-1, "Read from remote host h1: Unknown error", false)
 	err := tr.Put("h1", "/local/script.sh", "/remote/script.sh", time.Minute)
 	var te *TransportError
@@ -464,7 +464,7 @@ func TestPutNegativeLocalExitIsTransportError(t *testing.T) {
 // ssh would ever be invoked, so nothing is dialed.
 func TestExecSurfacesLocalStartFailureAsTransportError(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // a directory with no "ssh" binary in it
-	tr := NewOpenSSH(t.TempDir(), "15m", 1<<20, OpenSSHOptions{})
+	tr := newTestOpenSSH(t, "15m", 1<<20, OpenSSHOptions{})
 	_, err := tr.Exec("h1", "true", nil, 5*time.Second)
 	var te *TransportError
 	if !errors.As(err, &te) || te.Reason != "ssh" {

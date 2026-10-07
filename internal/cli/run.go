@@ -345,18 +345,9 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 	}
 
 	if tr == nil {
-		// ssh refuses to bind its ControlMaster socket under a directory
-		// that doesn't exist yet ("cannot bind to path ...: No such file
-		// or directory", surfaced as a plain connection failure — rc 255,
-		// TransportError{"ssh"}) — NewOpenSSH itself never creates
-		// controlDir (see its doc comment: "pointed at a socket directory
-		// under controlDir", not "creates"), so that's this call site's
-		// job, same as OpenStore already does for <root>/art.
+		// Transport owns socket-path selection and private-directory setup;
+		// artifacts and shell state remain under the caller-selected root.
 		controlDir := filepath.Join(cfg.Root, "cm")
-		if err := os.MkdirAll(controlDir, 0o700); err != nil {
-			fmt.Fprintf(stderr, "run: create control dir: %v\n", err)
-			return exitUsage
-		}
 		tr = transport.NewOpenSSH(controlDir, cfg.ControlPersist, cfg.StreamCapBytes, transport.OpenSSHOptions{
 			AcceptNewHostKey: *acceptNewHostKey,
 			ProxyJumpNone:    *proxyJump == "none",

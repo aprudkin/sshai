@@ -40,7 +40,7 @@ func TestStageCaptureOverflowPreventsDispatch(t *testing.T) {
 			if err := session.SaveFacts(store.Root, "synthetic01", session.Facts{OS: "windows", Shell: shell.PwshDefaultShell, Form: "cmd"}); err != nil {
 				t.Fatal(err)
 			}
-			tr := transport.NewOpenSSH(t.TempDir(), "15m", 8, transport.OpenSSHOptions{})
+			tr := transport.NewOpenSSH(testControlDir(t), "15m", 8, transport.OpenSSHOptions{})
 			var out, errOut bytes.Buffer
 			rc, outcomes := runInvocation(Deps{Tr: tr, Store: store}, []Opts{{Host: "synthetic01", Ctx: "test", Command: "synthetic body", Timeout: 2 * time.Second, Budget: 500}}, resultModeOptions{format: format}, &out, &errOut)
 			if rc != exitTransport || len(outcomes) != 1 {

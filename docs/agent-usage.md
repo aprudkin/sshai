@@ -84,6 +84,25 @@ Two narrow SSH exceptions remain inside `sshai`:
 
 Omitting either flag preserves the strict host-key and managed-route defaults.
 
+## SSH control sockets
+
+On Unix clients, sshai normally keeps OpenSSH control sockets under `<SSHAI_ROOT>/cm`.
+If that path cannot fit the Unix socket limit (including OpenSSH's temporary listener suffix)
+or needs SSH path quoting/expansion, it uses a private `0700` directory named
+`/tmp/sshai-cm-<hash>` instead. The hash namespaces sockets by local user and absolute runtime
+root; repeated invocations share the same directory. This does not change routing, host-key
+policy, `control_persist`, or artifact/state storage under the selected root. Windows clients
+continue to omit Unix connection-sharing options. Changing `--ctx` does not reset sockets.
+
+The socket directory must be owned by the current user, must not be a symlink, and must have
+mode `0700`. If it cannot be used, the transport fails with the canonical diagnostic
+`control socket unavailable`. OpenSSH's `ControlPath too long` rejection reports
+`control socket path too long`; listener failures report `control socket unavailable`.
+Raw paths and SSH errors are not retained. Fallback directories
+are not removed on invocation exit because a persistent master may still use them; OpenSSH
+removes its sockets when the configured persistence period ends. Do not remove a socket directory
+while its master is active.
+
 ## Remote timeout budget
 
 `sshai run --timeout N` sets one budget in seconds per host. When omitted (or non-positive),

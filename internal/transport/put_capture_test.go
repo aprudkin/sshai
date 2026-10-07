@@ -24,7 +24,7 @@ func TestPutInheritedOutputCap(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-			tr := NewOpenSSH(t.TempDir(), "15m", cap, OpenSSHOptions{})
+			tr := newTestOpenSSH(t, "15m", cap, OpenSSHOptions{})
 			err := tr.Put("synthetic01", "source", "target", 2*time.Second)
 			if cap == 13 {
 				if err != nil {

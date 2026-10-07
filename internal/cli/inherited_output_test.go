@@ -58,7 +58,7 @@ func TestInheritedOutputResults(t *testing.T) {
 						if err := session.SaveFacts(store.Root, target, session.Facts{OS: "linux"}); err != nil {
 							t.Fatal(err)
 						}
-						tr := transport.NewOpenSSH(t.TempDir(), "15m", tc.cap, transport.OpenSSHOptions{})
+						tr := transport.NewOpenSSH(testControlDir(t), "15m", tc.cap, transport.OpenSSHOptions{})
 						result.outcome = runHost(Deps{Tr: tr, Store: store}, Opts{Host: target, Ctx: "test", Command: tc.body, Timeout: tc.timeout, Budget: 500}, &result.stdout, &result.stderr)
 					} else {
 						result.outcome = runLocal(store, tc.cap, runner.Run, localOpts{shell: "bash", target: target, ctx: "test", command: tc.body, timeout: tc.timeout, budget: 500}, &result.stdout, &result.stderr)

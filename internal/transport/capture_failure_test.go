@@ -10,7 +10,7 @@ import (
 // publish the partial raw SSH/SCP diagnostics, even when they match an allowlist.
 func TestCaptureFailureDiagnostics(t *testing.T) {
 	for _, copyFile := range []bool{false, true} {
-		tr := NewOpenSSH(t.TempDir(), "15m", 64, OpenSSHOptions{})
+		tr := newTestOpenSSH(t, "15m", 64, OpenSSHOptions{})
 		tr.Runner = fake(execCaptureFailedRC, "permission denied: private fixture data", false)
 		var err error
 		wantClass, wantDiagnostic := "ssh", "ssh output capture incomplete"

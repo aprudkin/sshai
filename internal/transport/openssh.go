@@ -41,6 +41,9 @@ const execStartFailedRC = -2
 // signature without presenting a direct-child exit as a remote result.
 const execCaptureFailedRC = -3
 
+// Socket preparation has no raw diagnostic or remote exit to retain.
+const execControlFailedRC = -4
+
 // Transport diagnostics are deliberately an allowlist of fixed phrases.
 // ssh/scp stderr may contain hostnames, key fingerprints, algorithm offers,
 // paths, or configuration excerpts; none of that raw text may cross the
@@ -57,6 +60,9 @@ var transportDiagnosticPatterns = []struct {
 	{[]byte("no matching host key type"), "no matching host key type"},
 	{[]byte("no matching key exchange method"), "no matching key exchange method"},
 	{[]byte("no matching cipher found"), "no matching cipher"},
+	{[]byte("controlpath too long"), "control socket path too long"},
+	{[]byte("unix_listener: path"), "control socket unavailable"},
+	{[]byte("cannot bind to path"), "control socket unavailable"},
 	{[]byte("connection timed out"), "connection timed out"},
 	{[]byte("operation timed out"), "connection timed out"},
 	{[]byte("connection refused"), "connection refused"},
@@ -94,6 +100,8 @@ type OpenSSH struct {
 	controlPersist string
 	streamCap      int64
 	options        OpenSSHOptions
+	controlOnce    sync.Once
+	controlErr     error
 
 	hostKeyMu       sync.Mutex
 	hostKeyBefore   map[string]HostKey
@@ -120,9 +128,11 @@ type OpenSSHOptions struct {
 
 // NewOpenSSH builds an OpenSSH transport. On OpenSSH clients that support
 // connection sharing, every Exec and Put call carries the same ControlMaster
-// options — each its own argv element — pointed at a socket directory under
-// controlDir and persisted for controlPersist after the last client
-// disconnects. Windows OpenSSH clients do not support that Unix socket shape,
+// options — each its own argv element — persisted for controlPersist after
+// the last client disconnects. Short control directories are retained; paths
+// that cannot fit a Unix listener use a private, user/root-scoped /tmp directory.
+// The default runner creates and validates the directory before connecting.
+// Windows OpenSSH clients do not support that Unix socket shape,
 // so they keep the same transport semantics without ControlMaster options.
 // streamCap bounds the combined stdout+stderr captured per call; a remote
 // command that writes past it is killed and its Result reports Truncated.
@@ -133,6 +143,9 @@ func NewOpenSSH(controlDir, controlPersist string, streamCap int64, options Open
 		controlPersist: controlPersist,
 		streamCap:      streamCap,
 		options:        options,
+	}
+	if openSSHControlMasterSupported {
+		tr.controlDir, tr.controlErr = controlSocketDir(controlDir)
 	}
 	tr.Runner = tr.run
 	tr.hostKeyLookup = tr.lookupHostKeys
@@ -500,6 +513,9 @@ func (tr *OpenSSH) Exec(host, command string, stdin []byte, timeout time.Duratio
 	if rc == execCaptureFailedRC {
 		return Result{}, newTransportError("ssh", "ssh output capture incomplete")
 	}
+	if rc == execControlFailedRC {
+		return Result{}, newTransportError("ssh", "control socket unavailable")
+	}
 	if rc == 255 {
 		return Result{}, NewTransportError("ssh", out)
 	}
@@ -528,6 +544,12 @@ func (tr *OpenSSH) Exec(host, command string, stdin []byte, timeout time.Duratio
 // own diagnostics are diverted to a private log so they cannot enter events.
 func (tr *OpenSSH) ExecStream(host, command string, stdin []byte, timeout time.Duration, output func([]byte)) (Result, error) {
 	deadline := time.Now().Add(timeout)
+	if _, err := Remaining(deadline); err != nil {
+		return Result{}, err
+	}
+	if err := tr.prepareControlDir(); err != nil {
+		return Result{}, newTransportError("ssh", "control socket unavailable")
+	}
 	if err := tr.prepareAcceptedHostKey(host, deadline); err != nil {
 		if _, budgetErr := Remaining(deadline); budgetErr != nil {
 			return Result{}, budgetErr
@@ -729,6 +751,9 @@ func (tr *OpenSSH) Put(host, localPath, remotePath string, timeout time.Duration
 	if rc == execStartFailedRC {
 		return newTransportError("scp", "scp process failed to start")
 	}
+	if rc == execControlFailedRC {
+		return newTransportError("scp", "control socket unavailable")
+	}
 	// Put has no truncated-result surface. The legacy Runner encodes cap
 	// overflow as oversized output, even if the direct SCP child exited zero.
 	if rc == execCaptureFailedRC || int64(len(out)) > max(tr.streamCap, 0) {
@@ -746,7 +771,18 @@ func (tr *OpenSSH) Put(host, localPath, remotePath string, timeout time.Duration
 // run is the default Runner, backed by os/exec. It feeds stdin to the
 // child and captures combined stdout+stderr through tr.streamCap.
 func (tr *OpenSSH) run(argv []string, stdin []byte, timeout time.Duration) (int, []byte, bool) {
-	result := runner.Run(argv, stdin, timeout, tr.streamCap)
+	deadline := time.Now().Add(timeout)
+	if timeout <= 0 {
+		return -1, nil, true
+	}
+	if err := tr.prepareControlDir(); err != nil {
+		return execControlFailedRC, nil, false
+	}
+	remaining, err := Remaining(deadline)
+	if err != nil {
+		return -1, nil, true
+	}
+	result := runner.Run(argv, stdin, remaining, tr.streamCap)
 	if result.StartErr != nil {
 		return execStartFailedRC, result.Output, result.TimedOut
 	}

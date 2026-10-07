@@ -15,7 +15,7 @@ func TestExecInheritedOutputRespectsRemainingBudget(t *testing.T) {
 			for _, timeout := range []time.Duration{time.Second, 100 * time.Millisecond} {
 				t.Run(fmt.Sprintf("follow%v/exit%d/%s", follow, exitCode, timeout), func(t *testing.T) {
 					writeBudgetSSH(t, fmt.Sprintf("printf 'before\\n'\n(sleep 0.4; printf 'after\\n') &\nexit %d\n", exitCode))
-					tr := NewOpenSSH(t.TempDir(), "15m", 1024, OpenSSHOptions{})
+					tr := newTestOpenSSH(t, "15m", 1024, OpenSSHOptions{})
 					var preview strings.Builder
 					started := time.Now()
 					var res Result

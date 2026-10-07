@@ -73,6 +73,12 @@ is never exposed. Only captured output up to the configured stream cap is
 retained; output beyond that cap is discarded and marked truncated=1.
 Query the file locally with ` + "`sshai q`" + ` or your own tools.
 
+Unix control sockets normally use <SSHAI_ROOT>/cm. Paths that cannot safely
+fit use a private, user/root-scoped /tmp/sshai-cm-<hash> directory instead;
+artifact/state storage, routing, and host-key policy are unchanged.
+Unavailable socket directories report a canonical transport diagnostic.
+Windows clients continue to omit Unix connection-sharing options.
+
 Saved transport/setup failures add failure-phase=probe|stage|exec and
 remote-completion=not_started|unknown to the status line (JSON fields
 failure_phase and remote_completion, also in follow completed outcomes).
