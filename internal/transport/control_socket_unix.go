@@ -9,5 +9,6 @@ import (
 
 func controlDirOwned(info os.FileInfo) bool {
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	return ok && stat.Uid == uint32(os.Getuid())
+	// Widen both values so the platform int UID is never truncated.
+	return ok && int64(stat.Uid) == int64(os.Getuid())
 }
