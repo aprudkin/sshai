@@ -257,9 +257,26 @@ recommendation scores of 2/2; these are model judgments, not proof of equal qual
 
 One denied fixture-write attempt remains a nonconforming outcome. These are descriptive
 full-population totals; the conforming comparison and confidence interval are unavailable,
-with no clean-subset substitution. No Linux/Windows SSH phase ran, and no remote or monetary
-effect follows. See the [local study report](docs/benchmarks/issue10-local-measured-results.md)
+with no clean-subset substitution. This local cohort establishes no remote or monetary
+effect. See the [local study report](docs/benchmarks/issue10-local-measured-results.md)
 for all 18 pairs, secondary metrics and evidence limitations.
+
+### Linux autonomous-session study
+
+The separate Linux synthetic-task cohort reported on 2026-10-09 retained **36 original
+diagnostic sessions**, using `gpt-5.6-sol` / high and Codex 0.151.0. Across all 18 pairs,
+cumulative input was **1,711,462 tokens with sshai versus 1,641,366 with ordinary
+execution: 4.27% higher**, not a saving. Cached input is included in both totals.
+The separate model assessor marked **14/18 sshai answers and 16/18 baseline answers
+successful** under the complete rubric; both arms had 18/18 model-assessed correct diagnoses.
+The prescribed no-observed-degradation criterion failed; these are not human grades.
+
+Only 15/18 pairs have fully supported recorded conformance. All original outcomes remain
+in the descriptive totals; the full conforming comparison and confidence interval are
+unavailable, with no clean-subset substitution. Linux and local results are not pooled.
+Windows remains unqualified, and no monetary effect is established. See the
+[Linux study report](docs/benchmarks/issue10-linux-measured-results.md) for quality scores,
+all original pairs, retained exceptions and measurement limitations.
 
 ### Controlled v1.1 benchmark
 

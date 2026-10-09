@@ -1,11 +1,51 @@
-# Issue 10: prospective remote-series preparation
+# Issue 10: remote-series execution and preparation
 
 **Issue:** [sshai#10](https://github.com/aprudkin/sshai/issues/10).
 The [methodology amendment](issue10-methodology-amendment.md) remains authoritative.
 The [completed local report](issue10-local-measured-results.md) is a distinct retained
 population, not qualification of either remote platform.
 
-## Current boundary
+## Linux measurement status
+
+The four original Linux pilot sessions and all 36 original measured diagnostic sessions
+completed once on 2026-10-06, with no replacement, retry or schedule change. Independent
+technical review qualified all measured finals and cumulative usage. Recorded conformance
+is separately failed for slot 18 and unknown for slots 24 and 29; only 15/18 pairs have
+fully supported conformance. The complete population remains retained.
+
+Six original same-task measurement assessment contexts completed once in L01–L06 order
+on 2026-10-09, with both arms and all three repetitions per task. Fresh independent technical
+review qualified their finals separately; all response publications passed objective
+schema/citation-coordinate validation. The retained model grades yield 16/18 baseline and
+14/18 sshai rubric-successful answers, despite correct diagnoses in all answers. The prescribed
+no-observed-degradation criterion fails. These model judgments do not establish human truth.
+The full conforming estimate remains unavailable. See the
+[Linux results report](issue10-linux-measured-results.md) for complete descriptive results.
+
+Study consumption is now 80/120 diagnostic slots and 15/24 assessor contexts. Assessor
+usage is separate from diagnostic usage; this is caller accounting, not provider billing.
+
+## Windows qualification status
+
+Windows remains unqualified. The user confirmed the existing target is a working server
+and limited investigation to its separate synthetic test directory; a new server is not
+an automatic prerequisite. An independently reviewed controller comparison created the
+PowerShell image suspended and immediately terminated it without resumption or input.
+The one-process job became empty; the owned comparison fixture was removed with guarded
+cleanup. This does not establish the cause of the earlier LPAC startup error 2.
+
+On 2026-10-09, the user explicitly approved one temporary task-named AppContainer profile
+for the existing SSH user, bounded no-model synthetic checks and guarded removal after
+terminal processes. This one-time scope includes only the new profile's per-user
+folders/ACL/registry state outside the test directory. It does not permit new OS users,
+global/runtime ACL changes, packages, service/firewall/host-key changes, production-data
+access, model requests or further profiles. New implementation requires independent
+review before use. This recorded decision is not a reusable permission grant or Windows
+study launch approval.
+
+## Preparation checkpoint before the Linux pilot
+
+The following records the earlier no-model preparation, not the current slot consumption.
 
 The user resumed the remaining issue with new task-wide advance autonomous authorization.
 Necessary implementation, verification, independent review and repository delivery are
