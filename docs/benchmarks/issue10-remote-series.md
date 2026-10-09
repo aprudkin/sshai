@@ -43,6 +43,22 @@ access, model requests or further profiles. New implementation requires independ
 review before use. This recorded decision is not a reusable permission grant or Windows
 study launch approval.
 
+That allowance has now been consumed by one independently reviewed profile-first
+no-model probe: exactly one `CreateAppContainerProfile` and one `DeleteAppContainerProfile`
+call both returned `S_OK`. The exact profile association was qualified, and profile
+mapping/folder absence after deletion was verified. Guarded cleanup removed the owned
+synthetic fixture while preserving its parent, consumption marker and earlier diagnostics.
+
+The LPAC `CreateProcessW` call returned Win32 error 203
+([`ERROR_ENVVAR_NOT_FOUND`](https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-))
+before token validation, resumption or any runtime canary. The missing environment
+option/internal lookup is unknown; this result does not establish the earlier error-2
+cause. Listener/native handles were closed without reported cleanup errors. These are
+source/API-bound receipts, not independent OS tracing. No model or study slot was consumed.
+Windows runtime/data/network/descendant qualification remains unavailable. Source-only
+environment-contract investigation can continue; a further live profile probe requires
+a new explicit allowance, not reuse of this consumed grant.
+
 ## Preparation checkpoint before the Linux pilot
 
 The following records the earlier no-model preparation, not the current slot consumption.
