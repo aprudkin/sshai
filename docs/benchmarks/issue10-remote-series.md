@@ -59,6 +59,23 @@ Windows runtime/data/network/descendant qualification remains unavailable. Sourc
 environment-contract investigation can continue; a further live profile probe requires
 a new explicit allowance, not reuse of this consumed grant.
 
+The user subsequently allowed one additional no-model profile test, changing only the
+child environment by adding `LOCALAPPDATA` from the current user's Windows known-folder
+API. Path qualification and broker-field presence/equality checks passed. With that
+nine-entry block, `CreateProcessW` created a suspended process and job assignment
+succeeded. Token validation then returned Win32 error 87 (`ERROR_INVALID_PARAMETER`);
+the exact failed query and actual token qualification remain unknown. The process was
+never resumed, so no runtime canary ran. It was terminated and the job emptied; listener
+and native resources were cleaned without reported errors. The additional profile was
+created/deleted once with `S_OK`, its absence verified and its owned fixture removed.
+
+Both individual allowances are now consumed: two profile creations and two deletions
+in total, with no model/study slots. This preparation advanced past error 203, but fresh
+profile/SID/nonce/CWD and no same-profile counterfactual preclude claims of `LOCALAPPDATA`
+necessity, sufficiency or historical causality. Requested LPAC attributes are not actual
+token proof. Windows remains unqualified; token-API support investigation is separate
+from any further live profile allowance.
+
 ## Preparation checkpoint before the Linux pilot
 
 The following records the earlier no-model preparation, not the current slot consumption.
