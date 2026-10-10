@@ -69,12 +69,39 @@ never resumed, so no runtime canary ran. It was terminated and the job emptied; 
 and native resources were cleaned without reported errors. The additional profile was
 created/deleted once with `S_OK`, its absence verified and its owned fixture removed.
 
-Both individual allowances are now consumed: two profile creations and two deletions
-in total, with no model/study slots. This preparation advanced past error 203, but fresh
+At that checkpoint, both individual allowances were consumed: two profile creations
+and two deletions in total, with no model/study slots. This preparation advanced past error 203, but fresh
 profile/SID/nonce/CWD and no same-profile counterfactual preclude claims of `LOCALAPPDATA`
 necessity, sufficiency or historical causality. Requested LPAC attributes are not actual
 token proof. Windows remains unqualified; token-API support investigation is separate
 from any further live profile allowance.
+
+A subsequent independently reviewed read-only query of the controller's own token
+rejected the four-byte class-46 request with error 87. Its payload was not interpreted;
+this is compatibility evidence for that request/context, not proof of the historical
+failed query or child identity. No new profile or test child was created.
+
+The user then approved one further profile with a never-resumed regular-AppContainer
+control and an LPAC candidate. Both actual tokens passed documented AppContainer,
+zero-capability, exact-profile-SID and low-integrity checks. An in-memory `AccessCheck`
+comparison granted exactly mask 3 to the control and mask 2 to the candidate, with zero
+privileges used. The control was terminal before candidate creation; the candidate had
+an independent job. This confirms effective disregard of `ALL_APPLICATION_PACKAGES`
+grants in that controlled setup, not universal LPAC identity or arbitrary-code confinement.
+
+Only after those gates did the candidate resume. It exited with `0xC0000142`, capturing
+zero bytes and producing none of the runtime canary markers. The candidate job accounted
+for two processes, but the second process's origin is unknown; without its marker it is
+not a proven canary descendant. Runtime/data/network/stdio/descendant qualification
+remains unavailable. The exit status alone identifies neither a DLL nor an ACL cause.
+
+Both jobs were terminal/empty and native resources/listener were cleaned without reported
+errors. The new profile was created/deleted once with `S_OK`, its absence verified, and
+its six-entry owned fixture removed while preserving the parent and earlier evidence.
+All three individual profile allowances are consumed: three creations/three deletions,
+no retry or model/study slots. Read-only startup diagnosis can continue; another live
+profile action requires a new explicit allowance. These remain source/API-bound receipts,
+not independent OS tracing or Windows study readiness.
 
 ## Preparation checkpoint before the Linux pilot
 
