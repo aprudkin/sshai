@@ -183,6 +183,37 @@ historical/current basis. Historical full storage verification remains incomplet
 GUI object existence, session, restoration and closure remain unknown. Neither full
 rollback nor Windows runtime/study readiness follows, and no model/study slot was added.
 
+A later source-bound READY seam analysis reproduced the exact producer/parser in local
+synthetic tests without confirming a protocol incompatibility. The user then separately
+allowed one profileless helper-only observation: a fresh derived SID and synthetic fixture,
+one ordinary same-user helper/job and one new private noninteractive windowstation/desktop.
+No SDK profile creation/deletion, LPAC candidate, qualification or model process was allowed.
+Fresh runtime and instruction reviews cleared the preparation; an obsolete test entrypoint
+was corrected and re-reviewed without changing runtime bytes. The combined local suite
+passed 95 groups, 42 C callback cases and 238 deadline-boundary cases; these are synthetic
+checks, not Windows API parity.
+
+The sole live invocation captured one exact bound READY record: 430 stdout bytes and zero
+stderr bytes, with the helper's verified/restored fields. The original full Ready gate
+nevertheless failed at `RequireRunning.accounting`: the primary was nonsignaled and the
+owned job reported two active processes and two lifetime processes. Their origin remains
+unknown. The controller created, assigned and resumed its helper once; neither valid READY
+nor its GUI attestation establishes independent OS attribution or historical failure cause.
+
+Release was withheld. Owned job termination returned success; final queries reported the
+primary signaled with exit 90 and the job empty. All nine owned handle closes succeeded.
+No CLOSED acknowledgment was received, so final GUI closure and helper lifetime-capture
+closure remain unknown. The entire fresh fixture and claim were retained, with zero removal
+requests. Final parent-preservation readback was not reached; this is not evidence of parent
+deletion. SDK Create/Delete calls were zero/zero and cumulative actual attempts remain
+five/five. The new one-shot allowance is consumed, without retry or further cleanup.
+
+The complete final CLI receipt was captured without transport error or truncation; delivery
+exit 0 does not turn the failed/inconclusive gate into readiness. This different profileless
+context does not reproduce or regrade the fifth created-profile attempt. All historical
+GUI unknowns and incomplete storage verification remain unchanged; Windows qualification
+and study readiness remain unavailable. No model/study slot was added.
+
 ## Preparation checkpoint before the Linux pilot
 
 The following records the earlier no-model preparation, not the current slot consumption.
