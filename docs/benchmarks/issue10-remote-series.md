@@ -157,11 +157,31 @@ absence were observed, but the remaining ancestry/SDK-association sequence stopp
 `FileNotFoundException`. Full storage verification was not established; the precise
 failing subquery/path is unrecorded, and no repeat Delete is authorized.
 
-No fixture removal was attempted. The fixture and journal remain, with final parent/claim
-preservation readback not reached. These were never deletion targets, but their final
-preservation is not independently verified. GUI object existence, session, restoration
-and closure remain unknown; neither complete rollback nor Windows study readiness is
-claimed. No profile/helper/qualification/startup or model/study run was added.
+At that checkpoint, no fixture removal had been attempted. The fixture and journal
+remained, with final parent/claim preservation readback not reached. These were never
+deletion targets, but their final preservation was not independently verified. GUI object
+existence, session, restoration and closure remained unknown; neither complete rollback
+nor Windows study readiness was claimed. No profile/helper/qualification/startup or
+model/study run was added.
+
+A new, separately authorized fixture-only invocation accepted a narrower evidence basis:
+the earlier qualified-folder absence observation plus renewed exact owner/SID, mapping
+and current SDK-association queries, without the unavailable historical folder path.
+The standalone cleanup code passed 149 synthetic tests twice, eight behavioral mutation
+checks and fresh independent review before its sole invocation. It has no SDK Create/Delete
+binding and does not reuse the consumed recovery entry point.
+
+That invocation verified removal of four files, two empty subdirectories and the empty
+fixture root. Final readbacks verified preservation of the parent marker, consumed claim
+and old recovery journal. SDK Create/Delete calls were zero/zero; cumulative actual
+attempts remain five/five. The new fixture-only allowance is consumed, without retry.
+
+Current mapping absence was observed, but the SDK folder query returned `0x80070002`
+with no usable path. Current physical-path and ancestry checks therefore remain
+unavailable, not passed. Fixture absence is verified only on the accepted limited
+historical/current basis. Historical full storage verification remains incomplete;
+GUI object existence, session, restoration and closure remain unknown. Neither full
+rollback nor Windows runtime/study readiness follows, and no model/study slot was added.
 
 ## Preparation checkpoint before the Linux pilot
 
