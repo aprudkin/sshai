@@ -214,6 +214,30 @@ context does not reproduce or regrade the fifth created-profile attempt. All his
 GUI unknowns and incomplete storage verification remain unchanged; Windows qualification
 and study readiness remain unavailable. No model/study slot was added.
 
+A further separately authorized helper-only invocation added bounded diagnostics through
+its exact owned job handle, without changing creation flags or the original gates. Fresh
+runtime and instruction reviews reported no actionable findings; Main and the runtime
+reviewer independently replayed 150 synthetic groups and 42 host C cases before clearance.
+The sole invocation captured valid bound READY with 427 stdout bytes and zero stderr, but
+the original gate again failed with nonsignaled primary and active2/total2 accounting.
+
+Both bounded class3 samples reported two listed members, unchanged between samples.
+Retained process handles passed exact-job membership checks before and after metadata
+queries. Accepted executable basenames were `helper.exe` and `conhost.exe`; handle-bound
+creation times were retained privately. These source/API-bound samples do not establish
+parent, process origin, continuous membership, signed-binary identity or historical a20
+attribution. The original flags already include `CREATE_NO_WINDOW`; the basename alone
+neither explains that behavior nor permits a weaker gate. All 12 diagnostic requests
+returned without API failures; the one added process handle was closed successfully.
+
+Release remained withheld. Owned termination yielded exit 90 and an empty job, with all
+nine original handle closes successful. No CLOSED was received: GUI/lifetime closure remain
+unknown, and the entire additional fixture and claim remain retained with zero removals.
+Final parent readback was unreached, not evidence of deletion. SDK calls were zero/zero,
+cumulative actual attempts remain five/five, and this allowance is consumed without retry.
+Complete final CLI capture and delivery exit 0 do not establish readiness. Existing retained
+fixtures, historical unknowns and study consumption remain unchanged; Windows is unqualified.
+
 ## Preparation checkpoint before the Linux pilot
 
 The following records the earlier no-model preparation, not the current slot consumption.
