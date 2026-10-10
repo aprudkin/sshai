@@ -261,6 +261,32 @@ unknowns were untouched and remain unresolved. This successful ordinary profilel
 observation is not LPAC, USER32-candidate, PowerShell or Windows study qualification; no
 model/study slot was added.
 
+The user separately allowed one fresh profile-backed native USER32/LPAC comparison: an
+ordinary detached helper, never-resumed regular AppContainer control and one candidate.
+Before the live request, Main's isolated replay passed the 150 preparation tests,
+12 correction regressions and CompileOnly. Independent runtime and authority reviews
+identified four scoped defects; all were corrected prospectively and resolved by the same
+reviewers' affected-scope re-reviews. Static review and fake checks did not establish native
+Windows filesystem/ACL behavior or startup parity.
+
+The one request delivered in 5.974 seconds, with CLI/remote exits 0 but a failed comparison.
+Fixture staging rejected `Fixture.rootExactPrivateSecurity` with `0x80131509` before SDK
+Create. The exclusive claim was created, staging remained incomplete, and no profile
+ownership, helper/control/candidate, actual-token proof, marker or job qualification was
+reached. SDK Create/Delete requests were zero/zero; entry and HRESULT fields remained null,
+not fabricated zero results. Cumulative actual attempts remain five/five.
+
+The complete 3,352-byte artifact explicitly omitted essential storage/owned-ledger evidence
+through its bounded fallback. It is an incomplete bounded-unknown receipt, not successful
+qualification or complete security/storage proof. Actual descriptor values were not
+captured; the native mismatch cause remains unknown. No removal was requested: the new
+staged fixture and consumed claim remain retained and unqualified. Final old-parent/new-claim
+preservation readback was reported proven; cleanup-specific absence/preservation flags
+were unreached, not evidence of deletion. Main verified receipt/envelope hashes and all
+1,458 manifest-listed source files plus 16,453 historical entries unchanged in bytes/modes.
+This allowance is consumed without retry or extra remote cleanup; old retained fixtures,
+historical unknowns and study consumption remain unchanged. Windows remains unqualified.
+
 ## Preparation checkpoint before the Linux pilot
 
 The following records the earlier no-model preparation, not the current slot consumption.
