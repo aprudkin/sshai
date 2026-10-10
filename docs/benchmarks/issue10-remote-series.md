@@ -124,9 +124,30 @@ image. No trusted descendant or full PowerShell/runtime/study readiness follows.
 
 All four phases were terminal with known resource cleanup. The new profile was
 created/deleted once with `S_OK`, its absence verified, and its eight-entry fixture
-removed while preserving the parent and earlier evidence. All four individual profile
-allowances are now consumed: four creations/four deletions, without retry or model/study
-slots. No existing ACL, environment, desktop/windowstation or runtime was changed.
+removed while preserving the parent and earlier evidence. At that checkpoint, four
+individual profile allowances were consumed: four creations/four deletions, without
+retry or model/study slots. No existing ACL, environment, desktop/windowstation or runtime
+was changed.
+
+A fifth separate allowance covered one new profile and a temporary private noninteractive
+windowstation/desktop, exact-package rights and low labels, with one ordinary native
+helper and at most two USER32 qualification processes. The reviewed preparation's
+lifetime-job-count cleanup defect was corrected and independently re-reviewed before
+its single invocation; synthetic checks did not establish live Windows behavior.
+
+That invocation created the profile once with `S_OK` and launched one helper, then stopped
+at helper readiness with `InvalidOperationException`. Neither qualification process was
+created or resumed; no actual-token/functional comparison or USER32 startup result was
+obtained. READY/CLOSED proofs, the precise failure cause and actual private-object
+creation/restoration/closure state are unavailable. The last traced native API succeeded;
+its trace does not identify the failing operation.
+
+The receipt reports the helper primary signaled/job empty and six successful handle
+closures, but full helper/object cleanup remains unknown. Profile deletion and fixture
+cleanup were withheld, preserving the new profile, fixture and consumed journal without
+retry. All five profile allowances are consumed: five creations/four deletions, with the
+fifth profile retained pending qualified recovery. No model/study slots were consumed;
+Windows runtime/study readiness remains unavailable.
 
 ## Preparation checkpoint before the Linux pilot
 
