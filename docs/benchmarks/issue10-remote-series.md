@@ -145,9 +145,23 @@ its trace does not identify the failing operation.
 The receipt reports the helper primary signaled/job empty and six successful handle
 closures, but full helper/object cleanup remains unknown. Profile deletion and fixture
 cleanup were withheld, preserving the new profile, fixture and consumed journal without
-retry. All five profile allowances are consumed: five creations/four deletions, with the
-fifth profile retained pending qualified recovery. No model/study slots were consumed;
-Windows runtime/study readiness remains unavailable.
+retry. At that checkpoint, all five profile allowances were consumed: five creations/four
+deletions, with the fifth profile retained pending qualified recovery. No model/study
+slots were consumed; Windows runtime/study readiness remained unavailable.
+
+A separately authorized storage-only recovery accepted persistent GUI uncertainty. Its
+cleanup code and deadline correction passed independent review before one invocation.
+The first fifth-profile SDK Delete returned `S_OK`: cumulative actual Create/Delete
+attempts are now five/five. Exact mapping absence and preflight-bound physical-folder
+absence were observed, but the remaining ancestry/SDK-association sequence stopped with
+`FileNotFoundException`. Full storage verification was not established; the precise
+failing subquery/path is unrecorded, and no repeat Delete is authorized.
+
+No fixture removal was attempted. The fixture and journal remain, with final parent/claim
+preservation readback not reached. These were never deletion targets, but their final
+preservation is not independently verified. GUI object existence, session, restoration
+and closure remain unknown; neither complete rollback nor Windows study readiness is
+claimed. No profile/helper/qualification/startup or model/study run was added.
 
 ## Preparation checkpoint before the Linux pilot
 
