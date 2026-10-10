@@ -238,6 +238,29 @@ cumulative actual attempts remain five/five, and this allowance is consumed with
 Complete final CLI capture and delivery exit 0 do not establish readiness. Existing retained
 fixtures, historical unknowns and study consumption remain unchanged; Windows is unqualified.
 
+The user next allowed one detached helper-only observation, replacing `CREATE_NO_WINDOW`
+with `DETACHED_PROCESS` while preserving the helper body, explicit pipe inheritance,
+environment, diagnostic safeguards and all gates. Fresh bindings changed the header/image;
+this was not an exact same-context counterfactual. Main replayed 150 synthetic groups,
+42 host C cases and four flag cases; fresh runtime and authority reviews found no actionable
+issues. The runtime reviewer independently reran the four flag cases, not the full suite.
+
+The single invocation passed the original full helper gate: valid READY, nonsignaled primary,
+active1/total1. RELEASE and CLOSED were valid; the helper exited 0, the job emptied and all
+nine original handle closes succeeded, with no termination request or added diagnostic
+handle. Exact capture was READY428 plus CLOSED429 bytes, zero stderr and no extra record.
+Both bounded job samples listed one member, with accepted basename `helper.exe`; this is
+sampled identity, not global conhost absence, origin or historical causal proof.
+
+Operation-scoped GUI/resource/lifetime and storage closure gates passed. The reviewed body
+removed the new helper image, marker, empty tmp and root, verified absence and fixed parent
+metadata, and preserved its consumed claim. Complete final CLI capture was retained. SDK
+calls were zero/zero and cumulative actual attempts remain five/five; this allowance is
+consumed without retry. The two earlier retained fixtures/claims and historical GUI/storage
+unknowns were untouched and remain unresolved. This successful ordinary profileless-helper
+observation is not LPAC, USER32-candidate, PowerShell or Windows study qualification; no
+model/study slot was added.
+
 ## Preparation checkpoint before the Linux pilot
 
 The following records the earlier no-model preparation, not the current slot consumption.
