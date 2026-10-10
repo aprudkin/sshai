@@ -98,10 +98,35 @@ remains unavailable. The exit status alone identifies neither a DLL nor an ACL c
 Both jobs were terminal/empty and native resources/listener were cleaned without reported
 errors. The new profile was created/deleted once with `S_OK`, its absence verified, and
 its six-entry owned fixture removed while preserving the parent and earlier evidence.
-All three individual profile allowances are consumed: three creations/three deletions,
-no retry or model/study slots. Read-only startup diagnosis can continue; another live
-profile action requires a new explicit allowance. These remain source/API-bound receipts,
+At that checkpoint, three individual profile allowances were consumed: three creations
+and three deletions, with no retry or model/study slots. Read-only startup diagnosis could
+continue; another live profile action required a new explicit allowance. These remain source/API-bound receipts,
 not independent OS tracing or Windows study readiness.
+
+Read-only inspection subsequently verified that the installed native PowerShell host
+statically imports USER32/SHELL32. Exact process/time event queries did not identify the
+faulting module or second job member. A bounded inventory found a service-session
+windowstation and `Default` desktop with no selected Everyone/AAP/ARAP ACEs. This is
+current controller context, not an effective-access or historical-child attribution.
+
+Under a fourth separate one-profile allowance, two reviewed minimal native images were
+compared: KERNEL32-only entry logic and the same logic with an added static USER32 import,
+never invoked by the entry code. Each image had its own never-resumed regular control and
+gated LPAC candidate. All four actual-token checks and functional control-3/candidate-2
+checks passed. The KERNEL32-only candidate emitted its exact 41-byte startup nonce and
+exited 0; the USER32-import candidate emitted nothing and exited `0xC0000142`.
+
+This narrows the added USER32/dependency initialization boundary in that new controlled
+context. It does not identify a precise DLL operation, prove a desktop-ACL cause, or
+retrospectively attribute the earlier PowerShell failure. Both candidate jobs counted
+two processes; the extra origins remain unknown, even for the successful no-child-code
+image. No trusted descendant or full PowerShell/runtime/study readiness follows.
+
+All four phases were terminal with known resource cleanup. The new profile was
+created/deleted once with `S_OK`, its absence verified, and its eight-entry fixture
+removed while preserving the parent and earlier evidence. All four individual profile
+allowances are now consumed: four creations/four deletions, without retry or model/study
+slots. No existing ACL, environment, desktop/windowstation or runtime was changed.
 
 ## Preparation checkpoint before the Linux pilot
 
