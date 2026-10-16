@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "decisions": {},
+  "preferences": {
+    "domainLayout": "single-context",
+    "tracker": {
+      "provider": "github",
+      "host": "github.com",
+      "repository": "aprudkin/sshai"
+    },
+    "triageLabels": {
+      "needs-triage": "needs-triage",
+      "needs-info": "needs-info",
+      "ready-for-agent": "ready-for-agent",
+      "ready-for-human": "ready-for-human",
+      "wontfix": "wontfix"
+    }
+  }
+}

@@ -7,8 +7,6 @@
   Captured output is saved locally for passports, JSON results, queries, diffs, and history.
 - Preserve the transport-versus-authorization boundary. Local execution is not an SSH
   fallback, readonly-policy check, or security sandbox.
-- For issue-backed work in this repository, read [docs/agents/issue-tracker.json](docs/agents/issue-tracker.json)
-  for the tracker target and project/area labels; apply the global issue workflow.
 - Before a material implementation change, follow the issue-discussion requirement in
   [CONTRIBUTING.md](CONTRIBUTING.md). For suspected vulnerabilities or credential exposure,
   follow private reporting in [SECURITY.md](SECURITY.md), not a public issue.
@@ -120,3 +118,12 @@ go tool govulncheck ./...                       # tool pinned through go.mod
   `scripts/render-homebrew-formula.sh` with `release/homebrew/sshai.rb.tmpl` for the formula.
   Change source scripts/templates rather than generated release assets; publishing a stable
   tag requires its commit on `main` and passed CI.
+
+## Agent skills
+
+- Before reading, creating, or updating issues, read
+  [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
+- Before classifying issues, read
+  [docs/agents/triage-labels.md](docs/agents/triage-labels.md).
+- Before exploring the project, read
+  [docs/agents/domain.md](docs/agents/domain.md).
