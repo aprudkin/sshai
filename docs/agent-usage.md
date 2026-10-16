@@ -131,9 +131,11 @@ even for identical output. Existing history is not rewritten.
 Artifact `gc` is not a complete purge: it retains history rows and does not delete shell-state
 or baseline snapshots, remote staged files, host facts, audit history or transport state.
 
-Verification for this feature uses synthetic wrappers and injected transports, with local
-PowerShell 7 runtime checks when available. PowerShell 7 success is not Windows PowerShell 5.1
-verification; unavailable 5.1 and live Windows/OpenSSH checks remain explicit verification gaps.
+Verification combines synthetic wrappers/injected transports with the separately authorized
+[Windows live parity controls](windows-parity.md#issue-42-no-shell-state-live-verification),
+including Windows PowerShell 5.1 and PowerShell 7. Consult that record for tested versions,
+scenarios and remaining limits. PowerShell 7 success alone is not Windows PowerShell 5.1
+verification; unavailable checks must be reported rather than inferred.
 
 ## SSH control sockets
 
