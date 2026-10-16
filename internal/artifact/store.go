@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS runs (
   local_error TEXT NOT NULL DEFAULT '',
   failure_phase TEXT NOT NULL DEFAULT '',
   remote_completion TEXT NOT NULL DEFAULT '',
+  shell_state_mode TEXT NOT NULL DEFAULT '',
   accepted_host_key_algorithm TEXT NOT NULL DEFAULT '',
   accepted_host_key_fingerprint TEXT NOT NULL DEFAULT '',
   bytes INTEGER NOT NULL, lines INTEGER NOT NULL,
@@ -117,6 +118,7 @@ func ensureRunColumns(db *sql.DB) error {
 		{"local_error", "local_error TEXT NOT NULL DEFAULT ''"},
 		{"failure_phase", "failure_phase TEXT NOT NULL DEFAULT ''"},
 		{"remote_completion", "remote_completion TEXT NOT NULL DEFAULT ''"},
+		{"shell_state_mode", "shell_state_mode TEXT NOT NULL DEFAULT ''"},
 		{"accepted_host_key_algorithm", "accepted_host_key_algorithm TEXT NOT NULL DEFAULT ''"},
 		{"accepted_host_key_fingerprint", "accepted_host_key_fingerprint TEXT NOT NULL DEFAULT ''"},
 	}
@@ -181,11 +183,11 @@ func (s *Store) Save(m Meta, key string, data []byte) (Meta, error) {
 	defer tx.Rollback()
 
 	res, err := tx.Exec(
-		`INSERT INTO runs (ts,host,ctx,command,key,exit,transport_error,transport_diagnostic,setup_error,setup_diagnostic,local_error,failure_phase,remote_completion,accepted_host_key_algorithm,accepted_host_key_fingerprint,bytes,lines,sha256,duration_ms,truncated,binary,delta_base)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO runs (ts,host,ctx,command,key,exit,transport_error,transport_diagnostic,setup_error,setup_diagnostic,local_error,failure_phase,remote_completion,accepted_host_key_algorithm,accepted_host_key_fingerprint,bytes,lines,sha256,duration_ms,truncated,binary,delta_base,shell_state_mode)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		m.Ts.UTC().Format(time.RFC3339), m.Host, m.Ctx, m.Command, key, m.Exit, m.TransportErr, m.TransportDiagnostic, m.SetupErr, m.SetupDiagnostic, m.LocalError, m.FailurePhase, m.RemoteCompletion,
 		m.AcceptedHostKeyAlgorithm, m.AcceptedHostKeyFingerprint, m.Bytes, m.Lines, m.SHA256, m.DurationMs,
-		boolToInt(m.Truncated), boolToInt(m.Binary), m.DeltaBase,
+		boolToInt(m.Truncated), boolToInt(m.Binary), m.DeltaBase, m.ShellStateMode,
 	)
 	if err != nil {
 		return Meta{}, fmt.Errorf("insert run: %w", err)
@@ -219,11 +221,11 @@ func (s *Store) Get(id string) (Meta, string, error) {
 	var tsStr string
 	var truncated, binary, pruned int
 	row := s.DB.QueryRow(
-		`SELECT art_id, ts, host, ctx, command, exit, transport_error, transport_diagnostic, setup_error, setup_diagnostic, local_error, failure_phase, remote_completion, accepted_host_key_algorithm, accepted_host_key_fingerprint, bytes, lines, sha256, duration_ms, truncated, binary, delta_base, pruned
+		`SELECT art_id, ts, host, ctx, command, exit, transport_error, transport_diagnostic, setup_error, setup_diagnostic, local_error, failure_phase, remote_completion, accepted_host_key_algorithm, accepted_host_key_fingerprint, bytes, lines, sha256, duration_ms, truncated, binary, shell_state_mode, delta_base, pruned
 		 FROM runs WHERE art_id=?`, id)
 	if err := row.Scan(&m.ID, &tsStr, &m.Host, &m.Ctx, &m.Command, &m.Exit, &m.TransportErr, &m.TransportDiagnostic, &m.SetupErr, &m.SetupDiagnostic, &m.LocalError, &m.FailurePhase, &m.RemoteCompletion,
 		&m.AcceptedHostKeyAlgorithm, &m.AcceptedHostKeyFingerprint, &m.Bytes, &m.Lines, &m.SHA256, &m.DurationMs,
-		&truncated, &binary, &m.DeltaBase, &pruned); err != nil {
+		&truncated, &binary, &m.ShellStateMode, &m.DeltaBase, &pruned); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Meta{}, "", fmt.Errorf("run %s: not found", id)
 		}
@@ -251,15 +253,26 @@ func (s *Store) Get(id string) (Meta, string, error) {
 // LastByKey returns the most recent non-pruned run with the given key, for
 // use as the base of a --delta comparison. ok is false if no such run exists.
 func (s *Store) LastByKey(key string) (Meta, bool, error) {
+	return s.LastByKeyMode(key, ShellStateStateful)
+}
+
+// LastByKeyMode separates automatic comparisons by recorded mode. Stateful
+// callers retain legacy history; no-state callers require positive evidence.
+func (s *Store) LastByKeyMode(key, mode string) (Meta, bool, error) {
+	if mode != ShellStateStateful && mode != ShellStateNone {
+		return Meta{}, false, fmt.Errorf("invalid shell-state mode %q", mode)
+	}
 	var m Meta
 	var tsStr string
 	var truncated, binary int
 	row := s.DB.QueryRow(
-		`SELECT art_id, ts, host, ctx, command, exit, transport_error, transport_diagnostic, setup_error, setup_diagnostic, local_error, failure_phase, remote_completion, accepted_host_key_algorithm, accepted_host_key_fingerprint, bytes, lines, sha256, duration_ms, truncated, binary, delta_base
-		 FROM runs WHERE key=? AND pruned=0 AND setup_error='' ORDER BY id DESC LIMIT 1`, key)
+		`SELECT art_id, ts, host, ctx, command, exit, transport_error, transport_diagnostic, setup_error, setup_diagnostic, local_error, failure_phase, remote_completion, accepted_host_key_algorithm, accepted_host_key_fingerprint, bytes, lines, sha256, duration_ms, truncated, binary, shell_state_mode, delta_base
+		 FROM runs WHERE key=? AND pruned=0 AND setup_error=''
+		 AND (shell_state_mode=? OR (?='stateful' AND shell_state_mode=''))
+		 ORDER BY id DESC LIMIT 1`, key, mode, mode)
 	if err := row.Scan(&m.ID, &tsStr, &m.Host, &m.Ctx, &m.Command, &m.Exit, &m.TransportErr, &m.TransportDiagnostic, &m.SetupErr, &m.SetupDiagnostic, &m.LocalError, &m.FailurePhase, &m.RemoteCompletion,
 		&m.AcceptedHostKeyAlgorithm, &m.AcceptedHostKeyFingerprint, &m.Bytes, &m.Lines, &m.SHA256, &m.DurationMs,
-		&truncated, &binary, &m.DeltaBase); err != nil {
+		&truncated, &binary, &m.ShellStateMode, &m.DeltaBase); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Meta{}, false, nil
 		}

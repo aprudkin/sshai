@@ -54,6 +54,7 @@ func localArgs(args []string, stdout, stderr io.Writer, run localRunFunc, store 
 	fs.SetOutput(stderr)
 	shellFlag := fs.String("shell", "", `required local interpreter: "bash" or "pwsh"`)
 	bodyFile := fs.String("body-file", "", `read the command body from a file ("-" for stdin) instead of the "-- command" form`)
+	fs.Bool("no-shell-state", false, "unsupported: remote Windows only")
 	wantDelta := fs.Bool("delta", false, "print diff vs previous local run of same (shell, ctx, command)")
 	budget := fs.Int("budget", 0, "output budget in tokens (~bytes/4); default from config")
 	timeoutFlag := fs.Int("timeout", 0, "timeout in seconds; default from config")
@@ -69,6 +70,16 @@ func localArgs(args []string, stdout, stderr io.Writer, run localRunFunc, store 
 		}
 	}
 	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	noShellStateSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "no-shell-state" {
+			noShellStateSet = true
+		}
+	})
+	if noShellStateSet {
+		fmt.Fprintln(stderr, "local: --no-shell-state is supported only by remote Windows run")
 		return exitUsage
 	}
 	if *shellFlag != localShellBash && *shellFlag != localShellPwsh {
@@ -263,7 +274,8 @@ func runLocal(store *artifact.Store, streamCap int64, run localRunFunc, opts loc
 	}
 	meta := artifact.Meta{
 		Host: opts.target, Ctx: opts.ctx, Command: commandKey, Exit: storedExit,
-		LocalError: localError, DurationMs: durationMs, Truncated: result.Truncated,
+		ShellStateMode: artifact.ShellStateStateful,
+		LocalError:     localError, DurationMs: durationMs, Truncated: result.Truncated,
 		Binary: binary, Ts: time.Now(),
 	}
 	key := delta.Key(opts.target, opts.ctx, commandKey)

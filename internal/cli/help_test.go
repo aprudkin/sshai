@@ -51,7 +51,7 @@ func TestHelpRunShowsFullFlagReference(t *testing.T) {
 		t.Fatalf("rc=%d stderr=%s", rc, errB.String())
 	}
 	s := out.String()
-	for _, flag := range []string{"--body-file", "--posix-shell", "--powershell-host", "--accept-new-host-key", "--proxy-jump", "--delta", "--budget", "--timeout", "--ctx", "--result-format", "--result-out", "--follow", "--follow-interval"} {
+	for _, flag := range []string{"--body-file", "--posix-shell", "--powershell-host", "--no-shell-state", "--accept-new-host-key", "--proxy-jump", "--delta", "--budget", "--timeout", "--ctx", "--result-format", "--result-out", "--follow", "--follow-interval"} {
 		if !strings.Contains(s, flag) {
 			t.Fatalf("help run missing flag %q: %q", flag, s)
 		}
@@ -89,6 +89,25 @@ func TestHelpRunExplainsFailureEvidence(t *testing.T) {
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("help run missing failure evidence contract %q", want)
+		}
+	}
+}
+
+func TestHelpNoShellStateContract(t *testing.T) {
+	for topic, wants := range map[string][]string{
+		"run":   {"--no-shell-state", "remote Windows only", "PowerShell 7 or 5.1", "not a capture opt-out", "still inherits", "shell_state_mode", "confirmed no-state history", "Old records", "Artifact gc does not purge"},
+		"local": {"--no-shell-state and --follow are rejected"},
+		"diff":  {"different or unknown modes", "never proof of no-state"},
+		"gc":    {"not a complete purge", "shell-state/baseline snapshots", "remote staged files"},
+	} {
+		var out, errOut bytes.Buffer
+		if rc := Help([]string{topic}, &out, &errOut); rc != 0 {
+			t.Fatalf("help %s: %d %s", topic, rc, &errOut)
+		}
+		for _, want := range wants {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("help %s missing %q", topic, want)
+			}
 		}
 	}
 }

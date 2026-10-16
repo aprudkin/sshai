@@ -92,6 +92,9 @@ func formatLogLine(m artifact.Meta) string {
 	if m.LocalError != "" {
 		status = "local-error=" + m.LocalError
 	}
+	if m.ShellStateMode != "" {
+		status += " shell-state=" + m.ShellStateMode
+	}
 	return fmt.Sprintf("%s  %s  %s  %s  %s  %s",
 		m.ID, m.Ts.UTC().Format(time.RFC3339), m.Host, status,
 		artifact.HumanDuration(m.DurationMs), clipRunes(m.Command, logCommandClipRunes))

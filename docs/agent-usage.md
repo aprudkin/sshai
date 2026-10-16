@@ -84,6 +84,57 @@ Two narrow SSH exceptions remain inside `sshai`:
 
 Omitting either flag preserves the strict host-key and managed-route defaults.
 
+## Shell-state capture and one-shot Windows runs
+
+Without a flag, `run` remains stateful: it restores saved cwd and selected environment
+values relative to a baseline, then collects cwd and environment values in the wrapper
+independently of what the body prints or explicitly queries. A fresh `--ctx` separates
+replay state; it is **not** a capture opt-out. Capture, replay, and the ordinary inherited
+process environment are separate concerns.
+
+For a one-shot **remote Windows** command, use the per-invocation `--no-shell-state` flag:
+
+```bash
+sshai run --no-shell-state --powershell-host windows-powershell --body-file - windows01 <<'POWERSHELL'
+Set-Location -LiteralPath 'C:\Reports' -ErrorAction Stop
+Write-Output 'permitted report'
+POWERSHELL
+```
+
+Replace the alias and directory with authorized existing values. Both PowerShell 7 and Windows
+PowerShell 5.1 are supported execution targets; interpreter selection/fallback rules are unchanged.
+This mode skips loading/replaying cwd, environment state and baseline, and generates no
+cwd/environment collection or encoding. It neither creates nor updates those snapshots, including
+on failure, truncation or timeout, and leaves existing snapshots unchanged. There is no configuration
+selector and no implicit project cwd: set any required directory explicitly in the body.
+Remote Bash/POSIX targets and `local` reject the flag with exit 96 before body execution.
+Discovery may precede rejection; in mixed fan-out, Windows targets can run while unsupported
+targets are rejected. There is no fallback to stateful execution.
+
+The child still inherits the OS/session environment and can read it. This is not an environment
+sandbox, secret-input channel, general output redaction, or diskless mode. Bounded permitted
+output artifacts, JSON v1, history and `q` remain available. Host discovery/facts, temporary and
+remote staged scripts, transport state and SSH control sockets remain allowed writes.
+Existing authorization, secret, timeout, host-key and retry rules still apply.
+
+New saved results and metadata record `shell_state_mode: "none"|"stateful"`; human passports and
+`log` show `shell-state=none|stateful`. Follow completion uses the same result field.
+On pre-dispatch failures the mode describes the selected shell-state contract, not proof that a
+body ran; consult `failure_phase` and `remote_completion`. Old records omit mode evidence and
+remain unknown, never proof of no-state execution.
+Automatic `--delta` for no-state runs selects only a confirmed `none` predecessor with the same
+host/context/command key. Without one it reports the normal “no previous run” result.
+Stateful comparisons retain legacy/default history but exclude no-state runs. Explicit
+`diff <id1> <id2>` works across modes and prints both modes when different or unknown,
+even for identical output. Existing history is not rewritten.
+
+Artifact `gc` is not a complete purge: it retains history rows and does not delete shell-state
+or baseline snapshots, remote staged files, host facts, audit history or transport state.
+
+Verification for this feature uses synthetic wrappers and injected transports, with local
+PowerShell 7 runtime checks when available. PowerShell 7 success is not Windows PowerShell 5.1
+verification; unavailable 5.1 and live Windows/OpenSSH checks remain explicit verification gaps.
+
 ## SSH control sockets
 
 On Unix clients, sshai normally keeps OpenSSH control sockets under `<SSHAI_ROOT>/cm`.

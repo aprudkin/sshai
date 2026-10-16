@@ -50,6 +50,44 @@ sshai run --powershell-host windows-powershell --body-file check.ps1 windows01
 
 The only supported values are `pwsh` and `windows-powershell`; an invalid selector is a usage error. The selector affects Windows body execution; Linux hosts in the same fan-out are unaffected. Do not describe Windows PowerShell 5.1 as unsupported.
 
+### Choose shell-state behavior
+
+Remote execution remains stateful by default: before the body it replays saved cwd and selected
+environment values relative to a baseline; afterward the wrapper collects cwd and environment
+values independently of what the script prints or explicitly queries. A fresh `--ctx` is not
+a capture opt-out.
+
+For one-shot **remote Windows** work, select `--no-shell-state` before the host, for example
+`sshai run --no-shell-state --body-file check.ps1 windows01`. This per-invocation mode supports
+PowerShell 7 and Windows PowerShell 5.1 without changing interpreter selection/fallback rules.
+It skips loading/replaying cwd, environment state and baseline, and prevents cwd/environment
+collection and encoding in the wrapper. It creates or updates no shell-state/baseline snapshot,
+including on failure, timeout or truncation; existing snapshots are left unchanged.
+Set any required cwd explicitly in the body and stop if selection fails; there is no implicit
+project directory or configuration-file selector.
+
+Bash/POSIX remote targets and local execution reject the flag before running the body (exit 96);
+discovery may precede rejection. Mixed fan-out can execute Windows targets while rejecting the
+others. Never retry through a stateful fallback to bypass this contract.
+The process still inherits the OS/session environment and can read it: this is neither environment
+isolation nor a secret-input or output-redaction mechanism. Retain the existing secret restrictions.
+
+Bounded permitted output artifacts, JSON v1, history and `q` remain enabled, as do discovery/facts,
+temporary and remote staged files, transport state and SSH control sockets. Artifact `gc` is not a
+complete purge of history, audit, shell-state/baseline, staged files, facts or transport state.
+Results/metadata report `shell_state_mode: "none"|"stateful"` (human `shell-state=...`).
+On pre-dispatch failures this is the selected contract, not proof the body ran. Missing mode
+information in old records is unknown, not proof of no-state execution.
+No-state `--delta` selects only confirmed no-state predecessors; stateful comparisons keep legacy
+history but exclude no-state runs. Explicit `diff` by two IDs remains available across modes,
+identifying different or unknown modes. See `sshai help run` for the output contract.
+
+Synthetic PowerShell 7 testing does not verify Windows PowerShell 5.1 or live Windows/OpenSSH.
+Report unavailable checks rather than inferring parity. Authorization, deadlines, host-key
+rules and the prohibition on automatic retries are unchanged.
+
+### Explicit local execution
+
 When `sshai local` is selected under the rule above, select exactly one local interpreter. Both `bash` and `pwsh` are resolved only through `PATH`; local PowerShell runs only `pwsh` and has no Windows PowerShell 5.1 fallback:
 
 ```bash

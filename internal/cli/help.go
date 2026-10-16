@@ -103,6 +103,13 @@ Flags:
                       "windows-powershell" (Windows PowerShell 5.1).
                       When omitted, prefer PowerShell 7 and fall back to 5.1
                       if unavailable. Linux fan-out hosts are unaffected
+  --no-shell-state    remote Windows only (PowerShell 7 or 5.1): skip cwd/env
+                      replay and capture, including baseline reads/writes.
+                      Leave existing snapshots unchanged, even on failure.
+                      Bash/POSIX and local reject it before body execution;
+                      discovery may precede rejection. Mixed fan-out may
+                      still execute supported Windows targets. No stateful
+                      fallback, config selector, or implicit project cwd
   --accept-new-host-key HOST
                       only after direct user authorization for this exact
                       alias: add a previously unknown key for HOST, while
@@ -115,7 +122,9 @@ Flags:
   --delta             print a diff against the previous run of the same
                       (host, ctx, command) key instead of this run's own
                       output; the new run is still stored in full either
-                      way, so history is never lost to delta mode
+                      way, so history is never lost to delta mode.
+                      No-state runs select only confirmed no-state history;
+                      stateful runs keep legacy history, excluding no-state
   --budget N          output budget in tokens (~bytes/4); default from
                       config (factory default 500).
                       Fan-out divides this across hosts, floored at
@@ -155,6 +164,19 @@ Flags:
   --follow-interval N     heartbeat interval in seconds while following;
                           default 10, minimum 1, requires --follow
 
+
+Shell state is enabled by default. The wrapper captures environment values
+independently of what the body prints or queries. A fresh --ctx separates replay
+state; it is not a capture opt-out. --no-shell-state prevents capture/replay,
+but the child still inherits the OS/session environment and can read it.
+Set required cwd explicitly in the body. This is not environment isolation,
+secret delivery, output redaction, or diskless execution: bounded artifacts,
+JSON v1, history, q, discovery/facts, staging and transport/control sockets remain.
+Artifact gc does not purge history, state/baseline, staged files or transport state.
+Results/metadata add shell_state_mode=none|stateful (JSON string); passports/log
+use shell-state=none|stateful. Old records without mode evidence remain unknown.
+On pre-dispatch failures mode is the selected contract, not proof the body ran.
+PowerShell 7 testing does not verify Windows PowerShell 5.1.
 
 Long-running example (replace web01 and long-running-check with an authorized
 alias and command expected to take about four minutes):
@@ -234,7 +256,7 @@ skip shell-state updates, and use metadata/JSON exit=0 only as a placeholder
 paired with local_error, not success. Overflow retains exactly the configured
 stream cap and marks truncated=1; truncated=false does not prove complete
 capture on a failed run. Pipe cleanup allows up to 100ms extra plus scheduling.
-Remote-only flags and --follow are rejected.
+Remote-only flags, --no-shell-state and --follow are rejected.
 `,
 	"q": `sshai q [--budget N] <id> -- <tool> <args...>
 
@@ -258,7 +280,9 @@ Example (Python consumes the final argv path):
 
 Unified diff (3 lines of context), computed locally between two stored
 artifacts — works across hosts and across runs. Identical artifacts
-print "no difference" instead of an empty diff.
+print "no difference" instead of an empty diff. Explicit IDs may cross shell-state
+modes; different or unknown modes are identified even when output is identical.
+Missing mode information in legacy records is unknown, never proof of no-state.
 
 Flags:
   --budget N   output budget in tokens (~bytes/4); default 500
@@ -277,6 +301,8 @@ Search the local run-log — every run recorded by ` + "`run`" + ` or ` + "`loca
 or not its artifact survived retention — newest first. One line per match:
   <id>  <ts>  <host>  exit=N|setup-error=R|transport-error=R|local-error=R  <duration>  <command>
 <command> is clipped to 60 runes with a trailing "…" marker.
+New records add shell-state=none|stateful after the exit/error status;
+legacy records without mode evidence omit it.
 
 Flags:
   --host H    filter by host
@@ -309,6 +335,8 @@ by a crashed write. Prints "pruned N artifacts, freed X".
 Run-log rows are never deleted by pruning — only the artifact file is
 reclaimed. After that, ` + "`sshai q`" + `/` + "`diff`" + ` against a pruned id report
 "artifact pruned" (metadata intact, data reclaimed).
+This is not a complete purge: shell-state/baseline snapshots, host facts,
+audit history, remote staged files and transport/control sockets remain.
 
 ` + "`run`" + ` also triggers this same pruning opportunistically when the store
 grows past the size cap; the artifact(s) that triggering run itself just

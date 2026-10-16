@@ -58,6 +58,17 @@ func PwshScript(body string, st State, restore map[string]string, sentinel strin
 // PwshScriptFollow emits marker directly before the user's script block.
 // An empty marker keeps PwshScript byte-compatible.
 func PwshScriptFollow(body string, st State, restore map[string]string, sentinel, marker string) []byte {
+	return pwshScript(body, st, restore, sentinel, marker, true)
+}
+
+// PwshScriptNoState preserves exit handling and output/follow framing without
+// restoring or collecting cwd/environment. The child still inherits its process
+// environment; this is not an environment sandbox or output-redaction mechanism.
+func PwshScriptNoState(body, sentinel, marker string) []byte {
+	return pwshScript(body, State{}, nil, sentinel, marker, false)
+}
+
+func pwshScript(body string, st State, restore map[string]string, sentinel, marker string, captureState bool) []byte {
 	// A file's encoding marker is not part of the embedded script block.
 	// Keep interior U+FEFF characters and the wrapper's own outer BOM intact.
 	body = strings.TrimPrefix(body, "\ufeff")
@@ -108,9 +119,11 @@ func PwshScriptFollow(body string, st State, restore map[string]string, sentinel
 	b.WriteString("} finally {\n")
 	b.WriteString("  Write-Output ''\n")
 	b.WriteString("  Write-Output '" + pwq(sentinel) + "'\n")
-	b.WriteString("  Write-Output (Get-Location).Path\n")
-	b.WriteString("  $__sshai_env = (Get-ChildItem env: | ForEach-Object { \"$($_.Name)=$($_.Value)\" }) -join \"`n\"\n")
-	b.WriteString("  Write-Output ([Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($__sshai_env)))\n")
+	if captureState {
+		b.WriteString("  Write-Output (Get-Location).Path\n")
+		b.WriteString("  $__sshai_env = (Get-ChildItem env: | ForEach-Object { \"$($_.Name)=$($_.Value)\" }) -join \"`n\"\n")
+		b.WriteString("  Write-Output ([Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($__sshai_env)))\n")
+	}
 	b.WriteString("}\n")
 	b.WriteString("exit $__sshai_rc\n")
 
@@ -189,6 +202,20 @@ func PwshParse(raw []byte, sentinel string) (out []byte, st State, ok bool) {
 		st.Env = decodePwshEnvDump(rest[1])
 	}
 	return out, st, true
+}
+
+// PwshParseNoState removes only output framing, never interpreting subsequent
+// output as cwd/environment. Missing framing (e.g. truncation) retains raw bytes.
+func PwshParseNoState(raw []byte, sentinel string) []byte {
+	lines := filterCLIXMLLines(string(raw))
+	for i, line := range lines {
+		lines[i] = strings.TrimSuffix(line, "\r")
+	}
+	out, _, ok := splitAtSentinelLines(lines, sentinel, 0)
+	if !ok {
+		return raw
+	}
+	return out
 }
 
 // decodePwshEnvDump decodes b64 — the base64 form of UTF-8 "NAME=VALUE"

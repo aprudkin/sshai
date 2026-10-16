@@ -64,6 +64,14 @@ type Opts struct {
 	Timeout          time.Duration
 	PowerShellHost   string // "" (default pwsh) | "pwsh" | "windows-powershell"
 	PosixShell       string // optional Linux shell path/token; empty keeps the bash default
+	NoShellState     bool   // remote Windows only: neither replay nor capture cwd/environment
+}
+
+func (o Opts) shellStateMode() string {
+	if o.NoShellState {
+		return artifact.ShellStateNone
+	}
+	return artifact.ShellStateStateful
 }
 
 func powerShellExecutable(host string) (string, bool) {
@@ -176,6 +184,7 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 	powerShellHost := fs.String("powershell-host", "", `Windows interpreter: "pwsh" (default) or "windows-powershell"`)
 	acceptNewHostKey := fs.String("accept-new-host-key", "", "exact host alias allowed to add one previously unknown host key")
 	proxyJump := fs.String("proxy-jump", "", `one-invocation jump-route override: "none"`)
+	noShellState := fs.Bool("no-shell-state", false, "remote Windows only: disable cwd/environment replay and capture")
 	wantDelta := fs.Bool("delta", false, "print diff vs previous run of same (host, ctx, command)")
 	budget := fs.Int("budget", 0, "output budget in tokens (~bytes/4); default from config")
 	timeoutFlag := fs.Int("timeout", 0, "per-host probe, staging and execution budget in seconds; default from config")
@@ -374,6 +383,7 @@ func runArgsWithStore(args []string, stdout, stderr io.Writer, tr transport.Tran
 			Timeout:          timeout,
 			PowerShellHost:   *powerShellHost,
 			PosixShell:       *posixShell,
+			NoShellState:     *noShellState,
 		}
 	}
 	mode := resultModeOptions{format: *resultFormat, resultOut: *resultOut}
@@ -739,17 +749,28 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		}
 	}
 
-	st, _, err := session.LoadState(root, opts.Host, opts.Ctx)
-	if err != nil {
-		fmt.Fprintf(stderr, "run: load state for %s/%s: %v\n", opts.Host, opts.Ctx, err)
+	if opts.NoShellState && facts.OS != "windows" {
+		fmt.Fprintf(stderr, "run: --no-shell-state requires remote Windows; %s is not Windows\n", opts.Host)
 		return newInternalFailureOutcome(exitUsage)
 	}
-	baseline, baseOK, err := session.LoadBaseline(root, opts.Host)
-	if err != nil {
-		fmt.Fprintf(stderr, "run: load baseline for %s: %v\n", opts.Host, err)
-		return newInternalFailureOutcome(exitUsage)
+
+	var st shell.State
+	var restore map[string]string
+	var baseOK bool
+	if !opts.NoShellState {
+		st, _, err = session.LoadState(root, opts.Host, opts.Ctx)
+		if err != nil {
+			fmt.Fprintf(stderr, "run: load state for %s/%s: %v\n", opts.Host, opts.Ctx, err)
+			return newInternalFailureOutcome(exitUsage)
+		}
+		var baseline map[string]string
+		baseline, baseOK, err = session.LoadBaseline(root, opts.Host)
+		if err != nil {
+			fmt.Fprintf(stderr, "run: load baseline for %s: %v\n", opts.Host, err)
+			return newInternalFailureOutcome(exitUsage)
+		}
+		restore = shell.EnvRestoreSet(baseline, st.Env)
 	}
-	restore := shell.EnvRestoreSet(baseline, st.Env)
 	sentinel := shell.NewSentinel()
 	if deps.Follow != nil {
 		sentinel = deps.Follow.sentinel
@@ -793,7 +814,12 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		if deps.Follow != nil {
 			marker = deps.Follow.marker
 		}
-		script := shell.PwshScriptFollow(opts.Command, st, restore, sentinel, marker)
+		var script []byte
+		if opts.NoShellState {
+			script = shell.PwshScriptNoState(opts.Command, sentinel, marker)
+		} else {
+			script = shell.PwshScriptFollow(opts.Command, st, restore, sentinel, marker)
+		}
 
 		tmp, err := os.CreateTemp("", "sshai-*.ps1")
 		if err != nil {
@@ -818,6 +844,11 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		// prior staged file instead of accumulating a new one in
 		// RemoteDir on every single call).
 		slug := shell.BodySlug([]byte(opts.Command))
+		if opts.NoShellState {
+			// A concurrent stateful invocation must not overwrite this wrapper
+			// between upload and exec. Preserve historical stateful filenames.
+			slug += "-no-shell-state"
+		}
 		remotePath := shell.RemoteDir + "/" + slug + ".ps1"
 		remaining, err := transport.Remaining(deadline)
 		if err == nil {
@@ -841,7 +872,11 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 			return newInternalFailureOutcome(exitUsage)
 		}
 		remoteExit, truncated = res.ExitCode, res.Truncated
-		out, parsedSt, parseOK = shell.PwshParse(res.Output, sentinel)
+		if opts.NoShellState {
+			out = shell.PwshParseNoState(res.Output, sentinel)
+		} else {
+			out, parsedSt, parseOK = shell.PwshParse(res.Output, sentinel)
+		}
 		if deps.Follow != nil {
 			out = stripFollowMarker(out, deps.Follow.marker)
 		}
@@ -872,7 +907,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 
 	durationMs := time.Since(start).Milliseconds()
 
-	if parseOK {
+	if !opts.NoShellState && parseOK {
 		// Partial-epilogue merge: BashParse/PwshParse can return ok=true
 		// with Cwd=="" or Env==nil when the epilogue's output was
 		// truncated or otherwise malformed — that is "not updated", not
@@ -909,7 +944,8 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 
 	meta := artifact.Meta{
 		Host: opts.Host, Ctx: opts.Ctx, Command: deltaKeyCommand(opts),
-		Exit: remoteExit, DurationMs: durationMs, Truncated: truncated, Binary: binary,
+		ShellStateMode: opts.shellStateMode(),
+		Exit:           remoteExit, DurationMs: durationMs, Truncated: truncated, Binary: binary,
 		AcceptedHostKeyAlgorithm:   acceptedHostKeyAlgorithm,
 		AcceptedHostKeyFingerprint: acceptedHostKeyFingerprint,
 		Ts:                         time.Now(),
@@ -934,7 +970,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 	var havePrev bool
 	if opts.Delta {
 		var lookupErr error
-		prevMeta, havePrev, lookupErr = deps.Store.LastByKey(key)
+		prevMeta, havePrev, lookupErr = deps.Store.LastByKeyMode(key, opts.shellStateMode())
 		if lookupErr != nil {
 			fmt.Fprintf(stderr, "run: delta lookup for %s: %v\n", opts.Host, lookupErr)
 			havePrev = false
@@ -1015,7 +1051,8 @@ func handleSetupError(deps Deps, opts Opts, setupErr *session.RemoteSetupError, 
 		deps.Tr, opts.Host, opts.AcceptNewHostKey, stderr)
 	meta := artifact.Meta{
 		Host: opts.Host, Ctx: opts.Ctx, Command: deltaKeyCommand(opts),
-		SetupErr: setupErr.Class, SetupDiagnostic: diagnostic,
+		ShellStateMode: opts.shellStateMode(),
+		SetupErr:       setupErr.Class, SetupDiagnostic: diagnostic,
 		FailurePhase: "probe", RemoteCompletion: "not_started",
 		AcceptedHostKeyAlgorithm:   acceptedHostKeyAlgorithm,
 		AcceptedHostKeyFingerprint: acceptedHostKeyFingerprint,
@@ -1052,7 +1089,8 @@ func handleTransportError(deps Deps, opts Opts, te *transport.TransportError, ph
 		deps.Tr, opts.Host, opts.AcceptNewHostKey, stderr)
 	meta := artifact.Meta{
 		Host: opts.Host, Ctx: opts.Ctx, Command: deltaKeyCommand(opts),
-		TransportErr: te.Reason, TransportDiagnostic: diagnostic, DurationMs: durationMs, Ts: time.Now(),
+		ShellStateMode: opts.shellStateMode(),
+		TransportErr:   te.Reason, TransportDiagnostic: diagnostic, DurationMs: durationMs, Ts: time.Now(),
 		FailurePhase: phase, RemoteCompletion: completion,
 		AcceptedHostKeyAlgorithm:   acceptedHostKeyAlgorithm,
 		AcceptedHostKeyFingerprint: acceptedHostKeyFingerprint,

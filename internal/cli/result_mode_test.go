@@ -373,16 +373,16 @@ func TestRunResultFormatHumanModeByteEquivalent(t *testing.T) {
 			hosts:  []string{"h1"},
 			rcs:    map[string]int{"h1": 0},
 			wantRC: 0,
-			want:   "aN host=h1 exit=0 lines=1 bytes=6B time=X\nfile=<path>\nhello\n",
+			want:   "aN host=h1 exit=0 shell-state=stateful lines=1 bytes=6B time=X\nfile=<path>\nhello\n",
 		},
 		{
 			name:   "fan out",
 			hosts:  []string{"h1", "h2"},
 			rcs:    map[string]int{"h1": 0, "h2": 5},
 			wantRC: 5,
-			want: "aN host=h1 exit=0 lines=1 bytes=6B time=X\nfile=<path>\nhello\n" +
+			want: "aN host=h1 exit=0 shell-state=stateful lines=1 bytes=6B time=X\nfile=<path>\nhello\n" +
 				"\n" +
-				"aN host=h2 exit=5 lines=1 bytes=6B time=X\nfile=<path>\nhello\n" +
+				"aN host=h2 exit=5 shell-state=stateful lines=1 bytes=6B time=X\nfile=<path>\nhello\n" +
 				"hosts=2 ok=1 failed=1 transport-errors=0\n",
 		},
 	}

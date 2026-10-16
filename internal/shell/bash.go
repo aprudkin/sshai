@@ -146,6 +146,12 @@ func BashParse(raw []byte, sentinel string) (out []byte, st State, ok bool) {
 // are both nil — shared by BashParse and PwshParse, whose state lines
 // carry differently-encoded env dumps but split off the same way.
 func splitAtSentinel(lines []string, sentinel string) (out []byte, rest []string, ok bool) {
+	return splitAtSentinelLines(lines, sentinel, 2)
+}
+
+// splitAtSentinelLines retains output after the specified number of state lines.
+// A no-state wrapper has only framing and passes zero.
+func splitAtSentinelLines(lines []string, sentinel string, stateLines int) (out []byte, rest []string, ok bool) {
 	idx := -1
 	for i := len(lines) - 1; i >= 0; i-- {
 		if lines[i] == sentinel {
@@ -157,8 +163,8 @@ func splitAtSentinel(lines []string, sentinel string) (out []byte, rest []string
 		return nil, nil, false
 	}
 	body := strings.Join(lines[:idx], "\n")
-	if idx+3 < len(lines) {
-		body += strings.Join(lines[idx+3:], "\n")
+	if next := idx + 1 + stateLines; next < len(lines) {
+		body += strings.Join(lines[next:], "\n")
 	}
 	return []byte(body), lines[idx+1:], true
 }

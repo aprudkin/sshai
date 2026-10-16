@@ -8,6 +8,11 @@ import (
 	"unicode/utf8"
 )
 
+const (
+	ShellStateStateful = "stateful"
+	ShellStateNone     = "none"
+)
+
 type Meta struct {
 	ID, Host, Ctx, Command     string
 	Exit                       int
@@ -18,6 +23,7 @@ type Meta struct {
 	LocalError                 string
 	FailurePhase               string
 	RemoteCompletion           string
+	ShellStateMode             string // empty means unknown (legacy record), not no-state
 	AcceptedHostKeyAlgorithm   string
 	AcceptedHostKeyFingerprint string
 	Bytes, Lines               int64
@@ -88,6 +94,9 @@ func StatusLine(m Meta) string {
 	if m.AcceptedHostKeyAlgorithm != "" && m.AcceptedHostKeyFingerprint != "" {
 		fmt.Fprintf(&b, " accepted-host-key-algorithm=%s accepted-host-key-fingerprint=%s",
 			m.AcceptedHostKeyAlgorithm, m.AcceptedHostKeyFingerprint)
+	}
+	if m.ShellStateMode != "" {
+		fmt.Fprintf(&b, " shell-state=%s", m.ShellStateMode)
 	}
 	fmt.Fprintf(&b, " lines=%d bytes=%s time=%s", m.Lines, HumanBytes(m.Bytes), HumanDuration(m.DurationMs))
 	if m.Truncated {

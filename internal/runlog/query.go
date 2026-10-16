@@ -45,7 +45,7 @@ func Search(db *sql.DB, host, grep string, since time.Time, limit int) ([]artifa
 		args = append(args, since.UTC().Format(time.RFC3339))
 	}
 
-	query := `SELECT art_id, ts, host, ctx, command, exit, transport_error, transport_diagnostic, setup_error, setup_diagnostic, local_error, bytes, lines, sha256, duration_ms, truncated, binary, delta_base FROM runs`
+	query := `SELECT art_id, ts, host, ctx, command, exit, transport_error, transport_diagnostic, setup_error, setup_diagnostic, local_error, bytes, lines, sha256, duration_ms, truncated, binary, delta_base, shell_state_mode FROM runs`
 	if len(conds) > 0 {
 		query += " WHERE " + strings.Join(conds, " AND ") // #nosec G202 -- conds contains only fixed clauses; values remain SQL parameters.
 	}
@@ -64,7 +64,7 @@ func Search(db *sql.DB, host, grep string, since time.Time, limit int) ([]artifa
 		var tsStr string
 		var truncated, binary int
 		if err := rows.Scan(&m.ID, &tsStr, &m.Host, &m.Ctx, &m.Command, &m.Exit, &m.TransportErr, &m.TransportDiagnostic, &m.SetupErr, &m.SetupDiagnostic, &m.LocalError,
-			&m.Bytes, &m.Lines, &m.SHA256, &m.DurationMs, &truncated, &binary, &m.DeltaBase); err != nil {
+			&m.Bytes, &m.Lines, &m.SHA256, &m.DurationMs, &truncated, &binary, &m.DeltaBase, &m.ShellStateMode); err != nil {
 			return nil, fmt.Errorf("scan run: %w", err)
 		}
 		m.Truncated = truncated != 0

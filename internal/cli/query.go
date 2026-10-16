@@ -240,6 +240,24 @@ func Diff(args []string, stdout, stderr io.Writer) int {
 		return exitUsage
 	}
 
+	// Explicit IDs may cross modes; never infer a legacy record was no-state.
+	meta1, _, err1 := store.Get(id1)
+	meta2, _, err2 := store.Get(id2)
+	if err1 != nil || err2 != nil {
+		fmt.Fprintln(stderr, "diff: metadata became unavailable")
+		return exitUsage
+	}
+	mode1, mode2 := meta1.ShellStateMode, meta2.ShellStateMode
+	if mode1 == "" {
+		mode1 = "unknown"
+	}
+	if mode2 == "" {
+		mode2 = "unknown"
+	}
+	if mode1 != mode2 || mode1 == "unknown" {
+		fmt.Fprintf(stdout, "shell-state: %s=%s %s=%s\n", id1, mode1, id2, mode2)
+	}
+
 	if diffText == "" {
 		fmt.Fprintln(stdout, "no difference")
 		return 0
