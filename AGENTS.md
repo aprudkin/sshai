@@ -119,6 +119,38 @@ go tool govulncheck ./...                       # tool pinned through go.mod
   Change source scripts/templates rather than generated release assets; publishing a stable
   tag requires its commit on `main` and passed CI.
 
+## Release and tap completion
+
+- After each completed, verified update, assess release relevance against the latest
+  published stable tag. Changes to executable behavior, runtime dependencies, packaging,
+  bundled skills or shipped usage guidance normally warrant a release; a behavior-preserving
+  runtime refactor can warrant a patch release too. Tests, internal agent instructions,
+  unshipped documentation or CI-only maintenance alone normally do not. State the decision
+  and reason; do not create a release for every intermediate commit or for this rule itself.
+- For release-worthy changes, the user authorizes completing the release and the matching
+  `aprudkin/homebrew-tap` update without another approval. Explicit task limits (such as
+  no release, draft-only or no external changes) take precedence. Scope is the verified
+  authorized update: inspect all changes since the last release and stop for unrelated or
+  unverified work that would also be shipped. Use patch for compatible fixes/refactors,
+  minor for backward-compatible features, and major for breaking public contracts; ask
+  when compatibility or the intended release scope is unclear.
+- Follow the release prerequisites above: verified commit on `main`, passing checks and
+  required review, then an unused stable tag. Verify the pushed tag's commit, successful
+  release workflow, published assets and checksums. Reuse an already published matching
+  release instead of bumping again to repair delivery; published tags/assets stay immutable.
+- After publication, inspect the tap's instructions, current formula, open PRs and workflows.
+  Prefer its existing automation and reuse a matching bump branch/PR. Verify the formula's
+  version, release URL and source SHA, review the entire PR and merge only the sshai bump
+  after its checks pass. This permission does not cover unrelated tap changes, repository
+  permission/secret changes, workflow repairs, force-push or bypassing checks. On failure,
+  report partial effects and stop the dependent steps; agree on recovery before switching paths.
+- Release delivery is complete only when the public release is verified and the tap's
+  default branch serves the matching formula; report pending automation as pending, not done.
+  Local installation is separate and requires an explicit request. When requested, refresh
+  Homebrew metadata, upgrade only `aprudkin/tap/sshai`, then verify the installed/linked
+  version and a harmless smoke check with isolated state. Do not run a blanket upgrade or
+  treat packaging/install checks as authorization for live SSH/Windows operations.
+
 ## Agent skills
 
 - Before reading, creating, or updating issues, read
