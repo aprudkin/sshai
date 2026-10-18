@@ -938,108 +938,22 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		}
 	}
 
-	binary := bytes.IndexByte(out[:min(8192, len(out))], 0) >= 0
 	acceptedHostKeyAlgorithm, acceptedHostKeyFingerprint := acceptedHostKeyEvidence(
 		deps.Tr, opts.Host, opts.AcceptNewHostKey, stderr)
 
 	meta := artifact.Meta{
 		Host: opts.Host, Ctx: opts.Ctx, Command: deltaKeyCommand(opts),
 		ShellStateMode: opts.shellStateMode(),
-		Exit:           remoteExit, DurationMs: durationMs, Truncated: truncated, Binary: binary,
+		Exit:           remoteExit, DurationMs: durationMs, Truncated: truncated,
 		AcceptedHostKeyAlgorithm:   acceptedHostKeyAlgorithm,
 		AcceptedHostKeyFingerprint: acceptedHostKeyFingerprint,
 		Ts:                         time.Now(),
 	}
-	key := delta.Key(opts.Host, opts.Ctx, deltaKeyCommand(opts))
-
-	// --delta's lookup runs BEFORE Save, not after: LastByKey queries the
-	// table as it stands right now, so the row this call is about to
-	// insert is not there yet to exclude — no "art_id != ?" variant
-	// needed. This ordering is also what lets Meta.DeltaBase be set
-	// before Save, so the status line's own "delta=aN" comes from the
-	// same Save call as everything else instead of a second write.
-	// Nothing here skips Save in non-delta or no-previous-run cases: the
-	// full artifact is always stored first, so history is never lost to
-	// delta mode (the brief's invariant) — including when the lookup
-	// itself fails. The remote command has already run by this point, so
-	// a transient LastByKey error (e.g. a busy SQLite under fan-out) must
-	// degrade to "no previous run" rather than abort: the alternative
-	// would throw away a completed run's output over a lookup failure,
-	// which is exactly the loss the invariant forbids.
-	var prevMeta artifact.Meta
-	var havePrev bool
-	if opts.Delta {
-		var lookupErr error
-		prevMeta, havePrev, lookupErr = deps.Store.LastByKeyMode(key, opts.shellStateMode())
-		if lookupErr != nil {
-			fmt.Fprintf(stderr, "run: delta lookup for %s: %v\n", opts.Host, lookupErr)
-			havePrev = false
-		}
-		if havePrev {
-			meta.DeltaBase = prevMeta.ID
-		}
-	}
-
-	savedMeta, err := deps.Store.Save(meta, key, out)
-	if err != nil {
-		fmt.Fprintf(stderr, "run: save artifact: %v\n", err)
-		return newInternalFailureOutcome(exitUsage)
-	}
-
-	artPath := filepath.Join(deps.Store.Root, "art", savedMeta.ID)
-
-	var passport string
-	switch {
-	case opts.Delta && havePrev && savedMeta.Binary:
-		// Binary output: RenderPassport's own m.Binary suppression
-		// (passport.go) is exactly the right shape here too — status
-		// line + file=, no body — so this routes through it directly
-		// rather than attempting delta.Render at all. A text unified
-		// diff of raw binary bytes would be garbled noise, and this is
-		// a distinct branch (not folded into the render-error fallback
-		// below) precisely so it can never fall through to the
-		// no-previous-run case and print the false "no previous run"
-		// line when a previous run in fact exists. "Previous exists"
-		// is still communicated: savedMeta.DeltaBase was set before
-		// Save, so StatusLine still renders delta=aN here.
-		passport = artifact.RenderPassport(savedMeta, artPath, out, opts.Budget)
-	case opts.Delta && havePrev:
-		prevPath := filepath.Join(deps.Store.Root, "art", prevMeta.ID)
-		deltaBody, derr := delta.Render(prevPath, out, prevMeta.ID, prevMeta.Ts, opts.Budget)
-		if derr != nil {
-			// The artifact is already saved (savedMeta.DeltaBase is
-			// already persisted, so the status line keeps its
-			// delta=aN) — only the delta *rendering* failed (e.g. the
-			// previous artifact file is gone despite pruned=0, a gc
-			// race or manual removal under art/). Per the repo's own
-			// pattern for post-exec failures (SaveState, SaveBaseline,
-			// AppendAudit all print-and-continue), fall back to the
-			// normal passport instead of discarding an already-saved,
-			// already-completed run.
-			fmt.Fprintf(stderr, "run: render delta for %s: %v\n", opts.Host, derr)
-			passport = artifact.RenderPassport(savedMeta, artPath, out, opts.Budget)
-		} else {
-			passport = artifact.StatusLine(savedMeta) + "\nfile=" + artPath + "\n" + deltaBody
-		}
-	case opts.Delta:
-		passport = artifact.RenderPassport(savedMeta, artPath, out, opts.Budget) + "\ndelta: no previous run for this key"
-	default:
-		passport = artifact.RenderPassport(savedMeta, artPath, out, opts.Budget)
-	}
-	if adv := artifact.PipeAdvisory(opts.Command); adv != "" {
-		passport += "\n" + adv
-	}
-	fmt.Fprintln(stdout, passport)
-
-	if auditErr := runlog.AppendAudit(root, runlog.AuditEntry{
-		Ts: time.Now(), Host: opts.Host, Ctx: opts.Ctx, Subcommand: "run",
-		CommandPreview: auditCommandPreview(opts), BodySHA256: sha256Hex(opts.Command),
-		Verdict: "allowed", Exit: remoteExit,
-	}); auditErr != nil {
-		fmt.Fprintf(stderr, "run: append audit: %v\n", auditErr)
-	}
-
-	return newSavedRunOutcome(savedMeta)
+	return finalizeRun(deps.Store, runFinalization{
+		meta: meta, output: out, delta: opts.Delta, budget: opts.Budget,
+		subcommand: "run", commandPreview: auditCommandPreview(opts),
+		bodySHA256: sha256Hex(opts.Command), pipeAdvisory: artifact.PipeAdvisory(opts.Command),
+	}, stdout, stderr)
 }
 
 // handleSetupError records fixed Windows setup diagnostics. The user body

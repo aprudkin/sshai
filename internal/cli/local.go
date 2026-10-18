@@ -1,18 +1,15 @@
 package cli
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/aprudkin/sshai/internal/artifact"
 	"github.com/aprudkin/sshai/internal/config"
-	"github.com/aprudkin/sshai/internal/delta"
 	"github.com/aprudkin/sshai/internal/runlog"
 	"github.com/aprudkin/sshai/internal/runner"
 	"github.com/aprudkin/sshai/internal/session"
@@ -260,7 +257,6 @@ func runLocal(store *artifact.Store, streamCap int64, run localRunFunc, opts loc
 		}
 	}
 
-	binary := bytes.IndexByte(out[:min(8192, len(out))], 0) >= 0
 	commandKey := opts.command
 	if opts.fromFile {
 		commandKey = "body:" + sha256Hex(opts.command)[:16]
@@ -276,53 +272,13 @@ func runLocal(store *artifact.Store, streamCap int64, run localRunFunc, opts loc
 		Host: opts.target, Ctx: opts.ctx, Command: commandKey, Exit: storedExit,
 		ShellStateMode: artifact.ShellStateStateful,
 		LocalError:     localError, DurationMs: durationMs, Truncated: result.Truncated,
-		Binary: binary, Ts: time.Now(),
+		Ts: time.Now(),
 	}
-	key := delta.Key(opts.target, opts.ctx, commandKey)
-	var prevMeta artifact.Meta
-	var havePrev bool
-	if opts.delta {
-		prevMeta, havePrev, err = store.LastByKey(key)
-		if err != nil {
-			fmt.Fprintf(stderr, "local: delta lookup for %s: %v\n", opts.target, err)
-			havePrev = false
-		}
-		if havePrev {
-			meta.DeltaBase = prevMeta.ID
-		}
-	}
-	savedMeta, err := store.Save(meta, key, out)
-	if err != nil {
-		fmt.Fprintf(stderr, "local: save artifact: %v\n", err)
-		return newInternalFailureOutcome(exitUsage)
-	}
-
-	artPath := filepath.Join(store.Root, "art", savedMeta.ID)
-	passport := artifact.RenderPassport(savedMeta, artPath, out, opts.budget)
-	switch {
-	case opts.delta && havePrev && savedMeta.Binary:
-		// Binary bodies intentionally retain the metadata-only passport.
-	case opts.delta && havePrev:
-		prevPath := filepath.Join(store.Root, "art", prevMeta.ID)
-		deltaBody, deltaErr := delta.Render(prevPath, out, prevMeta.ID, prevMeta.Ts, opts.budget)
-		if deltaErr != nil {
-			fmt.Fprintf(stderr, "local: render delta for %s: %v\n", opts.target, deltaErr)
-		} else {
-			passport = artifact.StatusLine(savedMeta) + "\nfile=" + artPath + "\n" + deltaBody
-		}
-	case opts.delta:
-		passport += "\ndelta: no previous run for this key" // #nosec G101 -- user-facing delta status; no credential is present.
-	}
-	fmt.Fprintln(stdout, passport)
-
-	if auditErr := runlog.AppendAudit(store.Root, runlog.AuditEntry{
-		Ts: time.Now(), Host: opts.target, Ctx: opts.ctx, Subcommand: "local",
-		CommandPreview: localAuditPreview(opts), BodySHA256: sha256Hex(opts.command),
-		Verdict: "allowed", Exit: storedExit, LocalError: localError,
-	}); auditErr != nil {
-		fmt.Fprintf(stderr, "local: append audit: %v\n", auditErr)
-	}
-	return newSavedRunOutcome(savedMeta)
+	return finalizeRun(store, runFinalization{
+		meta: meta, output: out, delta: opts.delta, budget: opts.budget,
+		subcommand: "local", commandPreview: localAuditPreview(opts),
+		bodySHA256: sha256Hex(opts.command),
+	}, stdout, stderr)
 }
 
 func localAuditPreview(opts localOpts) string {
