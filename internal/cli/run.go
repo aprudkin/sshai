@@ -754,22 +754,13 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		return newInternalFailureOutcome(exitUsage)
 	}
 
-	var st shell.State
-	var restore map[string]string
-	var baseOK bool
+	var state shellStateLifecycle
 	if !opts.NoShellState {
-		st, _, err = session.LoadState(root, opts.Host, opts.Ctx)
+		state, err = loadShellState(root, opts.Host, opts.Ctx, "run")
 		if err != nil {
-			fmt.Fprintf(stderr, "run: load state for %s/%s: %v\n", opts.Host, opts.Ctx, err)
+			fmt.Fprintln(stderr, err)
 			return newInternalFailureOutcome(exitUsage)
 		}
-		var baseline map[string]string
-		baseline, baseOK, err = session.LoadBaseline(root, opts.Host)
-		if err != nil {
-			fmt.Fprintf(stderr, "run: load baseline for %s: %v\n", opts.Host, err)
-			return newInternalFailureOutcome(exitUsage)
-		}
-		restore = shell.EnvRestoreSet(baseline, st.Env)
 	}
 	sentinel := shell.NewSentinel()
 	if deps.Follow != nil {
@@ -818,7 +809,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		if opts.NoShellState {
 			script = shell.PwshScriptNoState(opts.Command, sentinel, marker)
 		} else {
-			script = shell.PwshScriptFollow(opts.Command, st, restore, sentinel, marker)
+			script = shell.PwshScriptFollow(opts.Command, state.prior, state.restore, sentinel, marker)
 		}
 
 		tmp, err := os.CreateTemp("", "sshai-*.ps1")
@@ -885,7 +876,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 		if deps.Follow != nil {
 			marker = deps.Follow.marker
 		}
-		wrapped := shell.BashWrapFollow(opts.Command, st, restore, sentinel, marker)
+		wrapped := shell.BashWrapFollow(opts.Command, state.prior, state.restore, sentinel, marker)
 		invocation := "bash -s"
 		if opts.PosixShell != "" {
 			invocation = shell.POSIXShellInvocation(opts.PosixShell)
@@ -908,34 +899,7 @@ func runHost(deps Deps, opts Opts, stdout, stderr io.Writer) RunOutcome {
 	durationMs := time.Since(start).Milliseconds()
 
 	if !opts.NoShellState && parseOK {
-		// Partial-epilogue merge: BashParse/PwshParse can return ok=true
-		// with Cwd=="" or Env==nil when the epilogue's output was
-		// truncated or otherwise malformed — that is "not updated", not
-		// "cleared". Keep the previously loaded field whenever the freshly
-		// parsed one is empty/nil, so a known-good Cwd/Env is never
-		// clobbered by a partial parse.
-		merged := st
-		if parsedSt.Cwd != "" {
-			merged.Cwd = parsedSt.Cwd
-		}
-		if parsedSt.Env != nil {
-			merged.Env = parsedSt.Env
-		}
-		if err := session.SaveState(root, opts.Host, opts.Ctx, merged); err != nil {
-			fmt.Fprintf(stderr, "run: save state for %s/%s: %v\n", opts.Host, opts.Ctx, err)
-		}
-
-		// First-contact baseline simplification: rather than a dedicated
-		// "probe the environment" round trip before running anything, the
-		// env this very first run parsed becomes the baseline outright.
-		// Any variable the run's own body exported is therefore baked into
-		// the baseline and will not show up as "changed" on a later run —
-		// an accepted simplification, not an oversight.
-		if !baseOK && parsedSt.Env != nil {
-			if err := session.SaveBaseline(root, opts.Host, parsedSt.Env); err != nil {
-				fmt.Fprintf(stderr, "run: save baseline for %s: %v\n", opts.Host, err)
-			}
-		}
+		state.save(parsedSt, stderr)
 	}
 
 	acceptedHostKeyAlgorithm, acceptedHostKeyFingerprint := acceptedHostKeyEvidence(

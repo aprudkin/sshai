@@ -12,7 +12,6 @@ import (
 	"github.com/aprudkin/sshai/internal/config"
 	"github.com/aprudkin/sshai/internal/runlog"
 	"github.com/aprudkin/sshai/internal/runner"
-	"github.com/aprudkin/sshai/internal/session"
 	"github.com/aprudkin/sshai/internal/shell"
 )
 
@@ -164,17 +163,11 @@ func localArgs(args []string, stdout, stderr io.Writer, run localRunFunc, store 
 }
 
 func runLocal(store *artifact.Store, streamCap int64, run localRunFunc, opts localOpts, stdout, stderr io.Writer) RunOutcome {
-	st, _, err := session.LoadState(store.Root, opts.target, opts.ctx)
+	state, err := loadShellState(store.Root, opts.target, opts.ctx, "local")
 	if err != nil {
-		fmt.Fprintf(stderr, "local: load state for %s/%s: %v\n", opts.target, opts.ctx, err)
+		fmt.Fprintln(stderr, err)
 		return newInternalFailureOutcome(exitUsage)
 	}
-	baseline, baseOK, err := session.LoadBaseline(store.Root, opts.target)
-	if err != nil {
-		fmt.Fprintf(stderr, "local: load baseline for %s: %v\n", opts.target, err)
-		return newInternalFailureOutcome(exitUsage)
-	}
-	restore := shell.EnvRestoreSet(baseline, st.Env)
 	sentinel := shell.NewSentinel()
 
 	var argv []string
@@ -183,7 +176,7 @@ func runLocal(store *artifact.Store, streamCap int64, run localRunFunc, opts loc
 	switch opts.shell {
 	case localShellBash:
 		argv = []string{"bash", "-s"}
-		stdin = shell.BashWrap(opts.command, st, restore, sentinel)
+		stdin = shell.BashWrap(opts.command, state.prior, state.restore, sentinel)
 	case localShellPwsh:
 		tmp, err := os.CreateTemp("", "sshai-local-*.ps1")
 		if err != nil {
@@ -192,7 +185,7 @@ func runLocal(store *artifact.Store, streamCap int64, run localRunFunc, opts loc
 		}
 		tempScript = tmp.Name()
 		defer os.Remove(tempScript)
-		if _, err := tmp.Write(shell.PwshScript(opts.command, st, restore, sentinel)); err != nil {
+		if _, err := tmp.Write(shell.PwshScript(opts.command, state.prior, state.restore, sentinel)); err != nil {
 			_ = tmp.Close()
 			fmt.Fprintln(stderr, "local: write temporary PowerShell script failed")
 			return newInternalFailureOutcome(exitUsage)
@@ -240,21 +233,7 @@ func runLocal(store *artifact.Store, streamCap int64, run localRunFunc, opts loc
 		}
 	}
 	if parseOK {
-		merged := st
-		if parsedSt.Cwd != "" {
-			merged.Cwd = parsedSt.Cwd
-		}
-		if parsedSt.Env != nil {
-			merged.Env = parsedSt.Env
-		}
-		if err := session.SaveState(store.Root, opts.target, opts.ctx, merged); err != nil {
-			fmt.Fprintf(stderr, "local: save state for %s/%s: %v\n", opts.target, opts.ctx, err)
-		}
-		if !baseOK && parsedSt.Env != nil {
-			if err := session.SaveBaseline(store.Root, opts.target, parsedSt.Env); err != nil {
-				fmt.Fprintf(stderr, "local: save baseline for %s: %v\n", opts.target, err)
-			}
-		}
+		state.save(parsedSt, stderr)
 	}
 
 	commandKey := opts.command
