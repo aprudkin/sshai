@@ -5,6 +5,13 @@ execution. This glossary names concepts used to interpret that evidence.
 
 ## Language
 
+**Bounded process capture**:
+The finite observation of a directly launched process, limited by retained output
+and elapsed time, with process exit distinguished from complete output capture.
+It is separate from artifact finalization and is not proof of remote completion
+or descendant termination.
+_Avoid_: Command completion, remote cancellation.
+
 **Artifact finalization**:
 The completion of a local evidence record for an observed command result,
 including retained output and metadata, its bounded passport or delta

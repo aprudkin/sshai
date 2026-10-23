@@ -3,7 +3,6 @@ package transport
 
 import (
 	"bytes"
-	"context"
 	"crypto/hmac"
 	"crypto/sha1" // #nosec G505 -- required to match OpenSSH's documented |1| hashed-host format.
 	"crypto/sha256"
@@ -11,7 +10,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -574,78 +572,44 @@ func (tr *OpenSSH) ExecStream(host, command string, stdin []byte, timeout time.D
 	if _, err := Remaining(deadline); err != nil {
 		return Result{}, err
 	}
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
-	defer cancel()
 	argv := tr.sshArgv(host, command)
 	argv = append([]string{argv[0], "-E", logName}, argv[1:]...)
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- argv is built for the fixed system ssh executable without a shell.
-	// Bound os/exec's stdin cleanup. Own the combined output pipe separately:
-	// WaitDelay would otherwise close it soon after child exit, losing delayed
-	// descendant output even when the host budget still has time remaining.
-	cmd.WaitDelay = 100 * time.Millisecond
-	cmd.Stdin = bytes.NewReader(stdin)
-	readPipe, writePipe, err := os.Pipe()
-	if err != nil {
+	capture := runner.RunObservedUntil(argv, stdin, deadline, tr.streamCap, output)
+	var setupErr *runner.CaptureSetupError
+	if errors.As(capture.StartErr, &setupErr) {
 		return Result{}, newTransportError("ssh", "ssh output capture unavailable")
 	}
-	defer readPipe.Close()
-	defer writePipe.Close()
-	w := newObservingWriter(newStreamCapWriter(tr.streamCap, cancel), output)
-	cmd.Stdout, cmd.Stderr = writePipe, writePipe
-	startErr := cmd.Start()
-	_ = writePipe.Close() // only the child/descendants may now keep output open
-	var captureErr error
-	if startErr == nil {
-		// Child exit is not EOF. Drain until EOF or the same host deadline;
-		// closing our reader on cancellation also releases inherited pipes.
-		stopClose := context.AfterFunc(ctx, func() { _ = readPipe.Close() })
-		defer stopClose()
-		drained := make(chan error, 1)
-		go func() {
-			_, err := io.Copy(w, readPipe)
-			drained <- err
-		}()
-		_ = cmd.Wait()
-		captureErr = <-drained
-	}
 	// Evidence observation may consume the last remaining time, but must not
-	// turn an already completed command into a timeout.
-	timedOut := ctx.Err() == context.DeadlineExceeded
+	// turn an already completed capture into a timeout.
 	tr.observeAcceptedHostKey(host, deadline)
-	if timedOut {
+	if capture.TimedOut {
 		return Result{}, newTransportError("timeout", "operation timed out")
 	}
-	rc := execStartFailedRC
-	if cmd.ProcessState != nil {
-		rc = cmd.ProcessState.ExitCode()
-	}
-	if rc == execStartFailedRC {
+	if capture.StartErr != nil {
 		return Result{}, newTransportError("ssh", "ssh process failed to start")
 	}
-	if rc == 255 {
+	if capture.ExitCode == 255 {
 		diagnostic, err := boundedSSHLog(logName)
 		if err != nil {
 			return Result{}, newTransportError("ssh", "ssh diagnostics unavailable")
 		}
 		return Result{}, NewTransportError("ssh", diagnostic)
 	}
-	out, truncated := w.Bytes()
-	if captureErr != nil && !truncated {
+	out, truncated := capture.Output, capture.Truncated
+	if capture.CaptureErr != nil && !truncated {
 		return Result{}, newTransportError("ssh", "ssh output capture incomplete")
 	}
-	if rc < 0 && !truncated {
+	if capture.ExitCode < 0 && !truncated {
 		diagnostic, err := boundedSSHLog(logName)
 		if err != nil {
 			return Result{}, newTransportError("ssh", "ssh diagnostics unavailable")
 		}
 		return Result{}, NewTransportError("ssh", diagnostic)
 	}
-	return Result{ExitCode: rc, Output: out, Truncated: truncated}, nil
+	return Result{ExitCode: capture.ExitCode, Output: out, Truncated: truncated}, nil
 }
 
 const sshDiagnosticLogCap = 64 << 10
-
-var errStreamCapExceeded = errors.New("transport: stream cap exceeded")
 
 func boundedSSHLog(path string) ([]byte, error) {
 	f, err := os.Open(path) // #nosec G304 -- caller passes the fixed log path created in ExecStream's private temp directory.
@@ -655,75 +619,6 @@ func boundedSSHLog(path string) ([]byte, error) {
 	defer f.Close()
 	return io.ReadAll(io.LimitReader(f, sshDiagnosticLogCap))
 }
-
-type streamCapWriter struct {
-	mu     sync.Mutex
-	max    int64
-	buf    []byte
-	killed bool
-	cancel context.CancelFunc
-}
-
-func newStreamCapWriter(max int64, cancel context.CancelFunc) *streamCapWriter {
-	return &streamCapWriter{max: max, cancel: cancel}
-}
-
-// Write retains at most max bytes and uses a private overflow sentinel only to
-// cancel the process. The callback receives no sentinel byte.
-func (w *streamCapWriter) Write(p []byte) (int, []byte, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if len(p) == 0 || w.killed {
-		if w.killed {
-			return 0, nil, errStreamCapExceeded
-		}
-		return 0, nil, nil
-	}
-	room := w.max - int64(len(w.buf))
-	if room < 0 {
-		room = 0
-	}
-	take := int64(len(p))
-	if take > room {
-		take = room
-	}
-	if take > 0 {
-		w.buf = append(w.buf, p[:take]...)
-	}
-	if int64(len(p)) > take {
-		w.killed = true
-		if w.cancel != nil {
-			w.cancel()
-		}
-		return int(take), append([]byte(nil), p[:take]...), errStreamCapExceeded
-	}
-	return int(take), append([]byte(nil), p[:take]...), nil
-}
-
-func (w *streamCapWriter) Bytes() ([]byte, bool) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return append([]byte(nil), w.buf...), w.killed
-}
-
-type observingWriter struct {
-	w      *streamCapWriter
-	output func([]byte)
-}
-
-func newObservingWriter(w *streamCapWriter, output func([]byte)) *observingWriter {
-	return &observingWriter{w: w, output: output}
-}
-
-func (w *observingWriter) Write(p []byte) (int, error) {
-	n, observed, err := w.w.Write(p)
-	if len(observed) > 0 && w.output != nil {
-		w.output(observed)
-	}
-	return n, err
-}
-
-func (w *observingWriter) Bytes() ([]byte, bool) { return w.w.Bytes() }
 
 // Put copies the local file at localPath to remotePath on host via scp.
 // Unlike ssh's Exec discrimination, scp's exit 255 is not special-cased

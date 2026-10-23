@@ -305,28 +305,6 @@ func TestPutNonZeroIsTransportError(t *testing.T) {
 	}
 }
 
-// --- Exec's truncation derivation from capWriter's sentinel-inclusive
-// output (task-7 review finding 1, consumer side). ---
-
-func TestObservingWriterStreamsCombinedRemoteOrderAndHidesSentinel(t *testing.T) {
-	cap := newStreamCapWriter(5, nil)
-	var observed []byte
-	w := newObservingWriter(cap, func(p []byte) { observed = append(observed, p...) })
-	if _, err := w.Write([]byte("out")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write([]byte("err")); err == nil {
-		t.Fatal("shared cap overflow must cancel")
-	}
-	if got := string(observed); got != "outer" {
-		t.Fatalf("callback included overflow sentinel or lost order: %q", got)
-	}
-	captured, truncated := w.Bytes()
-	if !truncated || string(captured) != "outer" {
-		t.Fatalf("capture=%q truncated=%v", captured, truncated)
-	}
-}
-
 func TestExecStreamUsesUnifiedRemotePipeAndPrivateDiagnosticLog(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX fake ssh fixture")
