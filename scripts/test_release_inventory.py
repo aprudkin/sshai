@@ -34,7 +34,7 @@ class ReleaseInventoryTests(unittest.TestCase):
         self.manifest = self.repo / "release" / "archive-files.txt"
         self.manifest.parent.mkdir()
         self.manifest.write_text(
-            "README.md\nREADME.ru.md\nLICENSE\nskills/sshai/SKILL.md\n",
+            "README.md\nREADME.ru.md\nLICENSE\n.ai-archive/skills/sshai/SKILL.md\n",
             encoding="utf-8",
         )
         self.licenses = self.root / "generated-licenses"

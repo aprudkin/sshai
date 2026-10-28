@@ -10,7 +10,7 @@
 [![Homebrew](https://img.shields.io/badge/Homebrew-aprudkin%2Ftap-FBB040?logo=homebrew&logoColor=black)](https://github.com/aprudkin/homebrew-tap)
 [![Go 1.26.5](https://img.shields.io/badge/Go-1.26.5-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Лицензия MIT](https://img.shields.io/github/license/aprudkin/sshai)](LICENSE)
-[![Навык агента включён](https://img.shields.io/badge/Agent_Skill-included-6f42c1)](skills/sshai/SKILL.md)
+[![Навык агента включён](https://img.shields.io/badge/Agent_Skill-included-6f42c1)](.ai-archive/skills/sshai/SKILL.md)
 
 `sshai` — утилита командной строки на Go для ИИ-агентов. Она выполняет неинтерактивные команды
 на Linux- и Windows-хостах через SSH, а при явном выборе локального выполнения — на машине,
@@ -28,7 +28,7 @@
 
 ## Навык для ИИ-агента
 
-При работе через ИИ-агента устанавливайте [навык `sshai`](skills/sshai/SKILL.md) вместе с утилитой.
+При работе через ИИ-агента устанавливайте [навык `sshai`](.ai-archive/skills/sshai/SKILL.md) вместе с утилитой.
 Утилита работает и сама по себе, но навык объясняет агенту, когда использовать `sshai`, как не
 загружать большой вывод в контекст, как запрашивать сохранённые артефакты и где проходят границы
 безопасности.
@@ -92,7 +92,7 @@ brew install aprudkin/tap/sshai
 pi install "$(brew --prefix sshai)/share/sshai"
 ```
 
-Другие среды с поддержкой Agent Skills могут загрузить `skills/sshai/SKILL.md` из каталога пакета,
+Другие среды с поддержкой Agent Skills могут загрузить `.ai-archive/skills/sshai/SKILL.md` из каталога пакета,
 путь к которому выводит `brew --prefix sshai`.
 
 ### Из исходного кода
@@ -114,7 +114,7 @@ Pi может загрузить каталог навыка как локаль
 pi install "${SSHAI_SHARE_DIR:-$HOME/.local/share/sshai}"
 ```
 
-В других совместимых средах загрузите или скопируйте вложенный каталог `skills/sshai/` в
+В других совместимых средах загрузите или скопируйте вложенный каталог `.ai-archive/skills/sshai/` в
 настроенный каталог навыков.
 
 ## Быстрый старт
@@ -185,7 +185,7 @@ sshai local --shell pwsh -- Get-Date
 Перед телом команды восстанавливаются рабочий каталог и выбранные переменные окружения
 из сохранённого контекста. Для работы с проектом выберите отдельный `--ctx` и явно задайте
 абсолютный рабочий каталог в скрипте. Подробнее —
-[локальные контексты проектов](docs/agent-usage.md#local-cwd-and-project-contexts).
+[локальные контексты проектов](.ai-archive/docs/agent-usage.md#local-cwd-and-project-contexts).
 
 ### Прочитать результат
 
@@ -238,7 +238,7 @@ sshai run --timeout 300 --follow --follow-interval 5 web01 -- long-running-check
 
 Тайм-аут или разрыв связи не гарантирует остановку удалённой команды. Перед повтором операции,
 изменяющей состояние, проверьте фактическое состояние хоста. Подробнее —
-[лимиты времени удалённого выполнения](docs/agent-usage.md#remote-timeout-budget).
+[лимиты времени удалённого выполнения](.ai-archive/docs/agent-usage.md#remote-timeout-budget).
 
 ### Изменить параметры подключения для одного запуска
 
@@ -260,7 +260,7 @@ sshai run --proxy-jump=none direct01 -- uname -a
 ```
 
 Полный список команд: `sshai help`. Параметры и правила запуска: `sshai help run`.
-Подробный [справочник для агентов](docs/agent-usage.md) доступен на английском языке.
+Подробный [справочник для агентов](.ai-archive/docs/agent-usage.md) доступен на английском языке.
 
 ## Граница безопасности
 
@@ -287,7 +287,7 @@ sshai run --proxy-jump=none direct01 -- uname -a
   локальный захват; завершение всех процессов-потомков на всех платформах не гарантируется.
 - Архивный помощник `ps_ssh.py` не является запасным вариантом.
 
-См. [руководство для агентов](docs/agent-usage.md) с правилами использования по умолчанию и
+См. [руководство для агентов](.ai-archive/docs/agent-usage.md) с правилами использования по умолчанию и
 резервными путями.
 
 ## Разработка и вклад

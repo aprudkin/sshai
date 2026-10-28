@@ -38,8 +38,8 @@ func TestBodyInputSecretContract(t *testing.T) {
 		path string
 		want []string
 	}{
-		{"skills/sshai/SKILL.md", []string{"out of argv", "no secret values", "staged scripts", "captured output", "separately approved, purpose-built workflow"}},
-		{"docs/agent-usage.md", []string{"out of argv", "no secret values", "staged scripts", "captured output", "separately approved, purpose-built workflow"}},
+		{".ai-archive/skills/sshai/SKILL.md", []string{"out of argv", "no secret values", "staged scripts", "captured output", "separately approved, purpose-built workflow"}},
+		{".ai-archive/docs/agent-usage.md", []string{"out of argv", "no secret values", "staged scripts", "captured output", "separately approved, purpose-built workflow"}},
 		{"internal/shell/bash.go", []string{"argv", "Do not embed secret values", "captured output"}},
 		{"internal/shell/pwsh.go", []string{"argv", "Do not embed secret values", "staged scripts", "captured output"}},
 	} {

@@ -19,7 +19,7 @@ REQUIRED_STATIC_FILES = frozenset(
         "README.md",
         "README.ru.md",
         "LICENSE",
-        "skills/sshai/SKILL.md",
+        ".ai-archive/skills/sshai/SKILL.md",
     }
 )
 REQUIRED_LICENSE_FILES = frozenset(

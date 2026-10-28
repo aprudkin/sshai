@@ -30,7 +30,7 @@ target_file="$install_dir/sshai"
 skills_dir="$share_dir/skills"
 skill_dir="$skills_dir/sshai"
 skill_file="$skill_dir/SKILL.md"
-source_skill="$repo_dir/skills/sshai/SKILL.md"
+source_skill="$repo_dir/.ai-archive/skills/sshai/SKILL.md"
 
 if [ -L "$target_file" ]; then
   printf '%s\n' "refusing to replace symlink: $target_file" >&2

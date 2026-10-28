@@ -163,7 +163,7 @@ type recoverableRecipe struct {
 
 func recoverableDocRecipes(t *testing.T) []recoverableRecipe {
 	t.Helper()
-	doc := recoverableRead(t, filepath.Join("..", "..", "docs", "agent-usage.md"))
+	doc := recoverableRead(t, filepath.Join("..", "..", ".ai-archive", "docs", "agent-usage.md"))
 	_, section, ok := strings.Cut(doc, "## Recoverable long-running operations\n")
 	if !ok {
 		t.Fatal("missing recoverable recipe section")

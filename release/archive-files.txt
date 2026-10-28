@@ -1,4 +1,4 @@
 README.md
 README.ru.md
 LICENSE
-skills/sshai/SKILL.md
+.ai-archive/skills/sshai/SKILL.md

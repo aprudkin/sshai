@@ -40,7 +40,7 @@ func TestLongRunningExamples(t *testing.T) {
 		t.Fatalf("help rc=%d stderr=%s", rc, &helpErr)
 	}
 	sources := map[string]string{"help run": help.String()}
-	for _, path := range []string{"README.md", "docs/agent-usage.md", "skills/sshai/SKILL.md"} {
+	for _, path := range []string{"README.md", ".ai-archive/docs/agent-usage.md", ".ai-archive/skills/sshai/SKILL.md"} {
 		body, err := os.ReadFile(filepath.Join("..", "..", path))
 		if err != nil {
 			t.Fatal(err)

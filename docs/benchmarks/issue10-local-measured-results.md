@@ -200,7 +200,7 @@ models, agents or sshai versions. No README savings claim follows from this stud
 
 Following this result, the user selected ordinary harness-shell execution as the
 default for local builds, tests, Git commands and diagnostics. The follow-up
-[bundled skill](../../skills/sshai/SKILL.md), prepared for patch release **v1.1.1**,
+[bundled skill](../../.ai-archive/skills/sshai/SKILL.md), prepared for patch release **v1.1.1**,
 no longer activates merely for ordinary local commands or presumed token savings.
 `sshai local` remains available for an explicit request or a workflow explicitly
 selected by the user or task instructions that requires its local artifacts,

@@ -10,7 +10,7 @@
 [![Homebrew](https://img.shields.io/badge/Homebrew-aprudkin%2Ftap-FBB040?logo=homebrew&logoColor=black)](https://github.com/aprudkin/homebrew-tap)
 [![Go 1.26.5](https://img.shields.io/badge/Go-1.26.5-00ADD8?logo=go&logoColor=white)](go.mod)
 [![MIT license](https://img.shields.io/github/license/aprudkin/sshai)](LICENSE)
-[![Agent Skill included](https://img.shields.io/badge/Agent_Skill-included-6f42c1)](skills/sshai/SKILL.md)
+[![Agent Skill included](https://img.shields.io/badge/Agent_Skill-included-6f42c1)](.ai-archive/skills/sshai/SKILL.md)
 
 `sshai` is a Go CLI for AI agents that runs non-interactive Linux commands through Bash by default
 or an explicitly selected POSIX shell, and Windows PowerShell commands over SSH. It also runs an
@@ -29,7 +29,7 @@ It keeps transport, evidence, and operational authority separate.
 
 ## Agent skill
 
-For agent-driven use, install the bundled [`sshai` skill](skills/sshai/SKILL.md) together with the
+For agent-driven use, install the bundled [`sshai` skill](.ai-archive/skills/sshai/SKILL.md) together with the
 CLI. The CLI works on its own, but the skill teaches an agent when to use `sshai`, how to keep large
 output out of context, how to query saved artifacts, and where the safety boundaries are.
 
@@ -84,7 +84,7 @@ Pi users can then enable the installed skill explicitly:
 pi install "$(brew --prefix sshai)/share/sshai"
 ```
 
-Other Agent Skills-compatible harnesses can load `skills/sshai/SKILL.md` from the package share
+Other Agent Skills-compatible harnesses can load `.ai-archive/skills/sshai/SKILL.md` from the package share
 directory reported by `brew --prefix sshai`.
 
 ### From source
@@ -103,7 +103,7 @@ directory as a local package:
 pi install "${SSHAI_SHARE_DIR:-$HOME/.local/share/sshai}"
 ```
 
-Other compatible harnesses can load or copy its `skills/sshai/` directory into their configured
+Other compatible harnesses can load or copy its `.ai-archive/skills/sshai/` directory into their configured
 skill location.
 
 ## Quick start
@@ -184,7 +184,7 @@ Set the agent harness's shell-tool timeout separately to allow the whole CLI ope
 limit does not change sshai's configured `timeout_sec` (factory default 60 seconds). These example
 limits are task-specific, not a guarantee for slow local I/O. `--follow` does not extend the CLI
 deadline; heartbeat frequency is not application progress. A timeout does not guarantee remote
-cancellation. See [remote timeout budgets](docs/agent-usage.md#remote-timeout-budget) before sizing
+cancellation. See [remote timeout budgets](.ai-archive/docs/agent-usage.md#remote-timeout-budget) before sizing
 limits or reconciling an interrupted operation.
 
 Recognized SSH failures expose only a canonical `transport_diagnostic`; raw SSH stderr remains
@@ -219,7 +219,7 @@ host.
   guaranteed across platforms.
 - The archived `ps_ssh.py` helper is not a fallback.
 
-See [agent usage](docs/agent-usage.md) for default-use and fallback rules.
+See [agent usage](.ai-archive/docs/agent-usage.md) for default-use and fallback rules.
 
 ## Development and contributing
 

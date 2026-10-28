@@ -26,7 +26,7 @@ mode() {
 run_install
 binary="$install_dir/sshai"
 skill="$share_dir/skills/sshai/SKILL.md"
-cmp -s "$skill" "$repo_dir/skills/sshai/SKILL.md"
+cmp -s "$skill" "$repo_dir/.ai-archive/skills/sshai/SKILL.md"
 [ "$(mode "$binary")" = 755 ]
 [ "$(mode "$skill")" = 644 ]
 run_install
