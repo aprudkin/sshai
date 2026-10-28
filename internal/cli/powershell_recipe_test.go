@@ -17,7 +17,7 @@ import (
 // Extract the shipped example, not a second copy that can drift from the skill.
 func powerShellRecipe(t *testing.T) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "skills", "sshai", "SKILL.md"))
+	data, err := os.ReadFile(filepath.Join("..", "..", ".ai-archive", "skills", "sshai", "SKILL.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
